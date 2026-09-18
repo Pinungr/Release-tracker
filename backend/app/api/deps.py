@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import DeploymentBooking
-from ..security import AdminPrincipal, optional_admin
+from ..security import AdminPrincipal, UserPrincipal, optional_admin, optional_user
 from ..services.booking_service import Actor
 
 
@@ -29,3 +29,7 @@ def public_actor(requester_email: str | None = None) -> Actor:
 
 def current_admin(admin: AdminPrincipal | None = Depends(optional_admin)) -> AdminPrincipal | None:
     return admin
+
+
+def current_user(user: UserPrincipal | None = Depends(optional_user)) -> UserPrincipal | None:
+    return user

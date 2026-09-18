@@ -90,3 +90,193 @@ def test_duplicate_username_or_email_is_rejected(client):
         },
     )
     assert third.status_code == 409
+
+
+def test_user_can_change_password_and_admin_can_reset_password(client):
+    reg = client.post(
+        "/api/auth/register",
+        json={
+            "full_name": "Asha Nair",
+            "email": "asha.nair@example.com",
+            "username": "asha",
+            "password": "StrongPass!123",
+            "confirm_password": "StrongPass!123",
+            "tenant_name": "Platform Operations",
+        },
+    )
+    assert reg.status_code == 201, reg.text
+
+    login = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "asha", "password": "StrongPass!123"},
+    )
+    assert login.status_code == 200, login.text
+    token = login.json()["access_token"]
+
+    bad_change = client.post(
+        "/api/auth/me/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "WrongPassword!123",
+            "new_password": "NewPass!456",
+            "confirm_new_password": "NewPass!456",
+        },
+    )
+    assert bad_change.status_code == 401
+
+    change = client.post(
+        "/api/auth/me/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "StrongPass!123",
+            "new_password": "NewPass!456",
+            "confirm_new_password": "NewPass!456",
+        },
+    )
+    assert change.status_code == 200, change.text
+
+    old_again = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "asha", "password": "StrongPass!123"},
+    )
+    assert old_again.status_code == 401
+
+    new_login = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "asha", "password": "NewPass!456"},
+    )
+    assert new_login.status_code == 200, new_login.text
+
+    admin_reset = client.post(
+        "/api/admin/users/1/reset-password",
+        headers={"Authorization": f"Bearer {client.post('/api/admin/login', json={'username': 'testadmin', 'password': 'Sup3r-Secret-Pass'}).json()['access_token']}"},
+        json={"new_password": "AdminReset!789", "confirm_new_password": "AdminReset!789"},
+    )
+    assert admin_reset.status_code == 200, admin_reset.text
+    assert "password" not in admin_reset.text.lower()
+
+    after_reset = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "asha", "password": "NewPass!456"},
+    )
+    assert after_reset.status_code == 401
+
+    successful_reset_login = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "asha", "password": "AdminReset!789"},
+    )
+    assert successful_reset_login.status_code == 200, successful_reset_login.text
+
+
+def test_authenticated_user_can_update_own_booking_without_booking_pin(client):
+    reg = client.post(
+        "/api/auth/register",
+        json={
+            "full_name": "Asha Nair",
+            "email": "asha.nair@example.com",
+            "username": "asha",
+            "password": "StrongPass!123",
+            "confirm_password": "StrongPass!123",
+            "tenant_name": "Platform Operations",
+        },
+    )
+    assert reg.status_code == 201, reg.text
+
+    user_login = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "asha", "password": "StrongPass!123"},
+    )
+    assert user_login.status_code == 200, user_login.text
+    token = user_login.json()["access_token"]
+
+    booking = client.post(
+        "/api/bookings",
+        json={
+            "tenant_name": "Platform Operations",
+            "jira_change": "CHG1000001",
+            "jira_task": "T1000",
+            "jira_url": "https://jira.example.com/browse/CHG1000001",
+            "environment": "PROD",
+            "technology": "Databricks",
+            "requester_name": "Asha Nair",
+            "requester_email": "asha.nair@example.com",
+            "requester_phone": "+91 98765 43210",
+            "verifier_name": "Kalyani Sethuraman",
+            "verifier_email": "kalyani.s@example.com",
+            "git_repository": "https://github.example.com/platform/release",
+            "implementation_summary": "Update release job orchestration.",
+            "deployment_description": "Migrate the scheduler to the new orchestration flow.",
+            "deployment_date": "2099-01-06",
+            "slot_number": 1,
+            "booking_pin": "123456",
+            "confirm_booking_pin": "123456",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    booking_id = booking.json()["booking"]["id"]
+
+    authorized_update = client.put(
+        f"/api/bookings/{booking_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "deployment_date": "2099-01-06",
+            "slot_number": 2,
+            "requester_name": "Asha Nair",
+            "requester_email": "asha.nair@example.com",
+            "verifier_name": "Kalyani Sethuraman",
+            "verifier_email": "kalyani.s@example.com",
+            "git_repository": "https://github.example.com/platform/release",
+            "implementation_summary": "Update release job orchestration.",
+            "deployment_description": "Migrate the scheduler to the new orchestration flow.",
+            "technology": "Databricks",
+            "tenant_name": "Platform Operations",
+            "jira_change": "CHG1000001",
+            "jira_task": "T1000",
+            "jira_url": "https://jira.example.com/browse/CHG1000001",
+            "environment": "PROD",
+        },
+    )
+    assert authorized_update.status_code == 200, authorized_update.text
+
+    second_user_reg = client.post(
+        "/api/auth/register",
+        json={
+            "full_name": "Rohan Shah",
+            "email": "rohan.shah@example.com",
+            "username": "rohan",
+            "password": "StrongPass!456",
+            "confirm_password": "StrongPass!456",
+            "tenant_name": "Platform Operations",
+        },
+    )
+    assert second_user_reg.status_code == 201, second_user_reg.text
+
+    second_user_login = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "rohan", "password": "StrongPass!456"},
+    )
+    assert second_user_login.status_code == 200, second_user_login.text
+    second_token = second_user_login.json()["access_token"]
+
+    unauthorized = client.put(
+        f"/api/bookings/{booking_id}",
+        headers={"Authorization": f"Bearer {second_token}"},
+        json={
+            "deployment_date": "2099-01-06",
+            "slot_number": 3,
+            "requester_name": "Another User",
+            "requester_email": "another@example.com",
+            "verifier_name": "Kalyani Sethuraman",
+            "verifier_email": "kalyani.s@example.com",
+            "git_repository": "https://github.example.com/platform/release",
+            "implementation_summary": "Update release job orchestration.",
+            "deployment_description": "Migrate the scheduler to the new orchestration flow.",
+            "technology": "Databricks",
+            "tenant_name": "Platform Operations",
+            "jira_change": "CHG1000001",
+            "jira_task": "T1000",
+            "jira_url": "https://jira.example.com/browse/CHG1000001",
+            "environment": "PROD",
+        },
+    )
+    assert unauthorized.status_code in {401, 403}, unauthorized.text

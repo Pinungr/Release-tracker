@@ -22,13 +22,19 @@ def create_admin_token(username: str) -> tuple[str, int]:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm), expires_in
 
 
-def create_user_token(user_id: int, username: str, tenant_id: int | None = None) -> tuple[str, int]:
+def create_user_token(
+    user_id: int,
+    username: str,
+    tenant_id: int | None = None,
+    email: str | None = None,
+) -> tuple[str, int]:
     expires_in = settings.admin_session_minutes * 60
     now = datetime.now(timezone.utc)
     payload = {
         "sub": username,
         "user_id": user_id,
         "tenant_id": tenant_id,
+        "email": email or username,
         "role": "tenant",
         "jti": secrets.token_hex(16),
         "iat": int(now.timestamp()),

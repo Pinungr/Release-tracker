@@ -43,7 +43,14 @@ from ..schemas import (
     SlotConfigReplace,
     StatusUpdateRequest,
 )
-from ..security import AdminPrincipal, create_admin_token, require_admin, revoke_token, verify_secret
+from ..security import (
+    AdminPrincipal,
+    create_admin_token,
+    hash_secret,
+    require_admin,
+    revoke_token,
+    verify_secret,
+)
 from ..security.ratelimit import enforce
 from ..services import attachment_service, audit_service, booking_service, presenters
 from ..services.booking_service import Actor, BusinessRuleError
@@ -112,8 +119,18 @@ def list_tenants(
 def list_users(
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
+    search: str | None = Query(default=None),
 ) -> list[dict]:
-    users = db.scalars(select(User).order_by(User.email)).all()
+    stmt = select(User)
+    if search:
+        q = f"%{search.strip()}%"
+        stmt = stmt.where(
+            (User.username.ilike(q))
+            | (User.email.ilike(q))
+            | (User.full_name.ilike(q))
+            | (User.tenant.has(Tenant.name.ilike(q)))
+        )
+    users = db.scalars(stmt.order_by(User.email)).all()
     return [
         {
             "id": u.id,
@@ -126,6 +143,106 @@ def list_users(
         }
         for u in users
     ]
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+
+    new_password = str(payload.get("new_password", ""))
+    confirm_new_password = str(payload.get("confirm_new_password", ""))
+    if new_password != confirm_new_password:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password and confirmation do not match.")
+    if len(new_password) < 8:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password must be at least 8 characters long.")
+
+    user.password_hash = hash_secret(new_password)
+    audit_service.record(
+        db,
+        event_type="PASSWORD_RESET_BY_ADMIN",
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        requester_email=user.email,
+        old_values={"user_id": user.id, "username": user.username, "email": user.email},
+        new_values={"user_id": user.id, "username": user.username, "email": user.email},
+    )
+    db.commit()
+    return {"message": "Credential updated successfully.", "user_id": user.id, "username": user.username}
+
+
+@router.patch("/users/{user_id}/status")
+def update_user_status(
+    user_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    is_active = payload.get("is_active")
+    if not isinstance(is_active, bool):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "is_active must be a boolean value.")
+    user.is_active = is_active
+    audit_service.record(
+        db,
+        event_type="USER_STATUS_UPDATED",
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        requester_email=user.email,
+        old_values={"is_active": not is_active},
+        new_values={"is_active": is_active},
+    )
+    db.commit()
+    return {"message": "User status updated.", "user_id": user.id, "is_active": user.is_active}
+
+
+@router.patch("/users/{user_id}/tenant")
+def update_user_tenant(
+    user_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    tenant_name = str(payload.get("tenant_name", "")).strip()
+    if not tenant_name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "tenant_name is required.")
+    tenant = db.scalars(select(Tenant).where(Tenant.name == tenant_name)).first()
+    if tenant is None:
+        tenant = Tenant(name=tenant_name)
+        db.add(tenant)
+        db.flush()
+    user.tenant_id = tenant.id
+    db.commit()
+    return {"message": "Tenant updated.", "user_id": user.id, "tenant_name": tenant.name}
+
+
+@router.patch("/users/{user_id}/role")
+def update_user_role(
+    user_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    role = str(payload.get("role", "")).strip().upper()
+    if not role:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "role is required.")
+    user.role = role
+    db.commit()
+    return {"message": "Role updated.", "user_id": user.id, "role": user.role}
 
 
 # --------------------------------------------------------------------------- #

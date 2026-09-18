@@ -71,7 +71,7 @@ def test_settings_round_trip(client, admin_headers):
     defaults = client.get("/api/admin/settings", headers=admin_headers).json()
     assert defaults["regular_slots_per_day"] == 4
     assert defaults["weekly_booking_limit"] == 2
-    assert defaults["booking_freeze_hours"] == 72
+    assert defaults["booking_freeze_hours"] == 48
     assert defaults["max_file_size_mb"] == 20
 
     updated = client.put(

@@ -21,12 +21,13 @@ from ..schemas import (
     MyBookingsRequest,
     OwnerCredentials,
 )
-from ..security import AdminPrincipal, generate_manage_token, hash_manage_token
+from ..models import Tenant
+from ..security import AdminPrincipal, UserPrincipal, generate_manage_token, hash_manage_token
 from ..security.ratelimit import enforce
 from ..services import booking_service, presenters
 from ..services.booking_service import Actor
 from ..services.settings_service import get_app_settings
-from .deps import current_admin, get_booking
+from .deps import current_admin, current_user, get_booking
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
@@ -46,9 +47,17 @@ def _owner_actor(
     booking: DeploymentBooking,
     credentials: OwnerCredentials | None,
     admin: AdminPrincipal | None,
+    user: UserPrincipal | None,
 ) -> Actor:
     if admin is not None:
         return Actor(is_admin=True, admin_username=admin.username)
+    if user is not None:
+        if booking.requester_email and booking.requester_email.lower() == user.email.lower():
+            return Actor(is_admin=False, requester_email=str(user.email))
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "You are not authorized to modify this booking.",
+        )
     if credentials is None:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
@@ -128,8 +137,9 @@ def update_booking(
     booking: DeploymentBooking = Depends(get_booking),
     db: Session = Depends(get_db),
     admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    actor = _owner_actor(request, db, booking, payload.credentials, admin)
+    actor = _owner_actor(request, db, booking, payload.credentials, admin, user)
     booking = booking_service.update_booking(db, booking, payload, actor)
     return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin)
 
@@ -141,8 +151,9 @@ def cancel_booking(
     booking: DeploymentBooking = Depends(get_booking),
     db: Session = Depends(get_db),
     admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
 ) -> BookingSummary:
-    actor = _owner_actor(request, db, booking, payload.credentials, admin)
+    actor = _owner_actor(request, db, booking, payload.credentials, admin, user)
     booking = booking_service.cancel_booking(db, booking, actor, payload.override_reason)
     return presenters.booking_summary(db, booking, get_app_settings(db))
 

@@ -12,7 +12,7 @@ from ..models import ApplicationSetting, DocumentCategory
 DEFAULTS: dict[str, object] = {
     "regular_slots_per_day": 4,
     "weekly_booking_limit": 2,
-    "booking_freeze_hours": 72,
+    "booking_freeze_hours": 48,
     "max_file_size_mb": 20,
     "emergency_slot_enabled": True,
     "require_admin_override_reason": True,

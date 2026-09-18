@@ -1,11 +1,11 @@
-"""FastAPI dependencies for admin authentication / authorization."""
+"""FastAPI dependencies for admin and tenant authentication / authorization."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
 
-from .tokens import decode_admin_token
+from .tokens import decode_admin_token, decode_user_token
 
 #: Revoked token ids (logout). Process-local by design: the app is a single
 #: monolith, and tokens expire on their own anyway.
@@ -21,6 +21,15 @@ def revoke_token(payload: dict) -> None:
 @dataclass(frozen=True)
 class AdminPrincipal:
     username: str
+    payload: dict
+
+
+@dataclass(frozen=True)
+class UserPrincipal:
+    user_id: int
+    username: str
+    email: str
+    tenant_id: int | None
     payload: dict
 
 
@@ -49,3 +58,32 @@ def require_admin(admin: AdminPrincipal | None = Depends(optional_admin)) -> Adm
             headers={"WWW-Authenticate": "Bearer"},
         )
     return admin
+
+
+def optional_user(request: Request) -> UserPrincipal | None:
+    token = _read_token(request)
+    if not token:
+        return None
+    payload = decode_user_token(token)
+    if not payload or payload.get("jti") in _revoked_jtis:
+        return None
+    user_id = payload.get("user_id")
+    if user_id is None:
+        return None
+    return UserPrincipal(
+        user_id=int(user_id),
+        username=str(payload.get("sub") or ""),
+        email=str(payload.get("email") or ""),
+        tenant_id=payload.get("tenant_id"),
+        payload=payload,
+    )
+
+
+def require_user(user: UserPrincipal | None = Depends(optional_user)) -> UserPrincipal:
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
