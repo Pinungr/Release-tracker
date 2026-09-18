@@ -88,7 +88,7 @@ production-deployment-scheduler/
 │   │   ├── security/            hashing, JWT, auth dependencies, rate limiting
 │   │   ├── utils/               date/timezone helpers, safe file storage
 │   │   └── seed.py              demo data
-│   ├── tests/                   131 backend tests
+│   ├── tests/                   149 backend tests
 │   └── requirements.txt
 ├── frontend/                    React + TypeScript + Vite + Tailwind CSS v4
 │   └── src/
@@ -451,7 +451,7 @@ the project directory name.
 cd backend && .venv/Scripts/python -m pytest
 ```
 
-**131 tests, all passing.** They cover the rules that matter:
+**149 tests, all passing.** They cover the rules that matter:
 
 * sign-up creates a TENANT_USER and can never self-grant ADMIN
 * login by username or email; identical message for unknown user and wrong
@@ -479,6 +479,8 @@ cd backend && .venv/Scripts/python -m pytest
 * concurrency: eight simultaneous requests for one slot leave exactly one
   winner; five simultaneous emergency changes on one date all succeed
 * the monolith's serving layer, including traversal attempts under `/assets`
+* configuration safety: production refuses to start on any credential this
+  repository ships, and relative paths resolve against the project root
 
 SQLite backs the test suite on purpose — it gives each test a fresh isolated
 schema in milliseconds. Production runs on PostgreSQL; nothing in the
