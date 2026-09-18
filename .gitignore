@@ -1,5 +1,8 @@
 # Environment & secrets
+# The root .env holds committed PLACEHOLDERS only. Real secrets belong in
+# backend/.env, which stays ignored and overrides the root file.
 .env
+!/.env
 .env.local
 
 # Python
