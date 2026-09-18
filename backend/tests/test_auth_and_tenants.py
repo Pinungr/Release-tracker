@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from app.models import Tenant, TenantUser
+from sqlalchemy import select
+
+from app.models import DeploymentBooking, Tenant, User
 
 
-def test_tenant_user_registration_and_login(client):
+def test_user_registration_and_login_do_not_require_a_tenant(client):
     response = client.post(
         "/api/auth/register",
         json={
@@ -11,7 +13,6 @@ def test_tenant_user_registration_and_login(client):
             "email": "asha.nair@example.com",
             "username": "asha",
             "password": "StrongPass!123",
-            "tenant_name": "Platform Operations",
             "team_name": "Release Engineering",
             "contact_number": "+91 98765 43210",
         },
@@ -19,7 +20,7 @@ def test_tenant_user_registration_and_login(client):
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["user"]["email"] == "asha.nair@example.com"
-    assert body["tenant"]["name"] == "Platform Operations"
+    assert body["user"]["role"] == "TENANT_USER"
 
     login = client.post(
         "/api/auth/login",
@@ -28,22 +29,27 @@ def test_tenant_user_registration_and_login(client):
     assert login.status_code == 200, login.text
     payload = login.json()
     assert payload["token_type"] == "bearer"
-    assert payload["user"]["tenant_name"] == "Platform Operations"
+    assert "tenant_name" not in payload["user"]
 
 
 def test_admin_can_list_tenants_and_users(client, admin_headers):
-    client.post(
+    tenant = client.post(
+        "/api/admin/tenants",
+        headers=admin_headers,
+        json={"name": "Platform Operations", "tenant_code": "PLATFORM-OPS"},
+    )
+    assert tenant.status_code == 201, tenant.text
+
+    registered = client.post(
         "/api/auth/register",
         json={
             "full_name": "Asha Nair",
             "email": "asha.nair@example.com",
             "username": "asha",
             "password": "StrongPass!123",
-            "tenant_name": "Platform Operations",
-            "team_name": "Release Engineering",
-            "contact_number": "+91 98765 43210",
         },
     )
+    assert registered.status_code == 201, registered.text
 
     tenants = client.get("/api/admin/tenants", headers=admin_headers)
     assert tenants.status_code == 200
@@ -51,7 +57,10 @@ def test_admin_can_list_tenants_and_users(client, admin_headers):
 
     users = client.get("/api/admin/users", headers=admin_headers)
     assert users.status_code == 200
-    assert any(u["email"] == "asha.nair@example.com" for u in users.json())
+    assert any(
+        u["email"] == "asha.nair@example.com" and "tenant_name" not in u
+        for u in users.json()
+    )
 
 
 def test_duplicate_username_or_email_is_rejected(client):
@@ -90,6 +99,75 @@ def test_duplicate_username_or_email_is_rejected(client):
         },
     )
     assert third.status_code == 409
+
+
+def test_one_user_can_schedule_for_multiple_tenants_with_separate_quotas(client, admin_headers, db):
+    tenant_a = client.post(
+        "/api/admin/tenants",
+        headers=admin_headers,
+        json={"name": "Tenant A", "tenant_code": "TENANT-A"},
+    )
+    tenant_b = client.post(
+        "/api/admin/tenants",
+        headers=admin_headers,
+        json={"name": "Tenant B", "tenant_code": "TENANT-B"},
+    )
+    assert tenant_a.status_code == 201, tenant_a.text
+    assert tenant_b.status_code == 201, tenant_b.text
+
+    registered = client.post(
+        "/api/auth/register",
+        json={
+            "full_name": "Pinaki User",
+            "email": "pinaki@example.com",
+            "username": "pinaki",
+            "password": "StrongPass!123",
+            "confirm_password": "StrongPass!123",
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    login = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "pinaki", "password": "StrongPass!123"},
+    )
+    assert login.status_code == 200, login.text
+    user_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    def payload(tenant_id: int, slot: int, change: str) -> dict:
+        return {
+            "tenant_id": tenant_id,
+            "jira_change": change,
+            "jira_task": f"TASK-{change}",
+            "jira_url": f"https://jira.example.com/browse/{change}",
+            "environment": "PROD",
+            "technology": "Databricks",
+            "requester_name": "Pinaki User",
+            "requester_email": "pinaki@example.com",
+            "verifier_name": "Verifier",
+            "verifier_email": "verifier@example.com",
+            "git_repository": "https://github.example.com/platform/release",
+            "implementation_summary": "Deploy the release orchestration update.",
+            "deployment_description": "Deploy the release orchestration update to production.",
+            "deployment_date": "2099-01-06",
+            "slot_number": slot,
+            "booking_pin": "123456",
+            "confirm_booking_pin": "123456",
+        }
+
+    tenant_a_id = tenant_a.json()["id"]
+    tenant_b_id = tenant_b.json()["id"]
+    assert client.post("/api/bookings", headers=user_headers, json=payload(tenant_a_id, 1, "CHG-A1")).status_code == 201
+    assert client.post("/api/bookings", headers=user_headers, json=payload(tenant_a_id, 2, "CHG-A2")).status_code == 201
+    assert client.post("/api/bookings", headers=user_headers, json=payload(tenant_b_id, 3, "CHG-B1")).status_code == 201
+
+    blocked = client.post("/api/bookings", headers=user_headers, json=payload(tenant_a_id, 4, "CHG-A3"))
+    assert blocked.status_code == 409, blocked.text
+    assert "Tenant A" in blocked.text
+
+    created = db.scalars(select(DeploymentBooking).where(DeploymentBooking.jira_change == "CHG-B1")).one()
+    user = db.scalars(select(User).where(User.username == "pinaki")).one()
+    assert created.tenant_id == tenant_b_id
+    assert created.created_by_user_id == user.id
 
 
 def test_user_can_change_password_and_admin_can_reset_password(client):

@@ -29,6 +29,7 @@ from ..models import (
     BookingStatus,
     DeploymentBooking,
     DocumentCategory,
+    Tenant,
 )
 from ..schemas.booking import BookingCreate, BookingUpdate, DocumentReadiness, DocumentStatus
 from ..security import generate_manage_token, hash_manage_token, hash_secret, verify_secret
@@ -47,6 +48,31 @@ class BusinessRuleError(HTTPException):
 def tenant_key(name: str) -> str:
     """Weekly limits are per tenant, matched case- and spacing-insensitively."""
     return _WS.sub(" ", (name or "").strip()).lower()
+
+
+def resolve_tenant(db: Session, tenant_id: int | None, tenant_name: str | None) -> Tenant:
+    tenant = db.get(Tenant, tenant_id) if tenant_id is not None else None
+    if tenant_id is None and tenant_name:
+        tenant = db.scalars(
+            select(Tenant).where(func.lower(Tenant.name) == tenant_name.strip().lower())
+        ).first()
+        if tenant is None and tenant_id is None:
+            legacy_name = tenant_name.strip()
+            tenant = Tenant(
+                name=legacy_name,
+                tenant_code=f"LEGACY-{tenant_key(legacy_name)[:50]}",
+                is_active=True,
+            )
+            db.add(tenant)
+            db.flush()
+    if tenant is None:
+        raise BusinessRuleError(
+            "Select a valid tenant for this change record.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    if not tenant.is_active:
+        raise BusinessRuleError("The selected tenant is inactive.", status.HTTP_409_CONFLICT)
+    return tenant
 
 
 def next_booking_reference(db: Session, day: date) -> str:
@@ -158,6 +184,7 @@ class Actor:
     is_admin: bool
     admin_username: str | None = None
     requester_email: str | None = None
+    user_id: int | None = None
 
     @property
     def actor_type(self) -> str:
@@ -169,11 +196,11 @@ class Actor:
 # --------------------------------------------------------------------------- #
 
 
-def weekly_normal_count(db: Session, key: str, any_day: date, *, exclude_id: int | None = None) -> int:
+def weekly_normal_count(db: Session, tenant_id: int, any_day: date, *, exclude_id: int | None = None) -> int:
     monday = week_start(any_day)
     friday = monday + timedelta(days=4)
     stmt = select(func.count(DeploymentBooking.id)).where(
-        DeploymentBooking.tenant_key == key,
+        DeploymentBooking.tenant_id == tenant_id,
         DeploymentBooking.deployment_date >= monday,
         DeploymentBooking.deployment_date <= friday,
         DeploymentBooking.is_emergency.is_(False),
@@ -215,7 +242,7 @@ def _validate_slot_target(
 def _validate_weekly_limit(
     db: Session,
     *,
-    key: str,
+    tenant_id: int,
     tenant_name: str,
     day: date,
     is_emergency: bool,
@@ -228,7 +255,7 @@ def _validate_weekly_limit(
     if is_emergency:
         # Emergency bookings never count against the normal weekly limit.
         return False
-    count = weekly_normal_count(db, key, day, exclude_id=exclude_id)
+    count = weekly_normal_count(db, tenant_id, day, exclude_id=exclude_id)
     if count < app_settings.weekly_booking_limit:
         return False
     if actor.is_admin and override:
@@ -303,15 +330,16 @@ def _flush_new_booking(db: Session, booking: DeploymentBooking, attempts: int = 
 
 def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> tuple[DeploymentBooking, str]:
     app_settings = get_app_settings(db)
+    tenant = resolve_tenant(db, payload.tenant_id, payload.tenant_name)
     slot = _validate_slot_target(db, payload.deployment_date, payload.slot_number, actor, app_settings)
     is_emergency = slot.is_emergency
     _validate_emergency_fields(payload, is_emergency)
 
-    key = tenant_key(payload.tenant_name)
+    key = tenant_key(tenant.name)
     override_applied = _validate_weekly_limit(
         db,
-        key=key,
-        tenant_name=payload.tenant_name,
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
         day=payload.deployment_date,
         is_emergency=is_emergency,
         actor=actor,
@@ -327,8 +355,10 @@ def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> tuple[D
     manage_token = generate_manage_token()
     booking = DeploymentBooking(
         booking_reference=next_booking_reference(db, payload.deployment_date),
-        tenant_name=payload.tenant_name,
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
         tenant_key=key,
+        created_by_user_id=actor.user_id,
         deployment_date=payload.deployment_date,
         slot_number=payload.slot_number,
         jira_change=payload.jira_change,
@@ -413,12 +443,13 @@ def update_booking(
                 "Cancel it and create the correct booking type instead."
             )
 
-    new_key = tenant_key(payload.tenant_name)
-    if not booking.is_emergency and (moved or new_key != booking.tenant_key):
+    tenant = resolve_tenant(db, payload.tenant_id, payload.tenant_name)
+    new_key = tenant_key(tenant.name)
+    if not booking.is_emergency and (moved or tenant.id != booking.tenant_id):
         applied = _validate_weekly_limit(
             db,
-            key=new_key,
-            tenant_name=payload.tenant_name,
+            tenant_id=tenant.id,
+            tenant_name=tenant.name,
             day=new_day,
             is_emergency=False,
             actor=actor,
@@ -433,7 +464,8 @@ def update_booking(
 
     _validate_emergency_fields(payload, booking.is_emergency)
 
-    booking.tenant_name = payload.tenant_name
+    booking.tenant_id = tenant.id
+    booking.tenant_name = tenant.name
     booking.tenant_key = new_key
     booking.deployment_date = new_day
     booking.slot_number = new_slot_number

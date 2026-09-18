@@ -55,6 +55,7 @@ export interface Attachment {
 export interface BookingSummary {
   id: number
   booking_reference: string
+  tenant_id: number
   tenant_name: string
   deployment_date: string
   slot_number: number
@@ -71,6 +72,13 @@ export interface BookingSummary {
   documents: DocumentReadiness
   created_at: string
   updated_at: string
+}
+
+export interface Tenant {
+  id: number
+  name: string
+  tenant_code: string | null
+  description: string | null
 }
 
 export interface BookingDetail extends BookingSummary {
@@ -230,6 +238,7 @@ export interface AuditEvent {
 
 /** Everything the booking form collects. */
 export interface BookingFormValues {
+  tenant_id: string
   tenant_name: string
   jira_change: string
   jira_task: string

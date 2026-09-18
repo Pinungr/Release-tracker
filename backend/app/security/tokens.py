@@ -25,7 +25,6 @@ def create_admin_token(username: str) -> tuple[str, int]:
 def create_user_token(
     user_id: int,
     username: str,
-    tenant_id: int | None = None,
     email: str | None = None,
 ) -> tuple[str, int]:
     expires_in = settings.admin_session_minutes * 60
@@ -33,9 +32,8 @@ def create_user_token(
     payload = {
         "sub": username,
         "user_id": user_id,
-        "tenant_id": tenant_id,
         "email": email or username,
-        "role": "tenant",
+        "role": "tenant_user",
         "jti": secrets.token_hex(16),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=expires_in)).timestamp()),
@@ -58,6 +56,6 @@ def decode_user_token(token: str) -> dict | None:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except jwt.PyJWTError:
         return None
-    if payload.get("role") != "tenant":
+    if payload.get("role") != "tenant_user":
         return None
     return payload

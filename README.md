@@ -1,8 +1,9 @@
 # Production Deployment Scheduler
 
 A web replacement for the weekly production deployment scheduling spreadsheet.
-Application/tenant teams reserve production deployment slots from a single
-page; only administrators sign in.
+Users reserve production deployment slots for independently managed tenants
+from a single page; administrators manage the tenant master and application
+configuration.
 
 ---
 
@@ -11,15 +12,18 @@ page; only administrators sign in.
 * One main page: a **Monday–Friday weekly deployment board**.
 * Each working day has **four regular slots** plus a **fifth emergency slot**
   that only administrators can book.
-* **Tenant users need no account.** They open the URL, see the week, book a
-  free slot, and protect their booking with a **6-digit PIN**.
+* **Users authenticate as people, not tenants.** Registration and login use
+  full name, username/email and password only. A person can schedule CRs for
+  multiple tenants.
+* The tenant is selected during CR scheduling from the active tenant master.
+  Each booking stores both its selected `tenant_id` and `created_by_user_id`.
 * Editing, cancelling and document upload require the **requester email + PIN**
   (verified on the server), and stop **48 hours** before the deployment
   (configurable).
 * Administrators log in, and can configure slots, holidays, per-day overrides,
   the weekly limit and the mandatory document list; they can also override any
   rule, with the reason recorded in the audit trail.
-* Every booking tracks JIRA change/task, technology, tenant, requester,
+* Every booking tracks JIRA change/task, selected tenant, creator, requester,
   verifier, Git repository, implementation detail and **six document
   categories** with a readiness indicator.
 
@@ -481,6 +485,11 @@ documentation: `/docs`.
 | `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, freeze hours, file size, mandatory documents |
 | `GET` `PUT` | `/admin/slots` | Slot names, times, regular/emergency, enabled |
 | `GET` `POST` | `/admin/holidays` | List / create |
+| `GET` | `/tenants/active` | Active tenant options for scheduling |
+| `GET` `POST` | `/admin/tenants` | List / create tenant master records |
+| `PUT` | `/admin/tenants/{id}` | Edit a tenant |
+| `PATCH` | `/admin/tenants/{id}/status` | Activate / deactivate a tenant |
+| `GET` | `/admin/users` | Users without permanent tenant assignment |
 | `PUT` `DELETE` | `/admin/holidays/{id}` | Update / delete |
 | `GET` `PUT` | `/admin/overrides` | Per-date slot overrides |
 | `DELETE` | `/admin/overrides/{id}` | Clear an override |
@@ -496,12 +505,12 @@ documentation: `/docs`.
 
 ## 14. Using the app
 
-**As a tenant user**
+**As an authenticated user**
 
 1. Open the scheduler URL (`http://<server>:8000/`) and use
    **Previous week / Next week / Today**.
 2. Click **Book slot** on a green slot; the drawer opens over the board.
-3. Fill the change, people and deployment sections, choose a 6-digit PIN, and
+3. Select the tenant for this specific CR, then fill the change, people and deployment sections and choose a 6-digit PIN for legacy ownership flows.
    confirm. The booking reference (`PDS-20260921-003`) appears immediately,
    followed by the document uploader.
 4. Attach the four required documents. Readiness shows as `3 / 4 required`.

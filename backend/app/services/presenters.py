@@ -50,6 +50,7 @@ def booking_summary(db: Session, booking: DeploymentBooking, app_settings: AppSe
     return BookingSummary(
         id=booking.id,
         booking_reference=booking.booking_reference,
+        tenant_id=booking.tenant_id,
         tenant_name=booking.tenant_name,
         deployment_date=booking.deployment_date,
         slot_number=booking.slot_number,

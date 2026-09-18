@@ -112,7 +112,87 @@ def list_tenants(
     admin: AdminPrincipal = Depends(require_admin),
 ) -> list[dict]:
     tenants = db.scalars(select(Tenant).order_by(Tenant.name)).all()
-    return [{"id": t.id, "name": t.name, "team_name": t.team_name, "is_active": t.is_active} for t in tenants]
+    return [
+        {
+            "id": t.id,
+            "name": t.name,
+            "tenant_code": t.tenant_code,
+            "description": t.description,
+            "team_name": t.team_name,
+            "is_active": t.is_active,
+        }
+        for t in tenants
+    ]
+
+
+@router.post("/tenants", status_code=status.HTTP_201_CREATED)
+def create_tenant(
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    name = str(payload.get("name", "")).strip()
+    code = str(payload.get("tenant_code", "")).strip().upper()
+    if not name or not code:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Tenant name and tenant code are required.")
+    if db.scalars(select(Tenant).where((Tenant.name == name) | (Tenant.tenant_code == code))).first():
+        raise HTTPException(status.HTTP_409_CONFLICT, "Tenant name or code already exists.")
+    tenant = Tenant(name=name, tenant_code=code, description=payload.get("description"), is_active=True)
+    db.add(tenant)
+    db.flush()
+    audit_service.record(
+        db,
+        event_type="TENANT_CREATED",
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        new_values={"tenant_id": tenant.id, "name": tenant.name, "tenant_code": tenant.tenant_code},
+    )
+    db.commit()
+    return {"id": tenant.id, "name": tenant.name, "tenant_code": tenant.tenant_code, "description": tenant.description, "is_active": tenant.is_active}
+
+
+@router.put("/tenants/{tenant_id}")
+def update_tenant(
+    tenant_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found.")
+    name = str(payload.get("name", tenant.name)).strip()
+    code = str(payload.get("tenant_code", tenant.tenant_code or "")).strip().upper()
+    duplicate = db.scalars(
+        select(Tenant).where(
+            Tenant.id != tenant_id,
+            (Tenant.name == name) | (Tenant.tenant_code == code),
+        )
+    ).first()
+    if duplicate:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Tenant name or code already exists.")
+    tenant.name = name
+    tenant.tenant_code = code or None
+    tenant.description = payload.get("description")
+    db.commit()
+    return {"id": tenant.id, "name": tenant.name, "tenant_code": tenant.tenant_code, "description": tenant.description, "is_active": tenant.is_active}
+
+
+@router.patch("/tenants/{tenant_id}/status")
+def update_tenant_status(
+    tenant_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found.")
+    if not isinstance(payload.get("is_active"), bool):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "is_active must be a boolean value.")
+    tenant.is_active = payload["is_active"]
+    db.commit()
+    return {"id": tenant.id, "name": tenant.name, "is_active": tenant.is_active}
 
 
 @router.get("/users", response_model=list[dict])
@@ -128,7 +208,6 @@ def list_users(
             (User.username.ilike(q))
             | (User.email.ilike(q))
             | (User.full_name.ilike(q))
-            | (User.tenant.has(Tenant.name.ilike(q)))
         )
     users = db.scalars(stmt.order_by(User.email)).all()
     return [
@@ -137,9 +216,10 @@ def list_users(
             "full_name": u.full_name,
             "username": u.username,
             "email": u.email,
-            "tenant_name": u.tenant.name if u.tenant else None,
             "role": u.role,
             "is_active": u.is_active,
+            "must_change_password": u.must_change_password,
+            "created_at": u.created_at,
         }
         for u in users
     ]
@@ -164,6 +244,7 @@ def reset_user_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password must be at least 8 characters long.")
 
     user.password_hash = hash_secret(new_password)
+    user.must_change_password = True
     audit_service.record(
         db,
         event_type="PASSWORD_RESET_BY_ADMIN",
@@ -204,29 +285,6 @@ def update_user_status(
     return {"message": "User status updated.", "user_id": user.id, "is_active": user.is_active}
 
 
-@router.patch("/users/{user_id}/tenant")
-def update_user_tenant(
-    user_id: int,
-    payload: dict,
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-):
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
-    tenant_name = str(payload.get("tenant_name", "")).strip()
-    if not tenant_name:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "tenant_name is required.")
-    tenant = db.scalars(select(Tenant).where(Tenant.name == tenant_name)).first()
-    if tenant is None:
-        tenant = Tenant(name=tenant_name)
-        db.add(tenant)
-        db.flush()
-    user.tenant_id = tenant.id
-    db.commit()
-    return {"message": "Tenant updated.", "user_id": user.id, "tenant_name": tenant.name}
-
-
 @router.patch("/users/{user_id}/role")
 def update_user_role(
     user_id: int,
@@ -238,8 +296,8 @@ def update_user_role(
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
     role = str(payload.get("role", "")).strip().upper()
-    if not role:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "role is required.")
+    if role not in {"ADMIN", "TENANT_USER"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "role must be ADMIN or TENANT_USER.")
     user.role = role
     db.commit()
     return {"message": "Role updated.", "user_id": user.id, "role": user.role}
@@ -546,6 +604,7 @@ def move_booking(
     from ..models import Technology
 
     update = BookingUpdate(
+        tenant_id=booking.tenant_id,
         tenant_name=booking.tenant_name,
         jira_change=booking.jira_change,
         jira_task=booking.jira_task,
@@ -582,9 +641,11 @@ def reassign_booking(
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
     before = audit_service.snapshot(booking)
-    if payload.tenant_name:
-        booking.tenant_name = payload.tenant_name
-        booking.tenant_key = booking_service.tenant_key(payload.tenant_name)
+    if payload.tenant_id is not None or payload.tenant_name:
+        tenant = booking_service.resolve_tenant(db, payload.tenant_id, payload.tenant_name)
+        booking.tenant_id = tenant.id
+        booking.tenant_name = tenant.name
+        booking.tenant_key = booking_service.tenant_key(tenant.name)
     for field in ("requester_name", "requester_email", "verifier_name", "verifier_email"):
         value = getattr(payload, field)
         if value:

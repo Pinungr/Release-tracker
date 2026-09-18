@@ -1,7 +1,8 @@
-import type { BookingDetail, BookingFormValues, PublicSettings } from '../types'
+import type { BookingDetail, BookingFormValues, PublicSettings, Tenant } from '../types'
 import { CheckboxField, FormSection, SelectField, TextArea, TextField } from './FormControls'
 
 export const EMPTY_BOOKING_VALUES: BookingFormValues = {
+  tenant_id: '',
   tenant_name: '',
   jira_change: '',
   jira_task: '',
@@ -30,6 +31,7 @@ export const EMPTY_BOOKING_VALUES: BookingFormValues = {
 export function valuesFromBooking(booking: BookingDetail): BookingFormValues {
   return {
     ...EMPTY_BOOKING_VALUES,
+    tenant_id: String(booking.tenant_id),
     tenant_name: booking.tenant_name,
     jira_change: booking.jira_change,
     jira_task: booking.jira_task ?? '',
@@ -68,7 +70,7 @@ export function validateBookingForm(
 ): BookingFormErrors {
   const errors: BookingFormErrors = {}
   const required: (keyof BookingFormValues)[] = [
-    'tenant_name',
+    'tenant_id',
     'jira_change',
     'technology',
     'environment',
@@ -129,6 +131,7 @@ export function toBookingPayload(
 ): Record<string, unknown> {
   const optional = (value: string) => (value.trim() ? value.trim() : null)
   return {
+    tenant_id: values.tenant_id ? Number(values.tenant_id) : null,
     tenant_name: values.tenant_name.trim(),
     jira_change: values.jira_change.trim(),
     jira_task: optional(values.jira_task),
@@ -155,6 +158,7 @@ export function toBookingPayload(
 interface BookingFormProps {
   formId: string
   values: BookingFormValues
+  tenants: Tenant[]
   errors: BookingFormErrors
   settings: PublicSettings
   isEmergency: boolean
@@ -167,6 +171,7 @@ interface BookingFormProps {
 export function BookingForm({
   formId,
   values,
+  tenants,
   errors,
   settings,
   isEmergency,
@@ -188,16 +193,18 @@ export function BookingForm({
       className="space-y-6"
     >
       <FormSection title="Change record" description="Identifies the deployment in your change system.">
-        <TextField
+        <SelectField
           label="Tenant name"
-          name="tenant_name"
+          name="tenant_id"
           required
-          value={values.tenant_name}
-          onChange={(v) => onChange('tenant_name', v)}
-          error={errors.tenant_name}
-          placeholder="EPCAT"
-          hint={`Maximum ${settings.weekly_booking_limit} regular deployments per tenant, per week.`}
-          maxLength={120}
+          value={values.tenant_id}
+          onChange={(v) => {
+            const tenant = tenants.find((item) => String(item.id) === v)
+            onChange('tenant_id', v)
+            onChange('tenant_name', tenant?.name ?? '')
+          }}
+          options={tenants.map((tenant) => ({ value: String(tenant.id), label: tenant.name }))}
+          error={errors.tenant_id ?? errors.tenant_name}
         />
         <SelectField
           label="Deployment technology"

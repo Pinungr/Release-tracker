@@ -8,6 +8,7 @@ import type {
   OwnerCredentials,
   PublicSettings,
   SlotView,
+  Tenant,
 } from '../types'
 import {
   BookingForm,
@@ -56,6 +57,7 @@ export function BookingDrawer({
   const [errors, setErrors] = useState<BookingFormErrors>({})
   const [saving, setSaving] = useState(false)
   const [created, setCreated] = useState<BookingCreated | null>(null)
+  const [tenants, setTenants] = useState<Tenant[]>([])
 
   // Reset only when the drawer opens or switches booking. `settings` is
   // deliberately not a dependency: it is a fresh object after every schedule
@@ -75,6 +77,11 @@ export function BookingDrawer({
         : { ...EMPTY_BOOKING_VALUES, technology: technologyRef.current },
     )
   }, [open, editBooking])
+
+  useEffect(() => {
+    if (!open) return
+    api.getActiveTenants().then(setTenants).catch(() => setTenants([]))
+  }, [open])
 
   const heading = useMemo(() => {
     if (created) return 'Deployment slot booked'
@@ -264,6 +271,7 @@ export function BookingDrawer({
         <BookingForm
           formId={formId}
           values={values}
+          tenants={tenants}
           errors={errors}
           settings={settings}
           isEmergency={isEmergency}

@@ -102,12 +102,16 @@ class Tenant(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    tenant_code: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     team_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     contact_email: Mapped[str | None] = mapped_column(String(180), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
-    users: Mapped[list["User"]] = relationship(back_populates="tenant", cascade="all, delete-orphan")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class User(Base):
@@ -118,16 +122,16 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(180), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), nullable=True, index=True)
     team_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     contact_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    role: Mapped[str] = mapped_column(String(32), default="TENANT", nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="TENANT_USER", nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    tenant: Mapped[Tenant | None] = relationship(back_populates="users")
-
 
 class TenantUser(Base):
     __tablename__ = "tenant_users"
@@ -175,8 +179,12 @@ class DeploymentBooking(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     booking_reference: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
 
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
     tenant_name: Mapped[str] = mapped_column(String(120), nullable=False)
     tenant_key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
 
     deployment_date: Mapped[date] = mapped_column(Date, nullable=False)
     slot_number: Mapped[int] = mapped_column(Integer, nullable=False)

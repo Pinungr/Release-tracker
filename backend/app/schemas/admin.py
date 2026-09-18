@@ -106,6 +106,7 @@ class MoveBookingRequest(BaseModel):
 class ReassignBookingRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
+    tenant_id: int | None = Field(default=None, ge=1)
     tenant_name: Annotated[str | None, Field(default=None, max_length=120)] = None
     requester_name: Annotated[str | None, Field(default=None, max_length=120)] = None
     requester_email: Annotated[str | None, Field(default=None, max_length=180)] = None

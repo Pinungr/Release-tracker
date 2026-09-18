@@ -16,10 +16,12 @@ import type {
   PublicSettings,
   Schedule,
   SlotConfig,
+  Tenant,
 } from '../types'
 
 const BASE = '/api'
 const TOKEN_KEY = 'pds.admin.token'
+const USER_TOKEN_KEY = 'pds.user.token'
 
 export class ApiError extends Error {
   status: number
@@ -37,8 +39,14 @@ export const adminToken = {
   clear: () => sessionStorage.removeItem(TOKEN_KEY),
 }
 
+export const userToken = {
+  get: (): string | null => sessionStorage.getItem(USER_TOKEN_KEY),
+  set: (token: string) => sessionStorage.setItem(USER_TOKEN_KEY, token),
+  clear: () => sessionStorage.removeItem(USER_TOKEN_KEY),
+}
+
 function authHeaders(): Record<string, string> {
-  const token = adminToken.get()
+  const token = adminToken.get() ?? userToken.get()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
@@ -92,6 +100,8 @@ export const api = {
   getSchedule: (weekAnchor: string) => request<Schedule>(`/schedule?week=${weekAnchor}`),
 
   getConfig: () => request<PublicSettings>('/config'),
+
+  getActiveTenants: () => request<Tenant[]>('/tenants/active'),
 
   getBooking: (id: number) => request<BookingDetail>(`/bookings/${id}`),
 

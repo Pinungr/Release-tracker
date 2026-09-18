@@ -29,7 +29,6 @@ class UserPrincipal:
     user_id: int
     username: str
     email: str
-    tenant_id: int | None
     payload: dict
 
 
@@ -74,7 +73,6 @@ def optional_user(request: Request) -> UserPrincipal | None:
         user_id=int(user_id),
         username=str(payload.get("sub") or ""),
         email=str(payload.get("email") or ""),
-        tenant_id=payload.get("tenant_id"),
         payload=payload,
     )
 

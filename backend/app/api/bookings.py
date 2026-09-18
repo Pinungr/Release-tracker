@@ -21,7 +21,6 @@ from ..schemas import (
     MyBookingsRequest,
     OwnerCredentials,
 )
-from ..models import Tenant
 from ..security import AdminPrincipal, UserPrincipal, generate_manage_token, hash_manage_token
 from ..security.ratelimit import enforce
 from ..services import booking_service, presenters
@@ -52,8 +51,12 @@ def _owner_actor(
     if admin is not None:
         return Actor(is_admin=True, admin_username=admin.username)
     if user is not None:
-        if booking.requester_email and booking.requester_email.lower() == user.email.lower():
-            return Actor(is_admin=False, requester_email=str(user.email))
+        if booking.created_by_user_id == user.user_id or (
+            booking.created_by_user_id is None
+            and booking.requester_email
+            and booking.requester_email.lower() == user.email.lower()
+        ):
+            return Actor(is_admin=False, requester_email=str(user.email), user_id=user.user_id)
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "You are not authorized to modify this booking.",
@@ -75,13 +78,15 @@ def create_booking(
     payload: BookingCreate,
     db: Session = Depends(get_db),
     admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
 ) -> BookingCreated:
     enforce(request, "create-booking", limit=20, window_seconds=300)
-    actor = (
-        Actor(is_admin=True, admin_username=admin.username)
-        if admin
-        else Actor(is_admin=False, requester_email=str(payload.requester_email))
-    )
+    if admin:
+        actor = Actor(is_admin=True, admin_username=admin.username)
+    elif user:
+        actor = Actor(is_admin=False, requester_email=str(user.email), user_id=user.user_id)
+    else:
+        actor = Actor(is_admin=False, requester_email=str(payload.requester_email))
     booking, manage_token = booking_service.create_booking(db, payload, actor)
     detail = presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin)
     return BookingCreated(

@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 
 from .database import SessionLocal
-from .models import DeploymentBooking, Holiday
+from .models import DeploymentBooking, Holiday, Tenant
 from .security import generate_manage_token, hash_manage_token, hash_secret
 from .services import audit_service, bootstrap
 from .services.booking_service import next_booking_reference, tenant_key
@@ -31,10 +31,17 @@ def _booking(db, *, reference_date: date, slot: int, **fields) -> DeploymentBook
     ).first()
     if exists is not None:
         return None
+    tenant_name = fields["tenant_name"]
+    tenant = db.scalars(select(Tenant).where(Tenant.name == tenant_name)).first()
+    if tenant is None:
+        tenant = Tenant(name=tenant_name, tenant_code=f"SEED-{tenant_key(tenant_name).upper()[:50]}")
+        db.add(tenant)
+        db.flush()
     booking = DeploymentBooking(
         booking_reference=next_booking_reference(db, reference_date),
         deployment_date=reference_date,
         slot_number=slot,
+        tenant_id=tenant.id,
         tenant_key=tenant_key(fields["tenant_name"]),
         booking_pin_hash=hash_secret(SAMPLE_PIN),
         manage_token_hash=hash_manage_token(generate_manage_token()),

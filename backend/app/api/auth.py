@@ -1,4 +1,4 @@
-"""Tenant authentication and tenant registration endpoints."""
+"""Person authentication and local account registration endpoints."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import AdminUser, Tenant, User
+from ..models import AdminUser, User
 from ..security import create_admin_token, hash_secret, require_user, verify_secret
 from ..security.tokens import create_user_token
 from ..security.ratelimit import enforce
@@ -24,7 +24,6 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=256)
     confirm_password: str | None = Field(default=None, min_length=8, max_length=256)
-    tenant_name: str = Field(min_length=1, max_length=120)
     team_name: str | None = Field(default=None, max_length=120)
     contact_number: str | None = Field(default=None, max_length=40)
 
@@ -50,7 +49,7 @@ def register_user(
     payload: RegisterRequest,
     db: Session = Depends(get_db),
 ):
-    enforce(request, "tenant-register", limit=20, window_seconds=300)
+    enforce(request, "user-register", limit=20, window_seconds=300)
 
     if payload.confirm_password is not None and payload.password != payload.confirm_password:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password and confirmation do not match.")
@@ -58,31 +57,23 @@ def register_user(
     full_name = payload.full_name.strip()
     email = payload.email.strip().lower()
     username = payload.username.strip()
-    tenant_name = payload.tenant_name.strip()
     team_name = (payload.team_name or "").strip() or None
     contact_number = (payload.contact_number or "").strip() or None
 
-    if not full_name or not email or not username or not tenant_name:
+    if not full_name or not email or not username:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing required registration fields.")
 
     if db.scalars(select(User).where((User.username == username) | (User.email == email))).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "Username or email already exists.")
-
-    tenant = db.scalars(select(Tenant).where(Tenant.name == tenant_name)).first()
-    if tenant is None:
-        tenant = Tenant(name=tenant_name, team_name=team_name, contact_email=email)
-        db.add(tenant)
-        db.flush()
 
     user = User(
         full_name=full_name,
         username=username,
         email=email,
         password_hash=hash_secret(payload.password),
-        tenant_id=tenant.id,
         team_name=team_name,
         contact_number=contact_number,
-        role="TENANT",
+        role="TENANT_USER",
     )
     db.add(user)
     db.flush()
@@ -95,16 +86,14 @@ def register_user(
             "full_name": user.full_name,
             "username": user.username,
             "email": user.email,
-            "tenant_name": tenant.name,
             "role": user.role,
         },
-        "tenant": {"id": tenant.id, "name": tenant.name, "team_name": tenant.team_name},
     }
 
 
 @router.post("/login")
 def login_user(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
-    enforce(request, "tenant-login", limit=12, window_seconds=300)
+    enforce(request, "user-login", limit=12, window_seconds=300)
     username_or_email = payload.username_or_email.strip()
     password = payload.password
 
@@ -112,7 +101,7 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
         select(User).where((User.username == username_or_email) | (User.email == username_or_email.lower()))
     ).first()
     if user is not None and user.is_active and verify_secret(password, user.password_hash):
-        token, expires_in = create_user_token(user.id, user.username, user.tenant_id, user.email)
+        token, expires_in = create_user_token(user.id, user.username, user.email)
         user.last_login_at = now_utc()
         db.commit()
         return {
@@ -124,7 +113,6 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
                 "full_name": user.full_name,
                 "username": user.username,
                 "email": user.email,
-                "tenant_name": user.tenant.name if user.tenant else None,
                 "role": user.role,
             },
         }
@@ -167,5 +155,6 @@ def change_password(
     if payload.new_password != payload.confirm_new_password:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password and confirmation do not match.")
     db_user.password_hash = hash_secret(payload.new_password)
+    db_user.must_change_password = False
     db.commit()
     return {"message": "Password updated successfully."}

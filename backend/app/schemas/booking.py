@@ -42,7 +42,8 @@ def _validate_optional_url(value: str | None) -> str | None:
 class BookingBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    tenant_name: ShortText
+    tenant_id: int | None = Field(default=None, ge=1)
+    tenant_name: Annotated[str | None, Field(default=None, max_length=120)] = None
     jira_change: Annotated[str, Field(min_length=3, max_length=64)]
     jira_task: Annotated[str | None, Field(default=None, max_length=64)] = None
     jira_url: Annotated[str | None, Field(default=None, max_length=500)] = None
@@ -161,6 +162,7 @@ class BookingSummary(BaseModel):
 
     id: int
     booking_reference: str
+    tenant_id: int
     tenant_name: str
     deployment_date: date
     slot_number: int
