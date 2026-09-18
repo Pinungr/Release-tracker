@@ -1,0 +1,16 @@
+# Environment & secrets
+.env
+.env.local
+
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Runtime data: database and uploaded deployment documents
+storage/

@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pds-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: scheduler
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: change-me-in-production
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler -d scheduler"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pds-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://scheduler:change-me-in-production@postgres:5432/scheduler
+      STORAGE_DIR: /var/lib/pds/storage
+      FRONTEND_DIST: /app/frontend/dist
+      JWT_SECRET: replace-with-a-long-random-string
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: replace-with-a-strong-password
+      TIMEZONE: Asia/Kolkata
+      CORS_ORIGINS: ""
+    ports:
+      - "8000:8000"
+    volumes:
+      - app-storage:/var/lib/pds/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  app-storage:

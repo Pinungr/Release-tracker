@@ -1,0 +1,36 @@
+"""Public weekly board."""
+from __future__ import annotations
+
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..schemas import PublicSettings, ScheduleResponse
+from ..services import presenters
+from ..services.settings_service import get_app_settings
+from ..utils.dates import today_local
+
+router = APIRouter(tags=["schedule"])
+
+
+@router.get("/schedule", response_model=ScheduleResponse)
+def get_schedule(
+    week: str | None = Query(default=None, description="Any date inside the desired week (YYYY-MM-DD)."),
+    db: Session = Depends(get_db),
+) -> ScheduleResponse:
+    """Only the requested week is loaded; navigation refetches per week."""
+    if week:
+        try:
+            anchor = date.fromisoformat(week)
+        except ValueError:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "week must be YYYY-MM-DD.") from None
+    else:
+        anchor = today_local()
+    return presenters.schedule_response(db, anchor)
+
+
+@router.get("/config", response_model=PublicSettings)
+def get_public_config(db: Session = Depends(get_db)) -> PublicSettings:
+    return presenters.public_settings(get_app_settings(db))
