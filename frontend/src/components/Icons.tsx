@@ -32,12 +32,6 @@ export const ChevronRight = (p: IconProps) => (
   </Base>
 )
 
-export const ChevronDown = (p: IconProps) => (
-  <Base {...p}>
-    <path d="m6 9 6 6 6-6" />
-  </Base>
-)
-
 export const Calendar = (p: IconProps) => (
   <Base {...p}>
     <rect x="3" y="5" width="18" height="16" rx="2" />
