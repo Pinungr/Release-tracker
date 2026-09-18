@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
-import secrets
 
 import bcrypt
 
@@ -31,16 +29,3 @@ def verify_secret(secret: str, hashed: str | None) -> bool:
         return False
 
 
-def generate_manage_token() -> str:
-    """Opaque, URL-safe token for the /booking/manage/<token> shortcut."""
-    return secrets.token_urlsafe(32)
-
-
-def hash_manage_token(token: str) -> str:
-    """Tokens are high-entropy, so a fast keyed digest is sufficient and lets
-    us look the booking up by hash in a single indexed query."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def tokens_equal(a: str, b: str) -> bool:
-    return hmac.compare_digest(a, b)

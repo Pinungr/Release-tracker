@@ -2,7 +2,6 @@ from .entities import (
     ACTIVE_STATUSES,
     DOCUMENT_LABELS,
     MULTI_FILE_CATEGORIES,
-    AdminUser,
     ApplicationSetting,
     BookingAttachment,
     BookingAudit,
@@ -13,7 +12,6 @@ from .entities import (
     DocumentCategory,
     Holiday,
     Tenant,
-    TenantUser,
     Technology,
     User,
 )
@@ -22,7 +20,6 @@ __all__ = [
     "ACTIVE_STATUSES",
     "DOCUMENT_LABELS",
     "MULTI_FILE_CATEGORIES",
-    "AdminUser",
     "ApplicationSetting",
     "BookingAttachment",
     "BookingAudit",
@@ -33,7 +30,6 @@ __all__ = [
     "DocumentCategory",
     "Holiday",
     "Tenant",
-    "TenantUser",
     "Technology",
     "User",
 ]

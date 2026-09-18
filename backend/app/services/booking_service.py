@@ -1,18 +1,17 @@
 """Booking business rules.
 
 This module is the single source of truth for:
-  * slot existence / enablement / holiday blocking
-  * emergency-slot access (admin only)
-  * the per-tenant weekly limit (and admin override)
+  * normal slot existence / enablement / holiday blocking
+  * emergency-change access (administrators only, queued per date)
+  * the per-tenant weekly limit (and the audited admin override)
   * the configurable edit/cancel freeze window
-  * booking ownership (email + PIN, or the manage token)
   * document readiness
 
-The API layer never re-implements any of these; it only calls in here.
+Ownership is decided by ``created_by_user_id`` against the authenticated
+caller; the API layer never re-implements any of these rules.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -24,7 +23,6 @@ from sqlalchemy.orm import Session
 from ..models import (
     ACTIVE_STATUSES,
     DOCUMENT_LABELS,
-    MULTI_FILE_CATEGORIES,
     BookingAttachment,
     BookingStatus,
     DeploymentBooking,
@@ -32,12 +30,9 @@ from ..models import (
     Tenant,
 )
 from ..schemas.booking import BookingCreate, BookingUpdate, DocumentReadiness, DocumentStatus
-from ..security import generate_manage_token, hash_manage_token, hash_secret, verify_secret
 from ..utils.dates import format_day, format_time, now_utc, slot_start_utc, today_local, week_start
 from . import audit_service, schedule_service
 from .settings_service import AppSettings, get_app_settings
-
-_WS = re.compile(r"\s+")
 
 
 class BusinessRuleError(HTTPException):
@@ -45,26 +40,13 @@ class BusinessRuleError(HTTPException):
         super().__init__(status_code=status_code, detail=message)
 
 
-def tenant_key(name: str) -> str:
-    """Weekly limits are per tenant, matched case- and spacing-insensitively."""
-    return _WS.sub(" ", (name or "").strip()).lower()
+def resolve_tenant(db: Session, tenant_id: int) -> Tenant:
+    """Tenants come from the admin-managed master only.
 
-
-def resolve_tenant(db: Session, tenant_id: int | None, tenant_name: str | None) -> Tenant:
-    tenant = db.get(Tenant, tenant_id) if tenant_id is not None else None
-    if tenant_id is None and tenant_name:
-        tenant = db.scalars(
-            select(Tenant).where(func.lower(Tenant.name) == tenant_name.strip().lower())
-        ).first()
-        if tenant is None and tenant_id is None:
-            legacy_name = tenant_name.strip()
-            tenant = Tenant(
-                name=legacy_name,
-                tenant_code=f"LEGACY-{tenant_key(legacy_name)[:50]}",
-                is_active=True,
-            )
-            db.add(tenant)
-            db.flush()
+    Scheduling never creates a tenant as a side effect, so a typo cannot
+    silently fork a weekly quota into a brand new tenant row.
+    """
+    tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise BusinessRuleError(
             "Select a valid tenant for this change record.",
@@ -104,7 +86,15 @@ def lock_deadline(db: Session, booking: DeploymentBooking, app_settings: AppSett
     return start - timedelta(hours=app_settings.booking_freeze_hours)
 
 
-def is_locked_for_public(db: Session, booking: DeploymentBooking, app_settings: AppSettings | None = None) -> bool:
+def is_locked_for_owner(db: Session, booking: DeploymentBooking, app_settings: AppSettings | None = None) -> bool:
+    """Whether the owning TENANT_USER may still edit or cancel.
+
+    Administrators bypass this with an audited reason. Emergency changes are
+    admin-only by definition and have no slot start time to count back from,
+    so they are never reported as locked.
+    """
+    if booking.is_emergency:
+        return False
     if booking.status == BookingStatus.CANCELLED.value:
         return True
     deadline = lock_deadline(db, booking, app_settings)
@@ -163,20 +153,6 @@ def assert_documents_complete(db: Session, booking: DeploymentBooking) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def verify_owner(booking: DeploymentBooking, email: str, pin: str) -> bool:
-    if (booking.requester_email or "").strip().lower() != (email or "").strip().lower():
-        return False
-    return verify_secret(pin, booking.booking_pin_hash)
-
-
-def booking_for_manage_token(db: Session, token: str) -> DeploymentBooking | None:
-    if not token:
-        return None
-    return db.scalars(
-        select(DeploymentBooking).where(DeploymentBooking.manage_token_hash == hash_manage_token(token))
-    ).first()
-
-
 @dataclass(frozen=True)
 class Actor:
     """Who is making the change."""
@@ -188,7 +164,7 @@ class Actor:
 
     @property
     def actor_type(self) -> str:
-        return "ADMIN" if self.is_admin else "PUBLIC"
+        return "ADMIN" if self.is_admin else "USER"
 
 
 # --------------------------------------------------------------------------- #
@@ -214,7 +190,7 @@ def weekly_normal_count(db: Session, tenant_id: int, any_day: date, *, exclude_i
 def _validate_slot_target(
     db: Session,
     day: date,
-    slot_number: int,
+    slot_number: int | None,
     actor: Actor,
     app_settings: AppSettings,
 ) -> schedule_service.ResolvedSlot:
@@ -223,15 +199,12 @@ def _validate_slot_target(
     if day.weekday() >= 5:
         raise BusinessRuleError("Deployments can only be scheduled Monday to Friday.")
 
+    if slot_number is None:
+        raise BusinessRuleError("A normal deployment slot is required for this booking.")
     plan = schedule_service.resolve_day(db, day, app_settings=app_settings)
     slot = next((s for s in plan.slots if s.slot_number == slot_number), None)
     if slot is None:
         raise BusinessRuleError("The selected deployment slot does not exist.", status.HTTP_404_NOT_FOUND)
-    if slot.is_emergency and not actor.is_admin:
-        raise BusinessRuleError(
-            "Slot 5 is reserved for emergency changes and can only be booked by an administrator.",
-            status.HTTP_403_FORBIDDEN,
-        )
     if not slot.enabled:
         raise BusinessRuleError("That deployment slot is disabled for this date.")
     if slot.unavailable_reason:
@@ -293,7 +266,12 @@ SLOT_TAKEN_MESSAGE = (
 )
 
 
-def _slot_taken(db: Session, day: date, slot_number: int, exclude_id: int | None = None) -> bool:
+def _slot_taken(db: Session, day: date, slot_number: int | None, exclude_id: int | None = None) -> bool:
+    # Emergency changes carry no slot number. Without this guard the query
+    # below would compile to `slot_number IS NULL` and every emergency change
+    # on the date would look like a slot conflict.
+    if slot_number is None:
+        return False
     stmt = select(DeploymentBooking.id).where(
         DeploymentBooking.deployment_date == day,
         DeploymentBooking.slot_number == slot_number,
@@ -328,14 +306,25 @@ def _flush_new_booking(db: Session, booking: DeploymentBooking, attempts: int = 
     )
 
 
-def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> tuple[DeploymentBooking, str]:
+def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> DeploymentBooking:
     app_settings = get_app_settings(db)
-    tenant = resolve_tenant(db, payload.tenant_id, payload.tenant_name)
-    slot = _validate_slot_target(db, payload.deployment_date, payload.slot_number, actor, app_settings)
-    is_emergency = slot.is_emergency
+    tenant = resolve_tenant(db, payload.tenant_id)
+    if payload.is_emergency:
+        if not actor.is_admin:
+            raise BusinessRuleError("Only administrators can create emergency changes.", status.HTTP_403_FORBIDDEN)
+        if payload.deployment_date < today_local():
+            raise BusinessRuleError("Deployment date cannot be in the past.")
+        plan = schedule_service.resolve_day(db, payload.deployment_date, app_settings=app_settings)
+        if not plan.emergency_open:
+            raise BusinessRuleError(
+                plan.emergency_closed_reason or "Emergency changes are closed for this date."
+            )
+        is_emergency = True
+    else:
+        _validate_slot_target(db, payload.deployment_date, payload.slot_number, actor, app_settings)
+        is_emergency = False
     _validate_emergency_fields(payload, is_emergency)
 
-    key = tenant_key(tenant.name)
     override_applied = _validate_weekly_limit(
         db,
         tenant_id=tenant.id,
@@ -352,15 +341,13 @@ def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> tuple[D
             app_settings, payload.override_reason, "exceed the weekly booking limit"
         )
 
-    manage_token = generate_manage_token()
     booking = DeploymentBooking(
         booking_reference=next_booking_reference(db, payload.deployment_date),
         tenant_id=tenant.id,
         tenant_name=tenant.name,
-        tenant_key=key,
         created_by_user_id=actor.user_id,
         deployment_date=payload.deployment_date,
-        slot_number=payload.slot_number,
+        slot_number=None if is_emergency else payload.slot_number,
         jira_change=payload.jira_change,
         jira_task=payload.jira_task or None,
         jira_url=payload.jira_url,
@@ -369,8 +356,6 @@ def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> tuple[D
         requester_name=payload.requester_name,
         requester_email=str(payload.requester_email),
         requester_phone=payload.requester_phone or None,
-        booking_pin_hash=hash_secret(payload.booking_pin),
-        manage_token_hash=hash_manage_token(manage_token),
         verifier_name=payload.verifier_name,
         verifier_email=str(payload.verifier_email),
         git_repository=payload.git_repository,
@@ -383,7 +368,6 @@ def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> tuple[D
         emergency_approval_reference=payload.emergency_approval_reference or None,
         emergency_approver=payload.emergency_approver or None,
         business_justification=payload.business_justification or None,
-        created_by_admin=actor.admin_username if actor.is_admin else None,
     )
     db.add(booking)
     _flush_new_booking(db, booking)
@@ -399,7 +383,7 @@ def create_booking(db: Session, payload: BookingCreate, actor: Actor) -> tuple[D
         new_values=audit_service.snapshot(booking),
     )
     db.commit()
-    return booking, manage_token
+    return booking
 
 
 def update_booking(
@@ -414,7 +398,7 @@ def update_booking(
 
     override_reason: str | None = None
     if not actor.is_admin:
-        if is_locked_for_public(db, booking, app_settings):
+        if is_locked_for_owner(db, booking, app_settings):
             raise BusinessRuleError(
                 f"Changes are disabled within {app_settings.booking_freeze_hours} hours of the "
                 "deployment. Contact an administrator for assistance.",
@@ -425,7 +409,7 @@ def update_booking(
                 "Emergency change records can only be modified by an administrator.",
                 status.HTTP_403_FORBIDDEN,
             )
-    elif is_locked_for_public(db, booking, app_settings):
+    elif is_locked_for_owner(db, booking, app_settings):
         override_reason = _require_override_reason(
             app_settings, payload.override_reason, "edit a booking inside the freeze window"
         )
@@ -436,15 +420,9 @@ def update_booking(
     new_slot_number = payload.slot_number or booking.slot_number
     moved = (new_day, new_slot_number) != (booking.deployment_date, booking.slot_number)
     if moved:
-        slot = _validate_slot_target(db, new_day, new_slot_number, actor, app_settings)
-        if slot.is_emergency != booking.is_emergency:
-            raise BusinessRuleError(
-                "A regular booking cannot be moved into the emergency slot (or vice versa). "
-                "Cancel it and create the correct booking type instead."
-            )
+        _validate_slot_target(db, new_day, new_slot_number, actor, app_settings)
 
-    tenant = resolve_tenant(db, payload.tenant_id, payload.tenant_name)
-    new_key = tenant_key(tenant.name)
+    tenant = resolve_tenant(db, payload.tenant_id)
     if not booking.is_emergency and (moved or tenant.id != booking.tenant_id):
         applied = _validate_weekly_limit(
             db,
@@ -466,7 +444,6 @@ def update_booking(
 
     booking.tenant_id = tenant.id
     booking.tenant_name = tenant.name
-    booking.tenant_key = new_key
     booking.deployment_date = new_day
     booking.slot_number = new_slot_number
     booking.jira_change = payload.jira_change
@@ -521,7 +498,7 @@ def cancel_booking(
 
     reason: str | None = None
     if not actor.is_admin:
-        if is_locked_for_public(db, booking, app_settings):
+        if is_locked_for_owner(db, booking, app_settings):
             raise BusinessRuleError(
                 f"Changes are disabled within {app_settings.booking_freeze_hours} hours of the "
                 "deployment. Contact an administrator for assistance.",
@@ -532,7 +509,7 @@ def cancel_booking(
                 "Emergency change records can only be cancelled by an administrator.",
                 status.HTTP_403_FORBIDDEN,
             )
-    elif is_locked_for_public(db, booking, app_settings):
+    elif is_locked_for_owner(db, booking, app_settings):
         reason = _require_override_reason(
             app_settings, override_reason, "cancel a booking inside the freeze window"
         )
@@ -571,16 +548,9 @@ def delete_booking(db: Session, booking: DeploymentBooking, actor: Actor) -> Non
     db.commit()
 
 
-def find_bookings_for_owner(db: Session, email: str, pin: str) -> list[DeploymentBooking]:
-    candidates = db.scalars(
-        select(DeploymentBooking)
-        .where(func.lower(DeploymentBooking.requester_email) == email.strip().lower())
-        .order_by(DeploymentBooking.deployment_date.desc(), DeploymentBooking.slot_number)
-    ).all()
-    return [b for b in candidates if verify_secret(pin, b.booking_pin_hash)]
-
-
 def slot_labels(db: Session, booking: DeploymentBooking) -> tuple[str, str]:
+    if booking.is_emergency or booking.slot_number is None:
+        return "Emergency queue", ""
     slot = schedule_service.find_slot(db, booking.deployment_date, booking.slot_number)
     if slot is None:
         return f"Slot {booking.slot_number}", ""
@@ -595,18 +565,8 @@ def success_message(db: Session, booking: DeploymentBooking) -> str:
         f"{booking.deployment_date.strftime('%A')} {format_day(booking.deployment_date)}\n"
         f"{name} {times}\n"
         f"Tenant: {booking.tenant_name}\n"
-        "Important: keep your Booking PIN safe. You will need it to modify or cancel this booking."
+        "Your authenticated account owns this change record and controls future edits."
     )
-
-
-def attachment_count(booking: DeploymentBooking, category: str) -> int:
-    return sum(1 for a in booking.attachments if a.category == category)
-
-
-def can_add_attachment(booking: DeploymentBooking, category: str) -> bool:
-    if category in MULTI_FILE_CATEGORIES:
-        return True
-    return attachment_count(booking, category) == 0
 
 
 def attachment_of(booking: DeploymentBooking, attachment_id: int) -> BookingAttachment | None:

@@ -14,7 +14,7 @@ DEFAULTS: dict[str, object] = {
     "weekly_booking_limit": 2,
     "booking_freeze_hours": 48,
     "max_file_size_mb": 20,
-    "emergency_slot_enabled": True,
+    "emergency_changes_enabled": True,
     "require_admin_override_reason": True,
     "mandatory_documents": [
         DocumentCategory.TEST_RESULTS.value,
@@ -25,7 +25,7 @@ DEFAULTS: dict[str, object] = {
 }
 
 INT_KEYS = {"regular_slots_per_day", "weekly_booking_limit", "booking_freeze_hours", "max_file_size_mb"}
-BOOL_KEYS = {"emergency_slot_enabled", "require_admin_override_reason"}
+BOOL_KEYS = {"emergency_changes_enabled", "require_admin_override_reason"}
 LIST_KEYS = {"mandatory_documents"}
 
 LIMITS = {
@@ -42,7 +42,7 @@ class AppSettings:
     weekly_booking_limit: int
     booking_freeze_hours: int
     max_file_size_mb: int
-    emergency_slot_enabled: bool
+    emergency_changes_enabled: bool
     require_admin_override_reason: bool
     mandatory_documents: list[str]
 

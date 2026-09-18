@@ -104,11 +104,6 @@ def ready() -> dict:
     return _health_payload(ready=True)
 
 
-@app.get("/api/health", tags=["meta"])
-def api_health() -> dict:
-    return _health_payload(ready=_database_ready())
-
-
 app.include_router(api_router)
 
 # Registered last so every real endpoint takes precedence over the SPA

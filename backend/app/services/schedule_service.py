@@ -1,8 +1,12 @@
-"""Resolution of the weekly board: slot grid, holidays, per-day overrides.
+"""Resolution of the weekly board: normal slot grid, holidays, per-day overrides.
 
 Every rule here is also re-checked by ``booking_service`` before a write; this
 module exists so the read model and the write validations share one definition
 of "is this slot bookable".
+
+Emergency changes are deliberately absent from the slot grid. They are an
+admin-only queue attached to a date (``emergency_bookings_between``), never a
+slot, so any number of them can exist on the same day.
 """
 from __future__ import annotations
 
@@ -25,21 +29,18 @@ from .settings_service import AppSettings, get_app_settings
 
 @dataclass(frozen=True)
 class ResolvedSlot:
+    """One normal deployment slot on one date."""
+
     slot_number: int
     name: str
     start_time: time
     end_time: time
-    is_emergency: bool
     enabled: bool
     #: Set when the slot exists but cannot be booked at all on this date.
     unavailable_reason: str | None = None
 
     @property
-    def bookable_by_public(self) -> bool:
-        return self.enabled and not self.is_emergency and self.unavailable_reason is None
-
-    @property
-    def bookable_by_admin(self) -> bool:
+    def bookable(self) -> bool:
         return self.enabled and self.unavailable_reason is None
 
 
@@ -49,10 +50,9 @@ class DayPlan:
     slots: list[ResolvedSlot]
     holiday: Holiday | None
     override: DailySlotOverride | None
-
-    @property
-    def regular_slots(self) -> list[ResolvedSlot]:
-        return [s for s in self.slots if not s.is_emergency]
+    #: Whether an administrator may add an emergency change to this date.
+    emergency_open: bool = True
+    emergency_closed_reason: str | None = None
 
 
 def slot_configurations(db: Session) -> list[DeploymentSlotConfiguration]:
@@ -99,7 +99,7 @@ def resolve_day(
     if override is not None and override.regular_slots is not None:
         regular_limit = override.regular_slots
 
-    emergency_enabled = app_settings.emergency_slot_enabled
+    emergency_enabled = app_settings.emergency_changes_enabled
     if override is not None and override.emergency_enabled is not None:
         emergency_enabled = override.emergency_enabled
 
@@ -107,41 +107,43 @@ def resolve_day(
     weekend = day.weekday() >= 5
 
     slots: list[ResolvedSlot] = []
-    regular_seen = 0
-    for cfg in configs:
-        if cfg.is_emergency:
-            enabled = cfg.enabled and emergency_enabled
-            reason: str | None = None
-            if not enabled:
-                reason = "Emergency slot disabled for this date."
-            elif weekend:
-                reason = "Outside the Monday-Friday deployment week."
-            elif full_day_holiday and not holiday.allow_emergency:  # type: ignore[union-attr]
-                reason = "Emergency deployments are not permitted on this holiday."
-        else:
-            regular_seen += 1
-            enabled = cfg.enabled and regular_seen <= regular_limit
-            reason = None
-            if not enabled:
-                reason = "Slot disabled for this date."
-            elif weekend:
-                reason = "Outside the Monday-Friday deployment week."
-            elif full_day_holiday:
-                reason = f"{holiday.name}: no production deployments available."  # type: ignore[union-attr]
-            elif holiday is not None and not holiday.is_full_day:
-                reason = None  # partial holiday: regular slots stay open
+    for position, cfg in enumerate(configs, start=1):
+        enabled = cfg.enabled and position <= regular_limit
+        reason: str | None = None
+        if not enabled:
+            reason = "Slot disabled for this date."
+        elif weekend:
+            reason = "Outside the Monday-Friday deployment week."
+        elif full_day_holiday:
+            reason = f"{holiday.name}: no production deployments available."  # type: ignore[union-attr]
         slots.append(
             ResolvedSlot(
                 slot_number=cfg.slot_number,
                 name=cfg.name,
                 start_time=cfg.start_time,
                 end_time=cfg.end_time,
-                is_emergency=cfg.is_emergency,
                 enabled=enabled,
                 unavailable_reason=reason,
             )
         )
-    return DayPlan(day=day, slots=slots, holiday=holiday, override=override)
+
+    # Emergency changes are governed by the date, not by a slot.
+    emergency_closed: str | None = None
+    if not emergency_enabled:
+        emergency_closed = "Emergency changes are disabled for this date."
+    elif weekend:
+        emergency_closed = "Outside the Monday-Friday deployment week."
+    elif full_day_holiday and not holiday.allow_emergency:  # type: ignore[union-attr]
+        emergency_closed = "Emergency deployments are not permitted on this holiday."
+
+    return DayPlan(
+        day=day,
+        slots=slots,
+        holiday=holiday,
+        override=override,
+        emergency_open=emergency_closed is None,
+        emergency_closed_reason=emergency_closed,
+    )
 
 
 def resolve_week(db: Session, any_day: date) -> tuple[date, list[DayPlan], AppSettings]:
@@ -166,7 +168,10 @@ def resolve_week(db: Session, any_day: date) -> tuple[date, list[DayPlan], AppSe
     return monday, plans, app_settings
 
 
-def find_slot(db: Session, day: date, slot_number: int) -> ResolvedSlot | None:
+def find_slot(db: Session, day: date, slot_number: int | None) -> ResolvedSlot | None:
+    """Emergency changes carry no slot number, so ``None`` never resolves."""
+    if slot_number is None:
+        return None
     plan = resolve_day(db, day)
     for slot in plan.slots:
         if slot.slot_number == slot_number:
@@ -184,5 +189,20 @@ def active_bookings_between(db: Session, start: date, end: date) -> list[Deploym
                 DeploymentBooking.status.in_(ACTIVE_STATUSES),
             )
             .order_by(DeploymentBooking.deployment_date, DeploymentBooking.slot_number)
+        ).all()
+    )
+
+
+def emergency_bookings_between(db: Session, start: date, end: date) -> list[DeploymentBooking]:
+    return list(
+        db.scalars(
+            select(DeploymentBooking)
+            .where(
+                DeploymentBooking.deployment_date >= start,
+                DeploymentBooking.deployment_date <= end,
+                DeploymentBooking.is_emergency.is_(True),
+                DeploymentBooking.status.in_(ACTIVE_STATUSES),
+            )
+            .order_by(DeploymentBooking.deployment_date, DeploymentBooking.id)
         ).all()
     )

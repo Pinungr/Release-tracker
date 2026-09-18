@@ -62,7 +62,8 @@ def booking_summary(db: Session, booking: DeploymentBooking, app_settings: AppSe
         verifier_name=booking.verifier_name,
         status=booking.status,
         is_emergency=booking.is_emergency,
-        is_locked=booking_service.is_locked_for_public(db, booking, app_settings),
+        created_by_user_id=booking.created_by_user_id,
+        is_locked=booking_service.is_locked_for_owner(db, booking, app_settings),
         lock_deadline=booking_service.lock_deadline(db, booking, app_settings),
         documents=booking_service.document_readiness(booking, app_settings),
         created_at=booking.created_at,
@@ -92,37 +93,10 @@ def booking_detail(
         emergency_approver=booking.emergency_approver,
         business_justification=booking.business_justification,
         cancelled_at=booking.cancelled_at,
-        created_by_admin=booking.created_by_admin,
         attachments=[attachment_out(a) for a in sorted(booking.attachments, key=lambda a: a.id)],
         can_edit=can_edit,
         slot_label=slot_label,
         slot_time=slot_time,
-    )
-
-
-def mask_email(value: str | None) -> str | None:
-    if not value or "@" not in value:
-        return value
-    local, _, domain = value.partition("@")
-    keep = local[:2] if len(local) > 2 else local[:1]
-    return f"{keep}{'*' * max(len(local) - len(keep), 2)}@{domain}"
-
-
-def mask_phone(value: str | None) -> str | None:
-    if not value:
-        return value
-    digits = [c for c in value if c.isdigit()]
-    return f"{'*' * max(len(digits) - 3, 3)}{''.join(digits[-3:])}" if digits else None
-
-
-def redact_contacts(detail: BookingDetail) -> BookingDetail:
-    """Anonymous visitors see who is involved, but not how to reach them."""
-    return detail.model_copy(
-        update={
-            "requester_email": mask_email(detail.requester_email),
-            "verifier_email": mask_email(detail.verifier_email),
-            "requester_phone": mask_phone(detail.requester_phone),
-        }
     )
 
 
@@ -145,27 +119,36 @@ def public_settings(app_settings: AppSettings) -> PublicSettings:
     )
 
 
-def _slot_state(slot: schedule_service.ResolvedSlot, has_booking: bool, on_holiday: bool) -> str:
+def _slot_state(
+    slot: schedule_service.ResolvedSlot, has_booking: bool, on_holiday: bool, is_past: bool
+) -> str:
     if has_booking:
         return "BOOKED"
     if not slot.enabled:
         return "DISABLED"
     if slot.unavailable_reason:
         return "HOLIDAY" if on_holiday else "DISABLED"
-    return "EMERGENCY_AVAILABLE" if slot.is_emergency else "AVAILABLE"
+    # A free slot on a past date is closed, not available.
+    return "DISABLED" if is_past else "AVAILABLE"
 
 
 def schedule_response(db: Session, any_day: date) -> ScheduleResponse:
     monday, plans, app_settings = schedule_service.resolve_week(db, any_day)
     friday = monday + timedelta(days=4)
     bookings = schedule_service.active_bookings_between(db, monday, friday)
+    emergency_bookings = schedule_service.emergency_bookings_between(db, monday, friday)
     by_cell: dict[tuple[date, int], DeploymentBooking] = {
-        (b.deployment_date, b.slot_number): b for b in bookings
+        (b.deployment_date, b.slot_number): b
+        for b in bookings
+        if not b.is_emergency and b.slot_number is not None
     }
+    emergency_by_day: dict[date, list[DeploymentBooking]] = {}
+    for booking in emergency_bookings:
+        emergency_by_day.setdefault(booking.deployment_date, []).append(booking)
 
     today = today_local()
     days: list[DayView] = []
-    regular_capacity = regular_booked = emergency_capacity = emergency_booked = holiday_count = 0
+    regular_capacity = regular_booked = emergency_total = holiday_count = 0
 
     for plan in plans:
         slot_views: list[SlotView] = []
@@ -176,20 +159,14 @@ def schedule_response(db: Session, any_day: date) -> ScheduleResponse:
 
         for slot in plan.slots:
             booking = by_cell.get((plan.day, slot.slot_number))
-            state = _slot_state(slot, booking is not None, on_holiday)
+            state = _slot_state(slot, booking is not None, on_holiday, plan.day < today)
             open_for_booking = slot.enabled and slot.unavailable_reason is None
-            if slot.is_emergency:
-                if open_for_booking or booking is not None:
-                    emergency_capacity += 1
-                if booking is not None:
-                    emergency_booked += 1
-            else:
-                if open_for_booking or booking is not None:
-                    regular_capacity += 1
-                    day_regular_total += 1
-                if booking is not None:
-                    regular_booked += 1
-                    day_regular_used += 1
+            if open_for_booking or booking is not None:
+                regular_capacity += 1
+                day_regular_total += 1
+            if booking is not None:
+                regular_booked += 1
+                day_regular_used += 1
 
             slot_views.append(
                 SlotView(
@@ -198,15 +175,19 @@ def schedule_response(db: Session, any_day: date) -> ScheduleResponse:
                     start_time=slot.start_time,
                     end_time=slot.end_time,
                     time_label=f"{format_time(slot.start_time)} - {format_time(slot.end_time)}",
-                    is_emergency=slot.is_emergency,
                     enabled=slot.enabled,
-                    unavailable_reason=slot.unavailable_reason,
+                    unavailable_reason=(
+                        slot.unavailable_reason
+                        or ("This date has passed." if plan.day < today else None)
+                    ),
                     state=state,  # type: ignore[arg-type]
-                    bookable_by_public=slot.bookable_by_public and booking is None and plan.day >= today,
-                    bookable_by_admin=slot.bookable_by_admin and booking is None and plan.day >= today,
+                    bookable=slot.bookable and booking is None and plan.day >= today,
                     booking=booking_summary(db, booking, app_settings) if booking else None,
                 )
             )
+
+        day_emergency = emergency_by_day.get(plan.day, [])
+        emergency_total += len(day_emergency)
 
         days.append(
             DayView(
@@ -220,6 +201,11 @@ def schedule_response(db: Session, any_day: date) -> ScheduleResponse:
                 regular_slots_total=day_regular_total,
                 regular_slots_used=day_regular_used,
                 slots=slot_views,
+                emergency_open=plan.emergency_open and plan.day >= today,
+                emergency_closed_reason=plan.emergency_closed_reason,
+                emergency_bookings=[
+                    booking_summary(db, item, app_settings) for item in day_emergency
+                ],
             )
         )
 
@@ -235,8 +221,7 @@ def schedule_response(db: Session, any_day: date) -> ScheduleResponse:
             regular_slots_available=max(regular_capacity - regular_booked, 0),
             slots_booked=regular_booked,
             holidays=holiday_count,
-            emergency_slots_total=emergency_capacity,
-            emergency_slots_booked=emergency_booked,
+            emergency_changes=emergency_total,
         ),
         settings=public_settings(app_settings),
     )
@@ -272,7 +257,7 @@ def settings_out(db: Session) -> dict:
         "weekly_booking_limit": s.weekly_booking_limit,
         "booking_freeze_hours": s.booking_freeze_hours,
         "max_file_size_mb": s.max_file_size_mb,
-        "emergency_slot_enabled": s.emergency_slot_enabled,
+        "emergency_changes_enabled": s.emergency_changes_enabled,
         "require_admin_override_reason": s.require_admin_override_reason,
         "mandatory_documents": list(s.mandatory_documents),
     }

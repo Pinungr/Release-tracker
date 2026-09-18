@@ -9,17 +9,30 @@ import type {
   SlotConfig,
 } from '../types'
 import { formatDate, formatSlotTime } from '../utils/dates'
+import { AdminTenantManager } from './AdminTenantManager'
+import { AdminUserManager } from './AdminUserManager'
 import { AuditHistory } from './AuditHistory'
 import { Drawer } from './Drawer'
-import { Alert, Calendar, Check, History, Plus, Settings, Siren, Spinner, Sun, Trash } from './Icons'
+import { Alert, Calendar, Check, History, Plus, Settings, Shield, Siren, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
 import { ConfirmationModal } from './Modal'
 import { BookingStatusBadge, LockBadge } from './StatusBadge'
 import { useToast } from './ToastNotification'
 
-type Tab = 'general' | 'slots' | 'holidays' | 'overrides' | 'documents' | 'bookings' | 'audit'
+type Tab =
+  | 'users'
+  | 'tenants'
+  | 'general'
+  | 'slots'
+  | 'holidays'
+  | 'overrides'
+  | 'documents'
+  | 'bookings'
+  | 'audit'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  { key: 'users', label: 'Users', icon: <User className="size-4" /> },
+  { key: 'tenants', label: 'Tenants', icon: <Shield className="size-4" /> },
   { key: 'general', label: 'General', icon: <Settings className="size-4" /> },
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
@@ -47,7 +60,7 @@ interface AdminPanelProps {
 }
 
 export function AdminPanel({ open, onClose, timezone, onChanged, onOpenBooking }: AdminPanelProps) {
-  const [tab, setTab] = useState<Tab>('general')
+  const [tab, setTab] = useState<Tab>('users')
 
   return (
     <Drawer
@@ -77,6 +90,8 @@ export function AdminPanel({ open, onClose, timezone, onChanged, onOpenBooking }
         ))}
       </nav>
 
+      {tab === 'users' ? <AdminUserManager timezone={timezone} /> : null}
+      {tab === 'tenants' ? <AdminTenantManager onChanged={onChanged} /> : null}
       {tab === 'general' ? <GeneralSettings onChanged={onChanged} /> : null}
       {tab === 'slots' ? <SlotConfiguration onChanged={onChanged} /> : null}
       {tab === 'holidays' ? <HolidayManager onChanged={onChanged} /> : null}
@@ -181,7 +196,7 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
               weekly_booking_limit: data.weekly_booking_limit,
               booking_freeze_hours: data.booking_freeze_hours,
               max_file_size_mb: data.max_file_size_mb,
-              emergency_slot_enabled: data.emergency_slot_enabled,
+              emergency_changes_enabled: data.emergency_changes_enabled,
               require_admin_override_reason: data.require_admin_override_reason,
             })
           }}
@@ -194,7 +209,7 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             max={12}
             value={String(data.regular_slots_per_day)}
             onChange={(v) => setData({ ...data, regular_slots_per_day: Number(v) || 1 })}
-            hint="Emergency slot 5 is counted separately."
+            hint="Emergency changes are a separate admin-only queue and never use a slot."
           />
           <TextField
             label="Weekly booking limit per tenant"
@@ -227,11 +242,11 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
           />
           <div className="space-y-3 sm:col-span-2">
             <CheckboxField
-              label="Emergency slot enabled"
-              name="emergency_slot_enabled"
-              checked={data.emergency_slot_enabled}
-              onChange={(v) => setData({ ...data, emergency_slot_enabled: v })}
-              hint="When off, slot 5 is visible but closed to everyone."
+              label="Emergency changes enabled"
+              name="emergency_changes_enabled"
+              checked={data.emergency_changes_enabled}
+              onChange={(v) => setData({ ...data, emergency_changes_enabled: v })}
+              hint="When off, no emergency change can be queued on any date."
             />
             <CheckboxField
               label="Require a reason for administrator overrides"
@@ -270,12 +285,11 @@ function SlotConfiguration({ onChanged }: { onChanged: () => void }) {
     setSaving(true)
     try {
       const saved = await api.replaceSlots(
-        data.map(({ slot_number, name, start_time, end_time, is_emergency, enabled }) => ({
+        data.map(({ slot_number, name, start_time, end_time, enabled }) => ({
           slot_number,
           name,
           start_time,
           end_time,
-          is_emergency,
           enabled,
         })),
       )
@@ -293,7 +307,7 @@ function SlotConfiguration({ onChanged }: { onChanged: () => void }) {
   return (
     <SectionShell
       title="Slot configuration"
-      description="Name, times and type for each slot. Slots holding upcoming bookings cannot be removed."
+      description="Name and times for each normal deployment slot. Slots holding upcoming changes cannot be removed."
       error={error}
       loading={!data}
     >
@@ -324,12 +338,6 @@ function SlotConfiguration({ onChanged }: { onChanged: () => void }) {
                 />
                 <div className="flex flex-col justify-end gap-2 pb-1">
                   <CheckboxField
-                    label="Emergency slot"
-                    name={`slot-emergency-${slot.slot_number}`}
-                    checked={slot.is_emergency}
-                    onChange={(v) => patch(index, { is_emergency: v })}
-                  />
-                  <CheckboxField
                     label="Enabled"
                     name={`slot-enabled-${slot.slot_number}`}
                     checked={slot.enabled}
@@ -355,7 +363,6 @@ function SlotConfiguration({ onChanged }: { onChanged: () => void }) {
                     name: `Slot ${Math.max(...data.map((s) => s.slot_number)) + 1}`,
                     start_time: '18:00:00',
                     end_time: '20:00:00',
-                    is_emergency: false,
                     enabled: true,
                   },
                 ])
@@ -442,7 +449,7 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
   return (
     <SectionShell
       title="Holiday management"
-      description="A full-day holiday closes every regular slot. The emergency slot can stay open to administrators."
+      description="A full-day holiday closes every normal slot. The emergency queue can stay open to administrators."
       error={error}
       loading={!data}
     >
@@ -667,7 +674,7 @@ function DailyOverrideManager({ onChanged }: { onChanged: () => void }) {
           hint="Leave blank to inherit the default."
         />
         <SelectField
-          label="Emergency slot"
+          label="Emergency changes"
           name="override_emergency"
           value={emergency}
           onChange={(v) => setEmergency(v as 'inherit' | 'yes' | 'no')}

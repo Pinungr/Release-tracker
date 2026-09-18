@@ -7,8 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import AdminUser, User
-from ..security import create_admin_token, hash_secret, require_user, verify_secret
+from ..models import User
+from ..security import hash_secret, require_user, verify_secret
 from ..security.tokens import create_user_token
 from ..security.ratelimit import enforce
 from ..utils.dates import now_utc
@@ -23,9 +23,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=256)
-    confirm_password: str | None = Field(default=None, min_length=8, max_length=256)
-    team_name: str | None = Field(default=None, max_length=120)
-    contact_number: str | None = Field(default=None, max_length=40)
+    confirm_password: str = Field(min_length=8, max_length=256)
 
 
 class LoginRequest(BaseModel):
@@ -51,14 +49,12 @@ def register_user(
 ):
     enforce(request, "user-register", limit=20, window_seconds=300)
 
-    if payload.confirm_password is not None and payload.password != payload.confirm_password:
+    if payload.password != payload.confirm_password:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password and confirmation do not match.")
 
     full_name = payload.full_name.strip()
     email = payload.email.strip().lower()
     username = payload.username.strip()
-    team_name = (payload.team_name or "").strip() or None
-    contact_number = (payload.contact_number or "").strip() or None
 
     if not full_name or not email or not username:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing required registration fields.")
@@ -71,8 +67,8 @@ def register_user(
         username=username,
         email=email,
         password_hash=hash_secret(payload.password),
-        team_name=team_name,
-        contact_number=contact_number,
+        # A browser can never choose its own role: self-service sign-up
+        # always lands on TENANT_USER, and only an admin can promote.
         role="TENANT_USER",
     )
     db.add(user)
@@ -117,25 +113,6 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
             },
         }
 
-    admin = db.scalars(select(AdminUser).where(AdminUser.username == username_or_email)).first()
-    if admin is not None and admin.is_active and verify_secret(password, admin.password_hash):
-        token, expires_in = create_admin_token(admin.username)
-        admin.last_login_at = now_utc()
-        db.commit()
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "expires_in": expires_in,
-            "user": {
-                "id": admin.id,
-                "full_name": admin.display_name,
-                "username": admin.username,
-                "email": None,
-                "tenant_name": None,
-                "role": "ADMIN",
-            },
-        }
-
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password.")
 
 
@@ -158,3 +135,18 @@ def change_password(
     db_user.must_change_password = False
     db.commit()
     return {"message": "Password updated successfully."}
+
+
+@router.get("/me")
+def read_me(user=Depends(require_user), db: Session = Depends(get_db)):
+    account = db.get(User, user.user_id)
+    if account is None or not account.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User account is unavailable.")
+    return {
+        "id": account.id,
+        "full_name": account.full_name,
+        "username": account.username,
+        "email": account.email,
+        "role": account.role,
+        "must_change_password": account.must_change_password,
+    }

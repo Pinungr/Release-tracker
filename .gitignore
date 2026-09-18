@@ -11,6 +11,17 @@ __pycache__/
 # Node
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
+
+# Coverage / logs / editor + OS metadata
+.coverage
+coverage.xml
+htmlcov/
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
 
 # Runtime data: database and uploaded deployment documents
 storage/

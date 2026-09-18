@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { api, ApiError } from '../services/api'
-import type { BookingDetail, DocumentCategory, OwnerCredentials, PublicSettings } from '../types'
+import type { BookingDetail, DocumentCategory, PublicSettings } from '../types'
 import { formatBytes } from '../utils/format'
 import { Document, Download, Spinner, Trash, Upload } from './Icons'
 import { useToast } from './ToastNotification'
@@ -23,9 +23,8 @@ const ALLOWED = [
 interface DocumentUploaderProps {
   booking: BookingDetail
   settings: PublicSettings
-  credentials: OwnerCredentials | null
-  manageToken: string | null
   isAdmin: boolean
+  canManage?: boolean
   readOnly?: boolean
   onUpdated: (booking: BookingDetail) => void
 }
@@ -33,16 +32,15 @@ interface DocumentUploaderProps {
 export function DocumentUploader({
   booking,
   settings,
-  credentials,
-  manageToken,
   isAdmin,
+  canManage: ownerCanManage = false,
   readOnly = false,
   onUpdated,
 }: DocumentUploaderProps) {
   const toast = useToast()
   const [busy, setBusy] = useState<DocumentCategory | null>(null)
   const inputs = useRef<Partial<Record<DocumentCategory, HTMLInputElement | null>>>({})
-  const canManage = !readOnly && (isAdmin || credentials !== null)
+  const canManage = !readOnly && (isAdmin || ownerCanManage)
 
   async function upload(category: DocumentCategory, file: File) {
     const extension = `.${file.name.split('.').pop()?.toLowerCase() ?? ''}`
@@ -59,7 +57,7 @@ export function DocumentUploader({
     }
     setBusy(category)
     try {
-      const updated = await api.uploadAttachment(booking.id, category, file, isAdmin ? null : credentials)
+      const updated = await api.uploadAttachment(booking.id, category, file)
       onUpdated(updated)
       toast.success('Document uploaded', file.name)
     } catch (error) {
@@ -72,11 +70,7 @@ export function DocumentUploader({
   async function remove(attachmentId: number, name: string) {
     setBusy('SUPPORTING_DOCUMENTS')
     try {
-      const updated = await api.deleteAttachment(
-        booking.id,
-        attachmentId,
-        isAdmin ? null : credentials,
-      )
+      const updated = await api.deleteAttachment(booking.id, attachmentId)
       onUpdated(updated)
       toast.success('Document removed', name)
     } catch (error) {
@@ -151,9 +145,9 @@ export function DocumentUploader({
                       {file.original_filename}
                     </span>
                     <span className="shrink-0 tnum text-ink-muted">{formatBytes(file.size_bytes)}</span>
-                    {isAdmin || manageToken ? (
+                    {isAdmin || ownerCanManage ? (
                       <a
-                        href={api.downloadUrl(booking.id, file.id, isAdmin ? null : manageToken)}
+                        href={api.downloadUrl(booking.id, file.id)}
                         className="btn-ghost btn-sm shrink-0 px-1.5"
                         aria-label={`Download ${file.original_filename}`}
                       >

@@ -9,6 +9,7 @@ interface DayScheduleProps {
   visibleSlots: SlotView[]
   filtered: boolean
   onBook: (day: DayView, slot: SlotView) => void
+  onBookEmergency: (day: DayView) => void
   onOpenBooking: (bookingId: number) => void
 }
 
@@ -21,14 +22,13 @@ export function DaySchedule({
   visibleSlots,
   filtered,
   onBook,
+  onBookEmergency,
   onOpenBooking,
 }: DayScheduleProps) {
   const usage = day.regular_slots_total
     ? `${day.regular_slots_used} / ${day.regular_slots_total}`
     : '0 / 0'
-  const firstFree = day.slots.find((slot) =>
-    isAdmin ? slot.bookable_by_admin && !slot.is_emergency : slot.bookable_by_public,
-  )
+  const firstFree = day.slots.find((slot) => slot.bookable)
   const noBookings = day.slots.every((slot) => slot.booking === null)
 
   return (
@@ -110,7 +110,6 @@ export function DaySchedule({
               key={slot.slot_number}
               day={day}
               slot={slot}
-              isAdmin={isAdmin}
               isMine={slot.booking ? myBookingIds.has(slot.booking.id) : false}
               onBook={onBook}
               onOpenBooking={onOpenBooking}
@@ -118,6 +117,38 @@ export function DaySchedule({
           ))
         )}
       </div>
+
+      <section className="border-t border-orange-200 bg-orange-50/50 p-4" aria-label="Emergency change queue">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-bold text-orange-950">Emergency change queue</h3>
+          <span className="badge bg-orange-100 text-orange-800">{day.emergency_bookings.length}</span>
+          <span className="text-xs font-semibold tracking-wide text-orange-800/80 uppercase">
+            Administrator only
+          </span>
+          {isAdmin && day.emergency_open ? (
+            <button
+              type="button"
+              className="btn-secondary btn-sm ml-auto"
+              onClick={() => onBookEmergency(day)}
+            >
+              <Plus className="size-3.5" /> Add emergency CR
+            </button>
+          ) : isAdmin && day.emergency_closed_reason ? (
+            <span className="ml-auto text-xs text-orange-900/70">{day.emergency_closed_reason}</span>
+          ) : null}
+        </div>
+        {day.emergency_bookings.length ? (
+          <div className="mt-3 space-y-2">
+            {day.emergency_bookings.map((booking) => (
+              <button key={booking.id} type="button" className="flex w-full items-center gap-3 rounded-lg border border-orange-200 bg-white p-3 text-left" onClick={() => onOpenBooking(booking.id)}>
+                <span className="font-semibold text-orange-950">{booking.booking_reference}</span>
+                <span className="text-sm text-ink">{booking.tenant_name}</span>
+                <span className="text-sm text-ink-muted">{booking.jira_change}</span>
+              </button>
+            ))}
+          </div>
+        ) : <p className="mt-2 text-sm text-orange-900/70">No emergency changes scheduled for this date.</p>}
+      </section>
 
       {noBookings && !filtered && !day.holiday?.is_full_day && day.regular_slots_total > 0 ? (
         <div className="flex flex-wrap items-center gap-3 border-t border-line bg-canvas/50 px-4 py-3">

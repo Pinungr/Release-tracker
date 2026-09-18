@@ -1,6 +1,6 @@
 import type { DayView, SlotView } from '../types'
 import { DocumentReadinessPill } from './DocumentReadiness'
-import { Clock, Link as LinkIcon, Lock, Plus, Siren } from './Icons'
+import { Clock, Link as LinkIcon, Lock, Plus } from './Icons'
 import {
   BookingStatusBadge,
   EmergencyBadge,
@@ -17,7 +17,6 @@ export const SLOT_GRID =
 interface DeploymentSlotProps {
   day: DayView
   slot: SlotView
-  isAdmin: boolean
   isMine: boolean
   onBook: (day: DayView, slot: SlotView) => void
   onOpenBooking: (bookingId: number) => void
@@ -34,8 +33,6 @@ function edgeFor(slot: SlotView, isMine: boolean): string {
   switch (slot.state) {
     case 'AVAILABLE':
       return 'border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50'
-    case 'EMERGENCY_AVAILABLE':
-      return 'border-orange-200 bg-orange-50/40'
     case 'HOLIDAY':
       return 'border-amber-200 bg-amber-50/50'
     default:
@@ -63,13 +60,12 @@ function Cell({
 export function DeploymentSlot({
   day,
   slot,
-  isAdmin,
   isMine,
   onBook,
   onOpenBooking,
 }: DeploymentSlotProps) {
   const booking = slot.booking
-  const canBook = isAdmin ? slot.bookable_by_admin : slot.bookable_by_public
+  const canBook = slot.bookable
 
   return (
     <div
@@ -81,7 +77,6 @@ export function DeploymentSlot({
           <span className="grid size-7 place-items-center rounded-md bg-surface text-xs font-bold tnum text-ink shadow-sm ring-1 ring-line">
             {slot.slot_number}
           </span>
-          {slot.is_emergency ? <Siren className="size-4 text-orange-600 lg:hidden" /> : null}
         </span>
         <span className="lg:hidden">
           {booking ? <BookingStatusBadge status={booking.status} /> : <SlotStateBadge state={slot.state} />}
@@ -180,28 +175,14 @@ export function DeploymentSlot({
       ) : (
         <>
           <Cell label="Status" className="col-span-4 mt-2 lg:col-span-4 lg:mt-0">
-            {slot.is_emergency ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-orange-700">
-                  <Siren className="size-4" />
-                  Emergency change
-                </span>
-                <span className="text-xs font-semibold tracking-wide text-orange-700/80 uppercase">
-                  Admin only
-                </span>
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <SlotStateBadge state={slot.state} />
-                {slot.unavailable_reason ? (
-                  <span className="text-xs text-ink-muted">{slot.unavailable_reason}</span>
-                ) : (
-                  <span className="hidden text-xs text-ink-muted lg:inline">
-                    No deployment booked
-                  </span>
-                )}
-              </div>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <SlotStateBadge state={slot.state} />
+              {slot.unavailable_reason ? (
+                <span className="text-xs text-ink-muted">{slot.unavailable_reason}</span>
+              ) : (
+                <span className="hidden text-xs text-ink-muted lg:inline">No deployment booked</span>
+              )}
+            </div>
           </Cell>
 
           <div className="mt-3 flex items-center gap-2 lg:col-span-2 lg:mt-0 lg:justify-end">
@@ -209,10 +190,10 @@ export function DeploymentSlot({
               <button
                 type="button"
                 onClick={() => onBook(day, slot)}
-                className={slot.is_emergency ? 'btn-danger btn-sm' : 'btn-primary btn-sm'}
+                className="btn-primary btn-sm"
               >
                 <Plus className="size-3.5" />
-                {slot.is_emergency ? 'Book emergency change' : 'Book slot'}
+                Book slot
               </button>
             ) : (
               <span className="tooltip-host">
@@ -221,9 +202,7 @@ export function DeploymentSlot({
                   Locked
                 </span>
                 <span className="tooltip">
-                  {slot.is_emergency
-                    ? 'Only an administrator can book the emergency slot.'
-                    : (slot.unavailable_reason ?? 'This slot is not open for booking.')}
+                  {slot.unavailable_reason ?? 'This slot is not open for booking.'}
                 </span>
               </span>
             )}

@@ -29,7 +29,7 @@ class SettingsOut(BaseModel):
     weekly_booking_limit: int
     booking_freeze_hours: int
     max_file_size_mb: int
-    emergency_slot_enabled: bool
+    emergency_changes_enabled: bool
     require_admin_override_reason: bool
     mandatory_documents: list[str]
 
@@ -39,7 +39,7 @@ class SettingsUpdate(BaseModel):
     weekly_booking_limit: int | None = Field(default=None, ge=1, le=25)
     booking_freeze_hours: int | None = Field(default=None, ge=0, le=720)
     max_file_size_mb: int | None = Field(default=None, ge=1, le=200)
-    emergency_slot_enabled: bool | None = None
+    emergency_changes_enabled: bool | None = None
     require_admin_override_reason: bool | None = None
     mandatory_documents: list[DocumentCategory] | None = None
 
@@ -51,7 +51,6 @@ class SlotConfigIn(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=80)]
     start_time: time
     end_time: time
-    is_emergency: bool = False
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -107,7 +106,6 @@ class ReassignBookingRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     tenant_id: int | None = Field(default=None, ge=1)
-    tenant_name: Annotated[str | None, Field(default=None, max_length=120)] = None
     requester_name: Annotated[str | None, Field(default=None, max_length=120)] = None
     requester_email: Annotated[str | None, Field(default=None, max_length=180)] = None
     verifier_name: Annotated[str | None, Field(default=None, max_length=120)] = None

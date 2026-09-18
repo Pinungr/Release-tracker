@@ -85,18 +85,6 @@ class Technology(str, enum.Enum):
     OTHER = "Other"
 
 
-class AdminUser(Base):
-    __tablename__ = "admin_users"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(120), default="Administrator")
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
 class Tenant(Base):
     __tablename__ = "tenants"
 
@@ -104,8 +92,6 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     tenant_code: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    team_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    contact_email: Mapped[str | None] = mapped_column(String(180), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
@@ -122,8 +108,6 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(180), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    team_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    contact_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     role: Mapped[str] = mapped_column(String(32), default="TENANT_USER", nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -133,20 +117,13 @@ class User(Base):
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-class TenantUser(Base):
-    __tablename__ = "tenant_users"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
-    is_primary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-
-    __table_args__ = (UniqueConstraint("user_id", "tenant_id", name="uq_tenant_user"),)
-
 
 class DeploymentSlotConfiguration(Base):
-    """Default slot grid applied to every working day."""
+    """Normal deployment slot grid applied to every working day.
+
+    Emergency changes are *not* slots: they live in a per-date admin queue
+    (see ``DeploymentBooking.is_emergency``), so nothing here describes them.
+    """
 
     __tablename__ = "slot_configurations"
     __table_args__ = (UniqueConstraint("slot_number", name="uq_slot_number"),)
@@ -156,22 +133,23 @@ class DeploymentSlotConfiguration(Base):
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
     end_time: Mapped[time] = mapped_column(Time, nullable=False)
-    is_emergency: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class DeploymentBooking(Base):
     __tablename__ = "deployment_bookings"
     __table_args__ = (
-        # A slot can hold at most one non-cancelled booking. Enforced by the
-        # database so two concurrent requests cannot both win.
+        # A normal slot holds at most one non-cancelled booking, enforced by
+        # the database so two concurrent requests cannot both win. Emergency
+        # changes are excluded from the index: a date may hold any number of
+        # them, and they carry no slot_number at all.
         Index(
             "uq_active_slot_per_day",
             "deployment_date",
             "slot_number",
             unique=True,
-            sqlite_where=text("status <> 'CANCELLED'"),
-            postgresql_where=text("status <> 'CANCELLED'"),
+            sqlite_where=text("status <> 'CANCELLED' AND is_emergency = 0"),
+            postgresql_where=text("status <> 'CANCELLED' AND is_emergency = false"),
         ),
         Index("ix_booking_date", "deployment_date"),
     )
@@ -181,13 +159,12 @@ class DeploymentBooking(Base):
 
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
     tenant_name: Mapped[str] = mapped_column(String(120), nullable=False)
-    tenant_key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
 
     deployment_date: Mapped[date] = mapped_column(Date, nullable=False)
-    slot_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     jira_change: Mapped[str] = mapped_column(String(64), nullable=False)
     jira_task: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -199,8 +176,6 @@ class DeploymentBooking(Base):
     requester_name: Mapped[str] = mapped_column(String(120), nullable=False)
     requester_email: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
     requester_phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    booking_pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    manage_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     verifier_name: Mapped[str] = mapped_column(String(120), nullable=False)
     verifier_email: Mapped[str] = mapped_column(String(180), nullable=False)
@@ -218,7 +193,6 @@ class DeploymentBooking(Base):
     emergency_approver: Mapped[str | None] = mapped_column(String(120), nullable=True)
     business_justification: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_by_admin: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
@@ -292,7 +266,7 @@ class BookingAudit(Base):
     )
     booking_reference: Mapped[str | None] = mapped_column(String(32), nullable=True)
     event_type: Mapped[str] = mapped_column(String(48), nullable=False)
-    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)  # PUBLIC | ADMIN | SYSTEM
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)  # USER | ADMIN | SYSTEM
     requester_email: Mapped[str | None] = mapped_column(String(180), nullable=True)
     admin_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

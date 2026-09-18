@@ -15,7 +15,7 @@ const BASE_FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'ALL', label: 'All' },
   { key: 'AVAILABLE', label: 'Available' },
   { key: 'BOOKED', label: 'Booked' },
-  { key: 'MINE', label: 'My bookings' },
+  { key: 'MINE', label: 'My changes' },
 ]
 
 const ADMIN_FILTERS: { key: FilterKey; label: string }[] = [

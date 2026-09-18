@@ -13,7 +13,6 @@ export type SlotState =
   | 'BOOKED'
   | 'HOLIDAY'
   | 'DISABLED'
-  | 'EMERGENCY_AVAILABLE'
 
 export type BookingStatus =
   | 'BOOKED'
@@ -58,7 +57,8 @@ export interface BookingSummary {
   tenant_id: number
   tenant_name: string
   deployment_date: string
-  slot_number: number
+  /** null for emergency changes: they join the date's queue, not a slot. */
+  slot_number: number | null
   jira_change: string
   jira_task: string | null
   jira_url: string | null
@@ -67,6 +67,7 @@ export interface BookingSummary {
   verifier_name: string
   status: BookingStatus
   is_emergency: boolean
+  created_by_user_id: number | null
   is_locked: boolean
   lock_deadline: string | null
   documents: DocumentReadiness
@@ -95,7 +96,6 @@ export interface BookingDetail extends BookingSummary {
   emergency_approver: string | null
   business_justification: string | null
   cancelled_at: string | null
-  created_by_admin: string | null
   attachments: Attachment[]
   can_edit: boolean
   slot_label: string
@@ -104,8 +104,6 @@ export interface BookingDetail extends BookingSummary {
 
 export interface BookingCreated {
   booking: BookingDetail
-  manage_token: string
-  manage_url: string
   message: string
 }
 
@@ -115,12 +113,10 @@ export interface SlotView {
   start_time: string
   end_time: string
   time_label: string
-  is_emergency: boolean
   enabled: boolean
   unavailable_reason: string | null
   state: SlotState
-  bookable_by_public: boolean
-  bookable_by_admin: boolean
+  bookable: boolean
   booking: BookingSummary | null
 }
 
@@ -152,6 +148,10 @@ export interface DayView {
   regular_slots_total: number
   regular_slots_used: number
   slots: SlotView[]
+  /** Emergency changes are an admin-only queue on the date, not a slot. */
+  emergency_open: boolean
+  emergency_closed_reason: string | null
+  emergency_bookings: BookingSummary[]
 }
 
 export interface ScheduleSummary {
@@ -159,8 +159,8 @@ export interface ScheduleSummary {
   regular_slots_available: number
   slots_booked: number
   holidays: number
-  emergency_slots_total: number
-  emergency_slots_booked: number
+  /** Emergency changes scheduled this week (any number per date). */
+  emergency_changes: number
 }
 
 export interface DocumentCatalogEntry {
@@ -190,17 +190,41 @@ export interface Schedule {
   settings: PublicSettings
 }
 
-export interface OwnerCredentials {
-  requester_email: string
-  booking_pin: string
+/** A row in the admin user-management table. */
+export interface ManagedUser {
+  id: number
+  full_name: string
+  username: string
+  email: string
+  role: 'TENANT_USER' | 'ADMIN'
+  is_active: boolean
+  must_change_password: boolean
+  created_at: string
 }
 
-export interface AdminSession {
+/** The tenant master as an administrator sees it. */
+export interface AdminTenant {
+  id: number
+  name: string
+  tenant_code: string | null
+  description: string | null
+  is_active: boolean
+}
+
+export interface AuthSession {
   access_token: string
   token_type: string
   expires_in: number
+  user: AuthUser
+}
+
+export interface AuthUser {
+  id: number
+  full_name: string
   username: string
-  display_name: string
+  email: string | null
+  role: 'TENANT_USER' | 'ADMIN'
+  must_change_password?: boolean
 }
 
 export interface AdminSettings {
@@ -208,7 +232,7 @@ export interface AdminSettings {
   weekly_booking_limit: number
   booking_freeze_hours: number
   max_file_size_mb: number
-  emergency_slot_enabled: boolean
+  emergency_changes_enabled: boolean
   require_admin_override_reason: boolean
   mandatory_documents: DocumentCategory[]
 }
@@ -219,7 +243,6 @@ export interface SlotConfig {
   name: string
   start_time: string
   end_time: string
-  is_emergency: boolean
   enabled: boolean
 }
 
@@ -227,7 +250,7 @@ export interface AuditEvent {
   id: number
   booking_reference: string | null
   event_type: string
-  actor_type: 'PUBLIC' | 'ADMIN' | 'SYSTEM'
+  actor_type: 'USER' | 'ADMIN' | 'SYSTEM'
   requester_email: string | null
   admin_username: string | null
   override_reason: string | null
@@ -239,7 +262,6 @@ export interface AuditEvent {
 /** Everything the booking form collects. */
 export interface BookingFormValues {
   tenant_id: string
-  tenant_name: string
   jira_change: string
   jira_task: string
   jira_url: string
@@ -254,8 +276,6 @@ export interface BookingFormValues {
   implementation_summary: string
   deployment_description: string
   additional_comments: string
-  booking_pin: string
-  confirm_booking_pin: string
   emergency_reason: string
   emergency_approval_reference: string
   emergency_approver: string

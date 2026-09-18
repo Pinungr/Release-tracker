@@ -9,11 +9,10 @@ from sqlalchemy.orm import Session
 
 from ..models import BookingAudit, DeploymentBooking
 
-#: Never written to the audit log.
-REDACTED_FIELDS = {"booking_pin_hash", "manage_token_hash"}
-
 AUDITED_FIELDS = (
+    "tenant_id",
     "tenant_name",
+    "created_by_user_id",
     "deployment_date",
     "slot_number",
     "jira_change",
@@ -46,7 +45,7 @@ def _json_default(value: Any) -> str:
 
 
 def snapshot(booking: DeploymentBooking) -> dict[str, Any]:
-    return {f: getattr(booking, f) for f in AUDITED_FIELDS if f not in REDACTED_FIELDS}
+    return {f: getattr(booking, f) for f in AUDITED_FIELDS}
 
 
 def diff(before: dict[str, Any], after: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

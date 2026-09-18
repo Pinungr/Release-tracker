@@ -1,4 +1,4 @@
-"""Public weekly board."""
+"""Weekly board. Visible to any authenticated account."""
 from __future__ import annotations
 
 from datetime import date
@@ -7,9 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..schemas import PublicSettings, ScheduleResponse
+from ..schemas import ScheduleResponse
+from ..security import UserPrincipal, require_user
 from ..services import presenters
-from ..services.settings_service import get_app_settings
 from ..utils.dates import today_local
 
 router = APIRouter(tags=["schedule"])
@@ -19,6 +19,7 @@ router = APIRouter(tags=["schedule"])
 def get_schedule(
     week: str | None = Query(default=None, description="Any date inside the desired week (YYYY-MM-DD)."),
     db: Session = Depends(get_db),
+    user: UserPrincipal = Depends(require_user),
 ) -> ScheduleResponse:
     """Only the requested week is loaded; navigation refetches per week."""
     if week:
@@ -29,8 +30,3 @@ def get_schedule(
     else:
         anchor = today_local()
     return presenters.schedule_response(db, anchor)
-
-
-@router.get("/config", response_model=PublicSettings)
-def get_public_config(db: Session = Depends(get_db)) -> PublicSettings:
-    return presenters.public_settings(get_app_settings(db))

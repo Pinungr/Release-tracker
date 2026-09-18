@@ -1,177 +1,211 @@
-"""Core booking rules: creation, double booking, weekly limit, ownership."""
+"""Change-record creation, tenant selection and per-record ownership.
+
+A user is a person; a tenant is chosen per change record. One person may
+schedule for many tenants, and ownership is decided by created_by_user_id.
+"""
 from __future__ import annotations
 
 from datetime import timedelta
 
-from conftest import booking_payload
+from conftest import booking_payload, create_booking, create_tenant
 
 
-def test_public_booking_succeeds_without_login(client, next_monday):
-    response = client.post("/api/bookings", json=booking_payload(next_monday, 2))
+def test_authenticated_user_can_schedule_a_change(user, tenant, next_monday):
+    response = user.post("/api/bookings", json=booking_payload(tenant, next_monday, 1))
     assert response.status_code == 201, response.text
-    body = response.json()
-    assert body["booking"]["booking_reference"].startswith("PDS-")
-    assert body["booking"]["status"] == "BOOKED"
-    assert body["booking"]["is_emergency"] is False
-    assert body["manage_token"]
-    assert "Keep your Booking PIN safe" in body["message"] or "keep your Booking PIN safe" in body["message"]
+    booking = response.json()["booking"]
+    assert booking["booking_reference"].startswith("PDS-")
+    assert booking["status"] == "BOOKED"
+    assert booking["is_emergency"] is False
+    assert booking["tenant_id"] == tenant
 
 
-def test_booking_reference_is_sequential_per_day(client, next_monday):
-    first = client.post("/api/bookings", json=booking_payload(next_monday, 1)).json()
-    second = client.post(
-        "/api/bookings", json=booking_payload(next_monday, 2, tenant_name="Encounters")
-    ).json()
-    day = next_monday.strftime("%Y%m%d")
-    assert first["booking"]["booking_reference"] == f"PDS-{day}-001"
-    assert second["booking"]["booking_reference"] == f"PDS-{day}-002"
+def test_booking_records_the_creating_user(user, tenant, next_monday):
+    me = user.get("/api/auth/me").json()
+    booking = create_booking(user, tenant, next_monday, 1)
+    assert booking["created_by_user_id"] == me["id"]
 
 
-def test_cannot_double_book_the_same_slot(client, next_monday):
-    assert client.post("/api/bookings", json=booking_payload(next_monday, 3)).status_code == 201
-    clash = client.post(
-        "/api/bookings", json=booking_payload(next_monday, 3, tenant_name="Encounters")
+def test_anonymous_callers_cannot_schedule(anon, tenant, next_monday):
+    response = anon.post("/api/bookings", json=booking_payload(tenant, next_monday, 1))
+    assert response.status_code == 401
+
+
+def test_one_user_can_schedule_for_several_tenants(user, admin, next_monday):
+    """USER != TENANT: no permanent user/tenant assignment exists."""
+    first = create_tenant(admin, "Tenant A", "TEN-A")
+    second = create_tenant(admin, "Tenant B", "TEN-B")
+    third = create_tenant(admin, "Tenant C", "TEN-C")
+
+    for index, tenant_id in enumerate([first, second, third], start=1):
+        booking = create_booking(user, tenant_id, next_monday, index)
+        assert booking["tenant_id"] == tenant_id
+
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    names = {s["booking"]["tenant_name"] for s in board["days"][0]["slots"] if s["booking"]}
+    assert names == {"Tenant A", "Tenant B", "Tenant C"}
+
+
+def test_tenant_must_come_from_the_master_list(user, next_monday):
+    missing = user.post("/api/bookings", json=booking_payload(999_999, next_monday, 1))
+    assert missing.status_code == 422
+
+    payload = booking_payload(1, next_monday, 1)
+    payload.pop("tenant_id")
+    assert user.post("/api/bookings", json=payload).status_code == 422
+
+
+def test_scheduling_never_creates_a_tenant_as_a_side_effect(user, admin, tenant, next_monday):
+    before = len(admin.get("/api/admin/tenants").json())
+    payload = booking_payload(tenant, next_monday, 1, tenant_name="Brand New Tenant")
+    assert user.post("/api/bookings", json=payload).status_code == 201
+    assert len(admin.get("/api/admin/tenants").json()) == before
+
+
+def test_inactive_tenant_is_rejected(user, admin, tenant, next_monday):
+    admin.patch(f"/api/admin/tenants/{tenant}/status", json={"is_active": False})
+    response = user.post("/api/bookings", json=booking_payload(tenant, next_monday, 1))
+    assert response.status_code == 409
+    assert "inactive" in response.json()["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# Ownership
+# --------------------------------------------------------------------------- #
+
+
+def test_owner_can_read_and_edit_their_change(user, tenant, next_monday):
+    booking = create_booking(user, tenant, next_monday, 1)
+    assert user.get(f"/api/bookings/{booking['id']}").status_code == 200
+
+    updated = user.put(
+        f"/api/bookings/{booking['id']}",
+        json=booking_payload(tenant, next_monday, 1, jira_change="CHG0999999"),
     )
+    assert updated.status_code == 200
+    assert updated.json()["jira_change"] == "CHG0999999"
+
+
+def test_another_user_cannot_read_edit_or_cancel(user, other_user, tenant, next_monday):
+    booking = create_booking(user, tenant, next_monday, 1)
+
+    assert other_user.get(f"/api/bookings/{booking['id']}").status_code == 403
+    assert (
+        other_user.put(
+            f"/api/bookings/{booking['id']}", json=booking_payload(tenant, next_monday, 1)
+        ).status_code
+        == 403
+    )
+    assert (
+        other_user.request("DELETE", f"/api/bookings/{booking['id']}", json={}).status_code == 403
+    )
+    assert other_user.get(f"/api/bookings/{booking['id']}/attachments").status_code == 403
+
+
+def test_admin_can_read_and_edit_any_change(admin, user, tenant, next_monday):
+    booking = create_booking(user, tenant, next_monday, 1)
+    assert admin.get(f"/api/bookings/{booking['id']}").status_code == 200
+    updated = admin.put(
+        f"/api/bookings/{booking['id']}",
+        json=booking_payload(tenant, next_monday, 1, jira_change="CHG0777777"),
+    )
+    assert updated.status_code == 200
+
+
+def test_owner_can_cancel_and_the_slot_is_released(user, other_user, tenant, other_tenant, next_monday):
+    booking = create_booking(user, tenant, next_monday, 1)
+    cancelled = user.request("DELETE", f"/api/bookings/{booking['id']}", json={})
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "CANCELLED"
+
+    # The freed slot is immediately bookable by somebody else.
+    assert other_user.post(
+        "/api/bookings", json=booking_payload(other_tenant, next_monday, 1)
+    ).status_code == 201
+
+
+def test_cancelled_change_cannot_be_edited(user, tenant, next_monday):
+    booking = create_booking(user, tenant, next_monday, 1)
+    user.request("DELETE", f"/api/bookings/{booking['id']}", json={})
+    response = user.put(
+        f"/api/bookings/{booking['id']}", json=booking_payload(tenant, next_monday, 1)
+    )
+    assert response.status_code == 400
+    assert "cancelled" in response.json()["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# Slot rules and validation
+# --------------------------------------------------------------------------- #
+
+
+def test_normal_slot_cannot_be_double_booked(user, other_user, tenant, other_tenant, next_monday):
+    create_booking(user, tenant, next_monday, 2)
+    clash = other_user.post("/api/bookings", json=booking_payload(other_tenant, next_monday, 2))
     assert clash.status_code == 409
     assert "just been booked" in clash.json()["detail"]
 
 
-def test_cancelled_slot_becomes_bookable_again(client, next_monday):
-    created = client.post("/api/bookings", json=booking_payload(next_monday, 3)).json()
-    booking_id = created["booking"]["id"]
-    cancel = client.request(
-        "DELETE",
-        f"/api/bookings/{booking_id}",
-        json={"credentials": {"requester_email": "rahul.menon@example.com", "booking_pin": "123456"}},
-    )
-    assert cancel.status_code == 200
-    assert cancel.json()["status"] == "CANCELLED"
-    again = client.post("/api/bookings", json=booking_payload(next_monday, 3, tenant_name="Encounters"))
-    assert again.status_code == 201
+def test_booking_reference_is_sequential_and_unique(user, tenant, other_tenant, next_monday):
+    first = create_booking(user, tenant, next_monday, 1)
+    second = create_booking(user, other_tenant, next_monday, 2)
+    day = next_monday.strftime("%Y%m%d")
+    assert first["booking_reference"] == f"PDS-{day}-001"
+    assert second["booking_reference"] == f"PDS-{day}-002"
 
 
-def test_weekly_tenant_limit_blocks_the_third_booking(client, next_monday):
-    assert client.post("/api/bookings", json=booking_payload(next_monday, 1)).status_code == 201
-    assert client.post("/api/bookings", json=booking_payload(next_monday, 2)).status_code == 201
-    third = client.post("/api/bookings", json=booking_payload(next_monday + timedelta(days=1), 1))
-    assert third.status_code == 409
-    assert "Weekly booking limit reached. EPCAT" in third.json()["detail"]
-
-
-def test_weekly_limit_is_case_and_spacing_insensitive(client, next_monday):
-    client.post("/api/bookings", json=booking_payload(next_monday, 1, tenant_name="EPCAT"))
-    client.post("/api/bookings", json=booking_payload(next_monday, 2, tenant_name=" epcat "))
-    blocked = client.post("/api/bookings", json=booking_payload(next_monday, 3, tenant_name="EpCat"))
-    assert blocked.status_code == 409
-
-
-def test_weekly_limit_resets_next_week(client, next_monday):
-    client.post("/api/bookings", json=booking_payload(next_monday, 1))
-    client.post("/api/bookings", json=booking_payload(next_monday, 2))
-    following = client.post("/api/bookings", json=booking_payload(next_monday + timedelta(days=7), 1))
-    assert following.status_code == 201
-
-
-def test_admin_can_override_the_weekly_limit(client, admin_headers, next_monday):
-    client.post("/api/bookings", json=booking_payload(next_monday, 1))
-    client.post("/api/bookings", json=booking_payload(next_monday, 2))
-    override = client.post(
-        "/api/bookings",
-        json=booking_payload(
-            next_monday,
-            3,
-            override_weekly_limit=True,
-            override_reason="Critical business deployment.",
-        ),
-        headers=admin_headers,
-    )
-    assert override.status_code == 201, override.text
-
-
-def test_admin_override_requires_a_reason(client, admin_headers, next_monday):
-    client.post("/api/bookings", json=booking_payload(next_monday, 1))
-    client.post("/api/bookings", json=booking_payload(next_monday, 2))
-    response = client.post(
-        "/api/bookings",
-        json=booking_payload(next_monday, 3, override_weekly_limit=True),
-        headers=admin_headers,
-    )
-    assert response.status_code == 400
-    assert "override reason is required" in response.json()["detail"]
-
-
-def test_public_user_cannot_override_the_weekly_limit(client, next_monday):
-    client.post("/api/bookings", json=booking_payload(next_monday, 1))
-    client.post("/api/bookings", json=booking_payload(next_monday, 2))
-    response = client.post(
-        "/api/bookings",
-        json=booking_payload(next_monday, 3, override_weekly_limit=True, override_reason="please"),
-    )
-    assert response.status_code == 409
-
-
-def test_cannot_book_a_past_date(client):
+def test_past_dates_and_weekends_are_rejected(user, tenant, next_monday):
     from app.utils.dates import today_local
 
-    response = client.post("/api/bookings", json=booking_payload(today_local() - timedelta(days=3), 1))
-    assert response.status_code == 400
-    assert "past" in response.json()["detail"]
-
-
-def test_cannot_book_a_weekend(client, next_monday):
-    response = client.post("/api/bookings", json=booking_payload(next_monday + timedelta(days=5), 1))
-    assert response.status_code == 400
-    assert "Monday to Friday" in response.json()["detail"]
-
-
-def test_cannot_book_a_slot_beyond_the_configured_grid(client, next_monday):
-    response = client.post("/api/bookings", json=booking_payload(next_monday, 9))
-    assert response.status_code == 404
-
-
-def test_pin_must_be_six_digits(client, next_monday):
-    response = client.post(
-        "/api/bookings",
-        json=booking_payload(next_monday, 1, booking_pin="12ab56", confirm_booking_pin="12ab56"),
+    past = user.post(
+        "/api/bookings", json=booking_payload(tenant, today_local() - timedelta(days=3), 1)
     )
-    assert response.status_code == 422
+    assert past.status_code == 400
+    assert "past" in past.json()["detail"]
 
-
-def test_pin_confirmation_must_match(client, next_monday):
-    response = client.post(
-        "/api/bookings", json=booking_payload(next_monday, 1, confirm_booking_pin="654321")
+    weekend = user.post(
+        "/api/bookings", json=booking_payload(tenant, next_monday + timedelta(days=5), 1)
     )
-    assert response.status_code == 422
+    assert weekend.status_code == 400
+    assert "Monday to Friday" in weekend.json()["detail"]
 
 
-def test_invalid_git_repository_is_rejected(client, next_monday):
-    response = client.post("/api/bookings", json=booking_payload(next_monday, 1, git_repository="not a url"))
-    assert response.status_code == 422
+def test_unknown_slot_is_rejected(user, tenant, next_monday):
+    assert user.post("/api/bookings", json=booking_payload(tenant, next_monday, 9)).status_code == 404
 
 
-def test_invalid_email_is_rejected(client, next_monday):
-    response = client.post("/api/bookings", json=booking_payload(next_monday, 1, requester_email="nope"))
-    assert response.status_code == 422
+def test_field_validation_is_enforced_server_side(user, tenant, next_monday):
+    bad_email = booking_payload(tenant, next_monday, 1, requester_email="not-an-email")
+    assert user.post("/api/bookings", json=bad_email).status_code == 422
+
+    bad_repo = booking_payload(tenant, next_monday, 1, git_repository="not a url")
+    assert user.post("/api/bookings", json=bad_repo).status_code == 422
+
+    bad_jira = booking_payload(tenant, next_monday, 1, jira_url="javascript:alert(1)")
+    assert user.post("/api/bookings", json=bad_jira).status_code == 422
 
 
-def test_pin_and_token_hashes_are_never_returned(client, next_monday):
-    body = client.post("/api/bookings", json=booking_payload(next_monday, 1)).text
-    assert "booking_pin" not in body
-    assert "pin_hash" not in body
-    assert "123456" not in body
+def test_board_shows_the_owner_so_the_ui_can_mark_my_changes(user, tenant, next_monday):
+    me = user.get("/api/auth/me").json()
+    create_booking(user, tenant, next_monday, 1)
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    booked = next(s for s in board["days"][0]["slots"] if s["booking"])
+    assert booked["booking"]["created_by_user_id"] == me["id"]
 
 
-def test_public_read_masks_contact_details(client, next_monday):
-    created = client.post("/api/bookings", json=booking_payload(next_monday, 1)).json()
-    public = client.get(f"/api/bookings/{created['booking']['id']}").json()
-    assert public["requester_email"] != "rahul.menon@example.com"
-    assert public["requester_email"].endswith("@example.com")
-    assert public["verifier_name"] == "Kalyani Sethuraman"
+def test_schedule_returns_only_the_requested_week(user, tenant, next_monday):
+    create_booking(user, tenant, next_monday, 1)
+    week = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert week["week_start"] == next_monday.isoformat()
+    assert [d["weekday"] for d in week["days"]] == [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+    ]
+    assert week["summary"]["slots_booked"] == 1
+    assert week["summary"]["regular_slots_total"] == 20
 
-
-def test_admin_read_shows_full_contact_details(client, admin_headers, next_monday):
-    created = client.post("/api/bookings", json=booking_payload(next_monday, 1)).json()
-    detail = client.get(
-        f"/api/bookings/{created['booking']['id']}", headers=admin_headers
-    ).json()
-    assert detail["requester_email"] == "rahul.menon@example.com"
+    other = user.get(f"/api/schedule?week={(next_monday + timedelta(days=7)).isoformat()}").json()
+    assert other["summary"]["slots_booked"] == 0

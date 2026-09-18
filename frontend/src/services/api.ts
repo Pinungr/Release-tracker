@@ -1,10 +1,11 @@
 /**
- * Thin REST client. The admin bearer token lives in sessionStorage so it dies
- * with the tab; booking PINs are never persisted anywhere.
+ * Thin REST client. The authenticated account bearer token lives in sessionStorage.
  */
 import type {
-  AdminSession,
+  AuthSession,
+  AuthUser,
   AdminSettings,
+  AdminTenant,
   AuditEvent,
   BookingCreated,
   BookingDetail,
@@ -12,16 +13,14 @@ import type {
   DailyOverride,
   DocumentCategory,
   Holiday,
-  OwnerCredentials,
-  PublicSettings,
+  ManagedUser,
   Schedule,
   SlotConfig,
   Tenant,
 } from '../types'
 
 const BASE = '/api'
-const TOKEN_KEY = 'pds.admin.token'
-const USER_TOKEN_KEY = 'pds.user.token'
+const TOKEN_KEY = 'pds.user.token'
 
 export class ApiError extends Error {
   status: number
@@ -33,20 +32,14 @@ export class ApiError extends Error {
   }
 }
 
-export const adminToken = {
+export const userToken = {
   get: (): string | null => sessionStorage.getItem(TOKEN_KEY),
   set: (token: string) => sessionStorage.setItem(TOKEN_KEY, token),
   clear: () => sessionStorage.removeItem(TOKEN_KEY),
 }
 
-export const userToken = {
-  get: (): string | null => sessionStorage.getItem(USER_TOKEN_KEY),
-  set: (token: string) => sessionStorage.setItem(USER_TOKEN_KEY, token),
-  clear: () => sessionStorage.removeItem(USER_TOKEN_KEY),
-}
-
 function authHeaders(): Record<string, string> {
-  const token = adminToken.get() ?? userToken.get()
+  const token = userToken.get()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
@@ -72,7 +65,7 @@ async function readError(response: Response): Promise<string> {
       .filter(Boolean)
     if (messages.length) return messages.join('\n')
   }
-  if (response.status === 401) return 'Your administrator session has expired. Please sign in again.'
+  if (response.status === 401) return 'Your session has expired. Please sign in again.'
   return `Request failed (${response.status}).`
 }
 
@@ -86,7 +79,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   })
   if (!response.ok) {
-    if (response.status === 401 && path.startsWith('/admin')) adminToken.clear()
+    if (response.status === 401) userToken.clear()
     throw new ApiError(await readError(response), response.status)
   }
   if (response.status === 204) return undefined as T
@@ -99,7 +92,16 @@ export const api = {
   // ---- public -------------------------------------------------------------
   getSchedule: (weekAnchor: string) => request<Schedule>(`/schedule?week=${weekAnchor}`),
 
-  getConfig: () => request<PublicSettings>('/config'),
+  login: (username_or_email: string, password: string) =>
+    request<AuthSession>('/auth/login', { method: 'POST', body: json({ username_or_email, password }) }),
+
+  register: (payload: Record<string, unknown>) =>
+    request<{ user: AuthUser }>('/auth/register', { method: 'POST', body: json(payload) }),
+
+  me: () => request<AuthUser>('/auth/me'),
+
+  changePassword: (payload: Record<string, unknown>) =>
+    request<{ message: string }>('/auth/me/change-password', { method: 'POST', body: json(payload) }),
 
   getActiveTenants: () => request<Tenant[]>('/tenants/active'),
 
@@ -108,59 +110,29 @@ export const api = {
   createBooking: (payload: Record<string, unknown>) =>
     request<BookingCreated>('/bookings', { method: 'POST', body: json(payload) }),
 
-  verifyOwner: (id: number, credentials: OwnerCredentials) =>
-    request<BookingCreated>(`/bookings/${id}/verify-owner`, {
-      method: 'POST',
-      body: json(credentials),
-    }),
-
-  getBookingByToken: (token: string) =>
-    request<BookingDetail>(`/bookings/manage/token/${encodeURIComponent(token)}`),
-
   updateBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingDetail>(`/bookings/${id}`, { method: 'PUT', body: json(payload) }),
 
   cancelBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingSummary>(`/bookings/${id}`, { method: 'DELETE', body: json(payload) }),
 
-  myBookings: (credentials: OwnerCredentials) =>
-    request<BookingDetail[]>('/my-bookings', { method: 'POST', body: json(credentials) }),
-
-  uploadAttachment: (
-    id: number,
-    category: DocumentCategory,
-    file: File,
-    credentials: OwnerCredentials | null,
-  ) => {
+  uploadAttachment: (id: number, category: DocumentCategory, file: File) => {
     const form = new FormData()
     form.append('category', category)
     form.append('file', file)
-    if (credentials) {
-      form.append('requester_email', credentials.requester_email)
-      form.append('booking_pin', credentials.booking_pin)
-    }
     return request<BookingDetail>(`/bookings/${id}/attachments`, { method: 'POST', body: form })
   },
 
-  // Credentials go in the body: a booking PIN must never appear in a URL.
-  deleteAttachment: (id: number, attachmentId: number, credentials: OwnerCredentials | null) =>
+  deleteAttachment: (id: number, attachmentId: number) =>
     request<BookingDetail>(`/bookings/${id}/attachments/${attachmentId}`, {
       method: 'DELETE',
-      body: json(credentials),
+      body: '{}',
     }),
 
-  downloadUrl: (id: number, attachmentId: number, manageToken: string | null) => {
-    const base = `${BASE}/bookings/${id}/attachments/${attachmentId}/download`
-    return manageToken ? `${base}?token=${encodeURIComponent(manageToken)}` : base
-  },
+  downloadUrl: (id: number, attachmentId: number) => `${BASE}/bookings/${id}/attachments/${attachmentId}/download`,
 
   // ---- admin --------------------------------------------------------------
-  adminLogin: (username: string, password: string) =>
-    request<AdminSession>('/admin/login', { method: 'POST', body: json({ username, password }) }),
-
-  adminLogout: () => request<void>('/admin/logout', { method: 'POST' }),
-
-  adminMe: () => request<{ username: string }>('/admin/me'),
+  logout: () => request<void>('/admin/logout', { method: 'POST' }),
 
   getSettings: () => request<AdminSettings>('/admin/settings'),
 
@@ -211,4 +183,40 @@ export const api = {
 
   getAudit: (bookingId?: number) =>
     request<AuditEvent[]>(`/admin/audit${bookingId ? `?booking_id=${bookingId}` : ''}`),
+
+  // ---- admin: people and tenants -------------------------------------------
+  listUsers: (search?: string) =>
+    request<ManagedUser[]>(`/admin/users${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+
+  setUserRole: (id: number, role: 'ADMIN' | 'TENANT_USER') =>
+    request<{ role: string }>(`/admin/users/${id}/role`, {
+      method: 'PATCH',
+      body: json({ role }),
+    }),
+
+  setUserActive: (id: number, is_active: boolean) =>
+    request<{ is_active: boolean }>(`/admin/users/${id}/status`, {
+      method: 'PATCH',
+      body: json({ is_active }),
+    }),
+
+  resetUserPassword: (id: number, new_password: string, confirm_new_password: string) =>
+    request<{ message: string }>(`/admin/users/${id}/reset-password`, {
+      method: 'POST',
+      body: json({ new_password, confirm_new_password }),
+    }),
+
+  listAdminTenants: () => request<AdminTenant[]>('/admin/tenants'),
+
+  createAdminTenant: (payload: Record<string, unknown>) =>
+    request<AdminTenant>('/admin/tenants', { method: 'POST', body: json(payload) }),
+
+  updateAdminTenant: (id: number, payload: Record<string, unknown>) =>
+    request<AdminTenant>(`/admin/tenants/${id}`, { method: 'PUT', body: json(payload) }),
+
+  setTenantActive: (id: number, is_active: boolean) =>
+    request<AdminTenant>(`/admin/tenants/${id}/status`, {
+      method: 'PATCH',
+      body: json({ is_active }),
+    }),
 }

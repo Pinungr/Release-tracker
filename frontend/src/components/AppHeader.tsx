@@ -3,21 +3,21 @@ import { Logout, Settings, Shield, User } from './Icons'
 
 interface AppHeaderProps {
   timezone: string
-  adminUsername: string | null
-  onAdminLogin: () => void
+  username: string
+  isAdmin: boolean
+  onProfile: () => void
   onAdminPanel: () => void
-  onAdminLogout: () => void
-  onMyBookings: () => void
+  onLogout: () => void
   weekNavigator: ReactNode
 }
 
 export function AppHeader({
   timezone,
-  adminUsername,
-  onAdminLogin,
+  username,
+  isAdmin,
+  onProfile,
   onAdminPanel,
-  onAdminLogout,
-  onMyBookings,
+  onLogout,
   weekNavigator,
 }: AppHeaderProps) {
   return (
@@ -43,39 +43,34 @@ export function AppHeader({
           <div className="order-3 w-full lg:order-2 lg:w-auto">{weekNavigator}</div>
 
           <div className="order-2 ml-auto flex items-center gap-2 lg:order-3">
-            <button type="button" onClick={onMyBookings} className="btn-secondary">
+            <button type="button" onClick={onProfile} className="btn-secondary">
               <User className="size-4" />
-              <span className="hidden sm:inline">Find my bookings</span>
-              <span className="sm:hidden">My bookings</span>
+              <span className="hidden sm:inline">{username}</span>
+              <span className="sm:hidden">Profile</span>
             </button>
 
-            {adminUsername ? (
-              <div className="flex items-center gap-2">
+            {isAdmin ? (
+              <>
                 <span className="hidden items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 sm:inline-flex">
                   <Shield className="size-4" />
-                  {adminUsername}
+                  ADMIN
                 </span>
                 <button type="button" onClick={onAdminPanel} className="btn-primary">
                   <Settings className="size-4" />
                   <span className="hidden sm:inline">Admin controls</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={onAdminLogout}
-                  className="btn-ghost px-2"
-                  aria-label="Sign out of the administrator session"
-                  title="Log out"
-                >
-                  <Logout className="size-4" />
-                </button>
-              </div>
-            ) : (
-              <button type="button" onClick={onAdminLogin} className="btn-secondary">
-                <Shield className="size-4" />
-                <span className="hidden sm:inline">Admin login</span>
-                <span className="sm:hidden">Admin</span>
-              </button>
-            )}
+              </>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={onLogout}
+              className="btn-ghost px-2"
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <Logout className="size-4" />
+            </button>
           </div>
         </div>
       </div>

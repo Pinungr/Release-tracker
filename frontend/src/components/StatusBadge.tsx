@@ -26,13 +26,6 @@ export function SlotStateBadge({ state }: { state: SlotState }) {
   switch (state) {
     case 'AVAILABLE':
       return <span className="badge bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100">Available</span>
-    case 'EMERGENCY_AVAILABLE':
-      return (
-        <span className="badge bg-orange-50 text-orange-700 ring-1 ring-orange-200">
-          <Siren className="size-3" />
-          Emergency
-        </span>
-      )
     case 'HOLIDAY':
       return (
         <span className="badge bg-amber-50 text-amber-800 ring-1 ring-amber-200">

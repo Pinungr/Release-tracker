@@ -3,7 +3,6 @@ import { CheckboxField, FormSection, SelectField, TextArea, TextField } from './
 
 export const EMPTY_BOOKING_VALUES: BookingFormValues = {
   tenant_id: '',
-  tenant_name: '',
   jira_change: '',
   jira_task: '',
   jira_url: '',
@@ -18,8 +17,6 @@ export const EMPTY_BOOKING_VALUES: BookingFormValues = {
   implementation_summary: '',
   deployment_description: '',
   additional_comments: '',
-  booking_pin: '',
-  confirm_booking_pin: '',
   emergency_reason: '',
   emergency_approval_reference: '',
   emergency_approver: '',
@@ -32,7 +29,6 @@ export function valuesFromBooking(booking: BookingDetail): BookingFormValues {
   return {
     ...EMPTY_BOOKING_VALUES,
     tenant_id: String(booking.tenant_id),
-    tenant_name: booking.tenant_name,
     jira_change: booking.jira_change,
     jira_task: booking.jira_task ?? '',
     jira_url: booking.jira_url ?? '',
@@ -66,7 +62,7 @@ export type BookingFormErrors = Partial<Record<keyof BookingFormValues, string>>
  */
 export function validateBookingForm(
   values: BookingFormValues,
-  options: { requirePin: boolean; isEmergency: boolean },
+  options: { isEmergency: boolean },
 ): BookingFormErrors {
   const errors: BookingFormErrors = {}
   const required: (keyof BookingFormValues)[] = [
@@ -105,15 +101,6 @@ export function validateBookingForm(
     errors.deployment_description = 'Add at least 10 characters.'
   }
 
-  if (options.requirePin) {
-    if (!/^\d{6}$/.test(values.booking_pin)) {
-      errors.booking_pin = 'The PIN must be exactly 6 digits.'
-    }
-    if (values.confirm_booking_pin !== values.booking_pin) {
-      errors.confirm_booking_pin = 'The two PINs do not match.'
-    }
-  }
-
   if (options.isEmergency) {
     if (!values.emergency_reason.trim()) errors.emergency_reason = 'This field is required.'
     if (!values.business_justification.trim()) {
@@ -132,7 +119,6 @@ export function toBookingPayload(
   const optional = (value: string) => (value.trim() ? value.trim() : null)
   return {
     tenant_id: values.tenant_id ? Number(values.tenant_id) : null,
-    tenant_name: values.tenant_name.trim(),
     jira_change: values.jira_change.trim(),
     jira_task: optional(values.jira_task),
     jira_url: optional(values.jira_url),
@@ -163,7 +149,6 @@ interface BookingFormProps {
   settings: PublicSettings
   isEmergency: boolean
   isAdmin: boolean
-  mode: 'create' | 'edit'
   onChange: <K extends keyof BookingFormValues>(field: K, value: BookingFormValues[K]) => void
   onSubmit: () => void
 }
@@ -176,7 +161,6 @@ export function BookingForm({
   settings,
   isEmergency,
   isAdmin,
-  mode,
   onChange,
   onSubmit,
 }: BookingFormProps) {
@@ -198,13 +182,9 @@ export function BookingForm({
           name="tenant_id"
           required
           value={values.tenant_id}
-          onChange={(v) => {
-            const tenant = tenants.find((item) => String(item.id) === v)
-            onChange('tenant_id', v)
-            onChange('tenant_name', tenant?.name ?? '')
-          }}
+          onChange={(v) => onChange('tenant_id', v)}
           options={tenants.map((tenant) => ({ value: String(tenant.id), label: tenant.name }))}
-          error={errors.tenant_id ?? errors.tenant_name}
+          error={errors.tenant_id}
         />
         <SelectField
           label="Deployment technology"
@@ -285,7 +265,6 @@ export function BookingForm({
           onChange={(v) => onChange('requester_email', v)}
           error={errors.requester_email}
           autoComplete="email"
-          hint={mode === 'create' ? 'Used together with your PIN to manage this booking.' : undefined}
         />
         <TextField
           label="Requester phone"
@@ -394,38 +373,6 @@ export function BookingForm({
             error={errors.emergency_approval_reference}
             hint="Optional."
             maxLength={120}
-          />
-        </FormSection>
-      ) : null}
-
-      {mode === 'create' ? (
-        <FormSection
-          title="Booking PIN"
-          description="Six digits. You will need the requester email and this PIN to edit, upload documents or cancel. It is stored hashed and cannot be recovered."
-        >
-          <TextField
-            label="6-digit booking PIN"
-            name="booking_pin"
-            type="password"
-            required
-            inputMode="numeric"
-            maxLength={6}
-            value={values.booking_pin}
-            onChange={(v) => onChange('booking_pin', v.replace(/\D/g, '').slice(0, 6))}
-            error={errors.booking_pin}
-            autoComplete="new-password"
-          />
-          <TextField
-            label="Confirm booking PIN"
-            name="confirm_booking_pin"
-            type="password"
-            required
-            inputMode="numeric"
-            maxLength={6}
-            value={values.confirm_booking_pin}
-            onChange={(v) => onChange('confirm_booking_pin', v.replace(/\D/g, '').slice(0, 6))}
-            error={errors.confirm_booking_pin}
-            autoComplete="new-password"
           />
         </FormSection>
       ) : null}

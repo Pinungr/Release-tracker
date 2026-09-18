@@ -2,31 +2,38 @@
 
 The environment is configured *before* the app package is imported so the
 settings singleton points at a throwaway database and storage directory.
+
+SQLite is used here deliberately: it gives every test a fresh, isolated,
+in-process schema in milliseconds. Production runs on PostgreSQL (see the
+README); nothing in the application depends on which of the two is behind
+SQLAlchemy.
 """
 from __future__ import annotations
 
 import os
 import shutil
 import tempfile
-from datetime import date, time, timedelta
+from datetime import date, timedelta
 
 import pytest
 
 _TMP = tempfile.mkdtemp(prefix="pds-tests-")
 os.environ["DATABASE_URL"] = f"sqlite:///{_TMP}/test.db"
 os.environ["STORAGE_DIR"] = f"{_TMP}/storage"
-os.environ["ADMIN_USERNAME"] = "testadmin"
-os.environ["ADMIN_PASSWORD"] = "Sup3r-Secret-Pass"
+os.environ["BOOTSTRAP_ADMIN_USERNAME"] = "testadmin"
+os.environ["BOOTSTRAP_ADMIN_PASSWORD"] = "Sup3r-Secret-Pass"
 os.environ["JWT_SECRET"] = "test-secret-key-long-enough-for-hs256-abcdef"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import ApplicationSetting, BookingAudit, DeploymentBooking, Holiday  # noqa: E402
 from app.security import ratelimit  # noqa: E402
 from app.services import bootstrap  # noqa: E402
 from app.utils.dates import today_local, week_start  # noqa: E402
+
+ADMIN_USERNAME = "testadmin"
+ADMIN_PASSWORD = "Sup3r-Secret-Pass"
 
 
 def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - cleanup
@@ -36,21 +43,12 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - cleanup
 
 @pytest.fixture(autouse=True)
 def fresh_database():
+    """Every test starts from an empty schema plus the bootstrap administrator."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     bootstrap.initialise()
     ratelimit.reset()
     yield
-    with SessionLocal() as db:
-        for model in (BookingAudit, DeploymentBooking, Holiday, ApplicationSetting):
-            db.query(model).delete()
-        db.commit()
-
-
-@pytest.fixture
-def client() -> TestClient:
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture
@@ -60,12 +58,91 @@ def db():
 
 
 @pytest.fixture
-def admin_headers(client: TestClient) -> dict[str, str]:
+def anon() -> TestClient:
+    """Unauthenticated client, for sign-up/login and authorization tests."""
+    with TestClient(app) as client:
+        yield client
+
+
+def register(client: TestClient, username: str, password: str = "StrongPass!123") -> dict:
     response = client.post(
-        "/api/admin/login", json={"username": "testadmin", "password": "Sup3r-Secret-Pass"}
+        "/api/auth/register",
+        json={
+            "full_name": f"{username.title()} Person",
+            "username": username,
+            "email": f"{username}@example.com",
+            "password": password,
+            "confirm_password": password,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["user"]
+
+
+def login(client: TestClient, username: str, password: str = "StrongPass!123") -> str:
+    response = client.post(
+        "/api/auth/login", json={"username_or_email": username, "password": password}
     )
     assert response.status_code == 200, response.text
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return response.json()["access_token"]
+
+
+def authenticated(token: str) -> TestClient:
+    return TestClient(app, headers={"Authorization": f"Bearer {token}"})
+
+
+def sign_up_and_login(anon: TestClient, username: str) -> TestClient:
+    register(anon, username)
+    return authenticated(login(anon, username))
+
+
+@pytest.fixture
+def admin(anon: TestClient) -> TestClient:
+    """The bootstrap administrator, signed in through the one shared login."""
+    client = authenticated(login(anon, ADMIN_USERNAME, ADMIN_PASSWORD))
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def user(anon: TestClient) -> TestClient:
+    """A self-registered TENANT_USER."""
+    client = sign_up_and_login(anon, "pinaki")
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def other_user(anon: TestClient) -> TestClient:
+    """A second TENANT_USER, for cross-user authorization tests."""
+    client = sign_up_and_login(anon, "user2")
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+def create_tenant(admin: TestClient, name: str, code: str | None = None) -> int:
+    response = admin.post(
+        "/api/admin/tenants",
+        json={"name": name, "tenant_code": code or name.upper().replace(" ", "-")},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+@pytest.fixture
+def tenant(admin: TestClient) -> int:
+    return create_tenant(admin, "EPCAT")
+
+
+@pytest.fixture
+def other_tenant(admin: TestClient) -> int:
+    return create_tenant(admin, "Encounters")
 
 
 @pytest.fixture
@@ -74,9 +151,10 @@ def next_monday() -> date:
     return week_start(today_local()) + timedelta(days=14)
 
 
-def booking_payload(day: date, slot: int, **overrides) -> dict:
+def booking_payload(tenant_id: int, day: date, slot: int, **overrides) -> dict:
+    """A complete normal change record. Tenant comes from the master by id."""
     payload = {
-        "tenant_name": "EPCAT",
+        "tenant_id": tenant_id,
         "jira_change": "CHG0920763",
         "jira_task": "CTASK3388771",
         "jira_url": "https://jira.example.com/browse/CHG0920763",
@@ -93,17 +171,18 @@ def booking_payload(day: date, slot: int, **overrides) -> dict:
         "additional_comments": None,
         "deployment_date": day.isoformat(),
         "slot_number": slot,
-        "booking_pin": "123456",
-        "confirm_booking_pin": "123456",
     }
     payload.update(overrides)
     return payload
 
 
-def emergency_payload(day: date, slot: int = 5, **overrides) -> dict:
-    payload = booking_payload(day, slot)
+def emergency_payload(tenant_id: int, day: date, **overrides) -> dict:
+    """An emergency change: no slot number, it joins the date's queue."""
+    payload = booking_payload(tenant_id, day, slot=None)
     payload.update(
         {
+            "slot_number": None,
+            "is_emergency": True,
             "emergency_reason": "Production outage in the claims ingestion pipeline.",
             "business_justification": "Claims processing is halted for all tenants.",
             "emergency_approver": "Head of Platform",
@@ -114,4 +193,7 @@ def emergency_payload(day: date, slot: int = 5, **overrides) -> dict:
     return payload
 
 
-SLOT_START_TIMES = {1: time(7, 0), 2: time(9, 0), 3: time(11, 0), 4: time(14, 0), 5: time(16, 0)}
+def create_booking(client: TestClient, tenant_id: int, day: date, slot: int, **overrides) -> dict:
+    response = client.post("/api/bookings", json=booking_payload(tenant_id, day, slot, **overrides))
+    assert response.status_code == 201, response.text
+    return response.json()["booking"]

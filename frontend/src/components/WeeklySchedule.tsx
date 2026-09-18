@@ -11,6 +11,7 @@ interface WeeklyScheduleProps {
   query: string
   filter: FilterKey
   onBook: (day: DayView, slot: SlotView) => void
+  onBookEmergency: (day: DayView) => void
   onOpenBooking: (bookingId: number) => void
 }
 
@@ -41,13 +42,13 @@ export function matchesFilter(slot: SlotView, filter: FilterKey, mine: Set<numbe
     case 'ALL':
       return true
     case 'AVAILABLE':
-      return !booking && (slot.state === 'AVAILABLE' || slot.state === 'EMERGENCY_AVAILABLE')
+      return !booking && slot.state === 'AVAILABLE'
     case 'BOOKED':
       return Boolean(booking)
     case 'MINE':
       return Boolean(booking && mine.has(booking.id))
     case 'EMERGENCY':
-      return slot.is_emergency
+      return Boolean(booking?.is_emergency)
     case 'LOCKED':
       return Boolean(booking?.is_locked)
     case 'MISSING_DOCS':
@@ -68,6 +69,7 @@ export function WeeklySchedule({
   query,
   filter,
   onBook,
+  onBookEmergency,
   onOpenBooking,
 }: WeeklyScheduleProps) {
   const visibleByDay = useMemo(() => {
@@ -104,6 +106,7 @@ export function WeeklySchedule({
           visibleSlots={visibleByDay.get(day.day) ?? []}
           filtered={filtered}
           onBook={onBook}
+          onBookEmergency={onBookEmergency}
           onOpenBooking={onOpenBooking}
         />
       ))}

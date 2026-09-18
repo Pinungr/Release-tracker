@@ -1,75 +1,158 @@
-"""Emergency slot access, holidays and per-day slot overrides."""
+"""Emergency changes (an admin-only per-date queue) and holiday blocking.
+
+Emergency changes are deliberately *not* a slot. Any number of them can sit on
+the same date, they carry no slot_number, and they never consume normal
+deployment capacity or the tenant's weekly quota.
+"""
 from __future__ import annotations
 
 from datetime import timedelta
 
-from conftest import booking_payload, emergency_payload
+from conftest import booking_payload, create_booking, emergency_payload
 
 
-def test_public_user_cannot_book_the_emergency_slot(client, next_monday):
-    response = client.post("/api/bookings", json=emergency_payload(next_monday))
+def _day(board: dict, index: int = 0) -> dict:
+    return board["days"][index]
+
+
+# --------------------------------------------------------------------------- #
+# Emergency queue
+# --------------------------------------------------------------------------- #
+
+
+def test_tenant_user_cannot_create_an_emergency_change(user, tenant, next_monday):
+    response = user.post("/api/bookings", json=emergency_payload(tenant, next_monday))
     assert response.status_code == 403
-    assert "administrator" in response.json()["detail"]
+    assert "administrators" in response.json()["detail"].lower()
 
 
-def test_admin_can_book_the_emergency_slot(client, admin_headers, next_monday):
-    response = client.post(
-        "/api/bookings", json=emergency_payload(next_monday), headers=admin_headers
-    )
+def test_admin_can_create_an_emergency_change(admin, tenant, next_monday):
+    response = admin.post("/api/bookings", json=emergency_payload(tenant, next_monday))
     assert response.status_code == 201, response.text
-    assert response.json()["booking"]["is_emergency"] is True
-    assert response.json()["booking"]["emergency_reason"]
+    booking = response.json()["booking"]
+    assert booking["is_emergency"] is True
+    assert booking["slot_number"] is None
+    assert booking["emergency_reason"]
 
 
-def test_emergency_booking_requires_reason_and_justification(client, admin_headers, next_monday):
-    payload = emergency_payload(next_monday)
-    payload["emergency_reason"] = ""
-    response = client.post("/api/bookings", json=payload, headers=admin_headers)
-    assert response.status_code == 400
-    assert "Emergency Reason is required" in response.json()["detail"]
+def test_many_emergency_changes_can_share_one_date(admin, tenant, other_tenant, next_monday):
+    """The old one-emergency-slot-per-day limit is gone."""
+    for index in range(4):
+        response = admin.post(
+            "/api/bookings",
+            json=emergency_payload(
+                tenant if index % 2 == 0 else other_tenant,
+                next_monday,
+                jira_change=f"CHG099000{index}",
+            ),
+        )
+        assert response.status_code == 201, response.text
 
-    payload = emergency_payload(next_monday)
-    payload["business_justification"] = "   "
-    response = client.post("/api/bookings", json=payload, headers=admin_headers)
-    assert response.status_code == 400
-    assert "Business Justification is required" in response.json()["detail"]
+    board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    monday = _day(board)
+    assert len(monday["emergency_bookings"]) == 4
+    assert board["summary"]["emergency_changes"] == 4
+    # All four are queued on the date and none of them holds a slot.
+    assert all(item["slot_number"] is None for item in monday["emergency_bookings"])
 
 
-def test_emergency_booking_does_not_consume_the_weekly_limit(client, admin_headers, next_monday):
-    client.post("/api/bookings", json=booking_payload(next_monday, 1))
-    client.post("/api/bookings", json=booking_payload(next_monday, 2))
-    emergency = client.post(
-        "/api/bookings", json=emergency_payload(next_monday), headers=admin_headers
+def test_emergency_changes_do_not_consume_normal_capacity(admin, user, tenant, next_monday):
+    before = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert _day(before)["regular_slots_total"] == 4
+    assert len(_day(before)["slots"]) == 4
+
+    for index in range(3):
+        admin.post(
+            "/api/bookings",
+            json=emergency_payload(tenant, next_monday, jira_change=f"CHG088000{index}"),
+        )
+
+    after = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    monday = _day(after)
+    assert monday["regular_slots_total"] == 4
+    assert monday["regular_slots_used"] == 0
+    assert len(monday["slots"]) == 4
+    # Every normal slot is still free.
+    assert all(slot["state"] == "AVAILABLE" for slot in monday["slots"])
+
+
+def test_emergency_changes_do_not_consume_the_weekly_tenant_quota(admin, user, tenant, next_monday):
+    create_booking(user, tenant, next_monday, 1)
+    create_booking(user, tenant, next_monday, 2)
+    # Quota is spent for normal changes...
+    assert user.post("/api/bookings", json=booking_payload(tenant, next_monday, 3)).status_code == 409
+    # ...but emergency changes are outside it entirely.
+    assert admin.post("/api/bookings", json=emergency_payload(tenant, next_monday)).status_code == 201
+
+
+def test_emergency_change_requires_reason_and_justification(admin, tenant, next_monday):
+    no_reason = admin.post(
+        "/api/bookings", json=emergency_payload(tenant, next_monday, emergency_reason="")
     )
-    assert emergency.status_code == 201, emergency.text
+    assert no_reason.status_code == 400
+    assert "Emergency Reason is required" in no_reason.json()["detail"]
+
+    no_justification = admin.post(
+        "/api/bookings", json=emergency_payload(tenant, next_monday, business_justification="  ")
+    )
+    assert no_justification.status_code == 400
+    assert "Business Justification is required" in no_justification.json()["detail"]
 
 
-def test_emergency_slot_is_visible_but_locked_to_the_public(client, next_monday):
-    schedule = client.get(f"/api/schedule?week={next_monday.isoformat()}").json()
-    slot5 = schedule["days"][0]["slots"][4]
-    assert slot5["is_emergency"] is True
-    assert slot5["state"] == "EMERGENCY_AVAILABLE"
-    assert slot5["bookable_by_public"] is False
-    assert slot5["bookable_by_admin"] is True
+def test_only_admins_can_edit_or_cancel_an_emergency_change(admin, user, tenant, next_monday):
+    created = admin.post("/api/bookings", json=emergency_payload(tenant, next_monday)).json()
+    booking_id = created["booking"]["id"]
+
+    # A tenant user is not the owner and is refused before any rule runs.
+    assert user.get(f"/api/bookings/{booking_id}").status_code == 403
+    assert (
+        user.put(f"/api/bookings/{booking_id}", json=emergency_payload(tenant, next_monday)).status_code
+        == 403
+    )
+    assert user.request("DELETE", f"/api/bookings/{booking_id}", json={}).status_code == 403
+
+    edited = admin.put(
+        f"/api/bookings/{booking_id}",
+        json=emergency_payload(tenant, next_monday, emergency_approver="Director of Platform"),
+    )
+    assert edited.status_code == 200
+    assert edited.json()["emergency_approver"] == "Director of Platform"
+    assert admin.request("DELETE", f"/api/bookings/{booking_id}", json={}).status_code == 200
 
 
-def test_public_cannot_edit_an_emergency_booking(client, admin_headers, next_monday):
-    created = client.post(
-        "/api/bookings", json=emergency_payload(next_monday), headers=admin_headers
-    ).json()
-    payload = booking_payload(next_monday, 5)
-    payload.pop("booking_pin")
-    payload.pop("confirm_booking_pin")
-    payload["credentials"] = {
-        "requester_email": "rahul.menon@example.com",
-        "booking_pin": "123456",
-    }
-    response = client.put(f"/api/bookings/{created['booking']['id']}", json=payload)
-    assert response.status_code == 403
+def test_emergency_changes_are_never_reported_as_locked(admin, tenant, next_monday):
+    """They have no slot start time, so the freeze window does not apply."""
+    admin.put("/api/admin/settings", json={"booking_freeze_hours": 720})
+    created = admin.post("/api/bookings", json=emergency_payload(tenant, next_monday)).json()
+    assert created["booking"]["is_locked"] is False
 
 
-def test_admin_creates_a_holiday_and_it_blocks_bookings(client, admin_headers, next_monday):
-    created = client.post(
+def test_emergency_queue_can_be_closed_for_a_date(admin, tenant, next_monday):
+    admin.put(
+        "/api/admin/overrides",
+        json={"override_date": next_monday.isoformat(), "emergency_enabled": False},
+    )
+    board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert _day(board)["emergency_open"] is False
+
+    response = admin.post("/api/bookings", json=emergency_payload(tenant, next_monday))
+    assert response.status_code == 400
+    assert "disabled" in response.json()["detail"]
+
+
+def test_emergency_changes_cannot_be_scheduled_on_a_weekend(admin, tenant, next_monday):
+    saturday = next_monday + timedelta(days=5)
+    response = admin.post("/api/bookings", json=emergency_payload(tenant, saturday))
+    assert response.status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Holidays
+# --------------------------------------------------------------------------- #
+
+
+def test_full_day_holiday_blocks_normal_changes(admin, user, tenant, next_monday):
+    created = admin.post(
         "/api/admin/holidays",
         json={
             "holiday_date": next_monday.isoformat(),
@@ -78,114 +161,108 @@ def test_admin_creates_a_holiday_and_it_blocks_bookings(client, admin_headers, n
             "is_full_day": True,
             "allow_emergency": True,
         },
-        headers=admin_headers,
     )
     assert created.status_code == 201, created.text
 
-    blocked = client.post("/api/bookings", json=booking_payload(next_monday, 1))
+    blocked = user.post("/api/bookings", json=booking_payload(tenant, next_monday, 1))
     assert blocked.status_code == 400
     assert "no production deployments available" in blocked.json()["detail"].lower()
 
-    schedule = client.get(f"/api/schedule?week={next_monday.isoformat()}").json()
-    monday = schedule["days"][0]
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    monday = _day(board)
     assert monday["holiday"]["name"] == "Indian Public Holiday"
     assert monday["regular_slots_total"] == 0
-    assert all(s["state"] == "HOLIDAY" for s in monday["slots"] if not s["is_emergency"])
-    assert schedule["summary"]["holidays"] == 1
+    assert all(slot["state"] == "HOLIDAY" for slot in monday["slots"])
+    assert board["summary"]["holidays"] == 1
 
 
-def test_emergency_stays_open_on_a_holiday_when_allowed(client, admin_headers, next_monday):
-    client.post(
+def test_holiday_can_keep_the_emergency_queue_open(admin, tenant, next_monday):
+    admin.post(
         "/api/admin/holidays",
         json={"holiday_date": next_monday.isoformat(), "name": "Festival", "allow_emergency": True},
-        headers=admin_headers,
     )
-    response = client.post(
-        "/api/bookings", json=emergency_payload(next_monday), headers=admin_headers
-    )
-    assert response.status_code == 201, response.text
+    board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert _day(board)["emergency_open"] is True
+    assert admin.post("/api/bookings", json=emergency_payload(tenant, next_monday)).status_code == 201
 
 
-def test_emergency_blocked_on_a_holiday_when_disallowed(client, admin_headers, next_monday):
-    client.post(
+def test_holiday_can_close_the_emergency_queue(admin, tenant, next_monday):
+    admin.post(
         "/api/admin/holidays",
         json={"holiday_date": next_monday.isoformat(), "name": "Festival", "allow_emergency": False},
-        headers=admin_headers,
     )
-    response = client.post(
-        "/api/bookings", json=emergency_payload(next_monday), headers=admin_headers
-    )
+    board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert _day(board)["emergency_open"] is False
+
+    response = admin.post("/api/bookings", json=emergency_payload(tenant, next_monday))
     assert response.status_code == 400
     assert "not permitted on this holiday" in response.json()["detail"]
 
 
-def test_partial_holiday_keeps_regular_slots_open(client, admin_headers, next_monday):
-    client.post(
+def test_partial_holiday_keeps_normal_slots_open(admin, user, tenant, next_monday):
+    admin.post(
         "/api/admin/holidays",
-        json={
-            "holiday_date": next_monday.isoformat(),
-            "name": "Half day",
-            "is_full_day": False,
-        },
-        headers=admin_headers,
+        json={"holiday_date": next_monday.isoformat(), "name": "Half day", "is_full_day": False},
     )
-    assert client.post("/api/bookings", json=booking_payload(next_monday, 1)).status_code == 201
+    assert user.post("/api/bookings", json=booking_payload(tenant, next_monday, 1)).status_code == 201
 
 
-def test_holiday_update_and_delete(client, admin_headers, next_monday):
-    created = client.post(
-        "/api/admin/holidays",
-        json={"holiday_date": next_monday.isoformat(), "name": "Placeholder"},
-        headers=admin_headers,
-    ).json()
-    updated = client.put(
-        f"/api/admin/holidays/{created['id']}",
+def test_holiday_crud_and_duplicate_protection(admin, next_monday):
+    body = {"holiday_date": next_monday.isoformat(), "name": "Placeholder"}
+    created = admin.post("/api/admin/holidays", json=body)
+    assert created.status_code == 201
+    assert admin.post("/api/admin/holidays", json=body).status_code == 409
+
+    holiday_id = created.json()["id"]
+    updated = admin.put(
+        f"/api/admin/holidays/{holiday_id}",
         json={"holiday_date": next_monday.isoformat(), "name": "Renamed", "is_full_day": True},
-        headers=admin_headers,
     )
     assert updated.status_code == 200
     assert updated.json()["name"] == "Renamed"
 
-    assert (
-        client.delete(f"/api/admin/holidays/{created['id']}", headers=admin_headers).status_code == 204
-    )
-    assert client.get("/api/admin/holidays", headers=admin_headers).json() == []
+    assert admin.delete(f"/api/admin/holidays/{holiday_id}").status_code == 204
+    assert admin.get("/api/admin/holidays").json() == []
 
 
-def test_duplicate_holiday_is_rejected(client, admin_headers, next_monday):
-    body = {"holiday_date": next_monday.isoformat(), "name": "Holiday"}
-    assert client.post("/api/admin/holidays", json=body, headers=admin_headers).status_code == 201
-    assert client.post("/api/admin/holidays", json=body, headers=admin_headers).status_code == 409
+def test_holiday_management_is_admin_only(user, anon, next_monday):
+    body = {"holiday_date": next_monday.isoformat(), "name": "Nope"}
+    assert anon.post("/api/admin/holidays", json=body).status_code == 401
+    assert user.post("/api/admin/holidays", json=body).status_code == 403
 
 
-def test_holiday_management_requires_admin(client, next_monday):
-    response = client.post(
-        "/api/admin/holidays", json={"holiday_date": next_monday.isoformat(), "name": "Nope"}
-    )
-    assert response.status_code == 401
+# --------------------------------------------------------------------------- #
+# Per-day slot overrides
+# --------------------------------------------------------------------------- #
 
 
-def test_daily_override_reduces_the_slots_for_one_date(client, admin_headers, next_monday):
+def test_daily_override_reduces_normal_capacity_for_one_date(admin, user, tenant, next_monday):
     tuesday = next_monday + timedelta(days=1)
-    response = client.put(
+    response = admin.put(
         "/api/admin/overrides",
         json={
             "override_date": tuesday.isoformat(),
             "regular_slots": 2,
-            "emergency_enabled": False,
             "note": "Change freeze window",
         },
-        headers=admin_headers,
     )
     assert response.status_code == 200
 
-    schedule = client.get(f"/api/schedule?week={next_monday.isoformat()}").json()
-    assert schedule["days"][0]["regular_slots_total"] == 4  # Monday untouched
-    assert schedule["days"][1]["regular_slots_total"] == 2
-    assert schedule["days"][1]["slots"][4]["state"] == "DISABLED"
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert _day(board, 0)["regular_slots_total"] == 4  # Monday untouched
+    assert _day(board, 1)["regular_slots_total"] == 2
+    assert _day(board, 1)["slots"][2]["state"] == "DISABLED"
 
-    assert client.post("/api/bookings", json=booking_payload(tuesday, 3)).status_code == 400
-    assert (
-        client.post("/api/bookings", json=emergency_payload(tuesday), headers=admin_headers).status_code
-        == 400
-    )
+    assert user.post("/api/bookings", json=booking_payload(tenant, tuesday, 3)).status_code == 400
+    assert user.post("/api/bookings", json=booking_payload(tenant, tuesday, 2)).status_code == 201
+
+
+def test_daily_override_can_be_cleared(admin, user, next_monday):
+    tuesday = next_monday + timedelta(days=1)
+    created = admin.put(
+        "/api/admin/overrides", json={"override_date": tuesday.isoformat(), "regular_slots": 1}
+    ).json()
+    assert admin.delete(f"/api/admin/overrides/{created['id']}").status_code == 204
+
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert _day(board, 1)["regular_slots_total"] == 4

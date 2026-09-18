@@ -62,9 +62,9 @@ export function ScheduleSummary({ summary, myBookingCount, onShowMine }: Schedul
         tone="bg-brand-50"
       />
       <Card
-        label="My bookings"
+        label="My changes"
         value={String(myBookingCount)}
-        hint={myBookingCount ? 'Verified this session' : 'Verify with email + PIN'}
+        hint={myBookingCount ? 'Click to filter the board' : 'None scheduled by you this week'}
         icon={<User className="size-4 text-teal-600" />}
         tone="bg-teal-50"
         onClick={onShowMine}
@@ -77,9 +77,9 @@ export function ScheduleSummary({ summary, myBookingCount, onShowMine }: Schedul
         tone="bg-amber-50"
       />
       <Card
-        label="Emergency slots"
-        value={`${summary.emergency_slots_total - summary.emergency_slots_booked} / ${summary.emergency_slots_total}`}
-        hint="Administrator only"
+        label="Emergency CRs"
+        value={String(summary.emergency_changes)}
+        hint="Admin-only queue"
         icon={<Siren className="size-4 text-orange-600" />}
         tone="bg-orange-50"
       />

@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     app_name: str = "Production Deployment Scheduler"
     environment: str = "development"
 
-    # SQLite by default; set DATABASE_URL=postgresql+psycopg://... to move to Postgres.
-    database_url: str = Field(default=f"sqlite:///{(PROJECT_ROOT / 'storage' / 'scheduler.db').as_posix()}")
+    database_url: str = Field(
+        default="postgresql+psycopg://scheduler:change-me-in-production@localhost:5432/scheduler"
+    )
 
     storage_dir: Path = PROJECT_ROOT / "storage" / "deployments"
 
@@ -33,10 +34,10 @@ class Settings(BaseSettings):
     # Auth
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    admin_session_minutes: int = 480
+    session_minutes: int = 480
 
-    admin_username: str = "admin"
-    admin_password: str = "ChangeMe#2026"
+    bootstrap_admin_username: str = "admin"
+    bootstrap_admin_password: str = "admin2024"
 
     # Empty by default: the monolith serves the SPA from its own origin, and
     # the Vite dev server proxies /api, so no cross-origin request is ever
@@ -56,8 +57,8 @@ def get_settings() -> Settings:
     if settings.environment.lower() == "production":
         if settings.jwt_secret == Settings.model_fields["jwt_secret"].default:
             raise RuntimeError("JWT_SECRET must be set to a unique value in production.")
-        if settings.admin_password == Settings.model_fields["admin_password"].default:
-            raise RuntimeError("ADMIN_PASSWORD must be set to a unique value in production.")
+        if settings.bootstrap_admin_password == Settings.model_fields["bootstrap_admin_password"].default:
+            raise RuntimeError("BOOTSTRAP_ADMIN_PASSWORD must be set to a unique value in production.")
     elif len(settings.jwt_secret) < 32:
         logging.getLogger("scheduler").warning(
             "JWT_SECRET is shorter than 32 characters; set a longer secret before deploying."

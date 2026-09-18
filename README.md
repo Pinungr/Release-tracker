@@ -1,169 +1,206 @@
 # Production Deployment Scheduler
 
 A web replacement for the weekly production deployment scheduling spreadsheet.
-Users reserve production deployment slots for independently managed tenants
-from a single page; administrators manage the tenant master and application
-configuration.
+People sign in, pick a **tenant**, and reserve a production deployment slot for
+the week. Administrators manage users, tenants, holidays, slots and emergency
+changes.
 
 ---
 
-## 1. Application overview
+## 1. Architecture
 
-* One main page: a **Monday–Friday weekly deployment board**.
-* Each working day has **four regular slots** plus a **fifth emergency slot**
-  that only administrators can book.
-* **Users authenticate as people, not tenants.** Registration and login use
-  full name, username/email and password only. A person can schedule CRs for
-  multiple tenants.
-* The tenant is selected during CR scheduling from the active tenant master.
-  Each booking stores both its selected `tenant_id` and `created_by_user_id`.
-* Editing, cancelling and document upload require the **requester email + PIN**
-  (verified on the server), and stop **48 hours** before the deployment
-  (configurable).
-* Administrators log in, and can configure slots, holidays, per-day overrides,
-  the weekly limit and the mandatory document list; they can also override any
-  rule, with the reason recorded in the audit trail.
-* Every booking tracks JIRA change/task, selected tenant, creator, requester,
-  verifier, Git repository, implementation detail and **six document
-  categories** with a readiness indicator.
+A **single monolithic application**: one process, one port, one origin. The
+FastAPI app owns the database, the business rules, the REST API, the uploaded
+documents *and* the compiled React frontend. PostgreSQL runs beside it in
+Docker and is never exposed to the host.
 
-### Business rules (all enforced server-side)
+```
+                         USERS
+                           │
+                     Login / Sign up
+                           │
+                           ▼
+                     FastAPI Auth
+                           │
+                           ▼
+                   PostgreSQL  users
+                           │
+                         role
+                  ┌────────┴────────┐
+                  │                 │
+            TENANT_USER           ADMIN
+                  │                 │
+                  └────────┬────────┘
+                           │
+                   Release Scheduler
+                           │
+                     Schedule a CR
+                           │
+                     Select Tenant
+                           │
+                           ▼
+                    DeploymentBooking
+                     /            \
+          created_by_user_id     tenant_id
+```
 
-| Rule | Default | Where it is configurable |
+**A user is a person; a tenant is chosen per change record.** One person can
+schedule changes for many tenants. There is no permanent user-to-tenant
+assignment anywhere in the system.
+
+```
+Pinaki
+ ├── CR1 → Tenant A
+ ├── CR2 → Tenant B
+ └── CR3 → Tenant C
+```
+
+### Request routing inside the one process
+
+| Request | Handled by |
+| --- | --- |
+| `/api/...` | API routers; unknown paths return a JSON 404 |
+| `/health`, `/health/ready` | liveness and readiness probes (readiness pings the database) |
+| `/docs`, `/redoc`, `/openapi.json` | FastAPI's own docs |
+| an existing file under `frontend/dist` | served directly (hashed assets cached for a year; `index.html` never cached) |
+| anything else | `index.html`, so React handles the client-side route |
+
+Because the UI is served from the origin it then calls, no cross-origin request
+is ever made and CORS is not involved.
+
+### Project layout
+
+```
+production-deployment-scheduler/
+├── backend/
+│   ├── app/
+│   │   ├── __main__.py          `python -m app` — starts the whole thing
+│   │   ├── main.py              app assembly, middleware, health, SPA mount
+│   │   ├── web.py               serves the compiled SPA
+│   │   ├── config.py            env-driven settings
+│   │   ├── database.py          SQLAlchemy engine/session
+│   │   ├── models/              User, Tenant, DeploymentBooking, BookingAttachment,
+│   │   │                        Holiday, DeploymentSlotConfiguration,
+│   │   │                        DailySlotOverride, ApplicationSetting, BookingAudit
+│   │   ├── schemas/             Pydantic request/response models
+│   │   ├── api/                 auth, schedule, bookings, attachments, tenants, admin
+│   │   ├── services/            business rules (the source of truth)
+│   │   ├── security/            hashing, JWT, auth dependencies, rate limiting
+│   │   ├── utils/               date/timezone helpers, safe file storage
+│   │   └── seed.py              demo data
+│   ├── tests/                   131 backend tests
+│   └── requirements.txt
+├── frontend/                    React + TypeScript + Vite + Tailwind CSS v4
+│   └── src/
+│       ├── components/          SignInScreen, AppHeader, WeekNavigator,
+│       │                        ScheduleSummary, WeeklySchedule, DaySchedule,
+│       │                        DeploymentSlot, BookingDrawer, BookingForm,
+│       │                        BookingDetailsDrawer, DocumentUploader,
+│       │                        DocumentReadiness, ProfileModal, AdminPanel,
+│       │                        AdminUserManager, AdminTenantManager,
+│       │                        AuditHistory, Drawer, Modal, Toast, Icons
+│       ├── hooks/               useAuthSession, useSchedule
+│       ├── services/api.ts      REST client
+│       ├── types/               API types
+│       └── utils/               date + formatting helpers
+├── Dockerfile                   multi-stage: build the SPA, then run the app
+├── docker-compose.yml           app + postgres, both with persistent volumes
+├── .env.example
+└── README.md
+```
+
+**Architectural rule:** the backend is the source of truth. Authentication,
+ownership, the tenant weekly limit, the freeze window, holiday blocking and
+emergency-change access are all revalidated in the API on every write. The
+frontend's copies exist only for immediate feedback.
+
+---
+
+## 2. Roles and access
+
+| | TENANT_USER | ADMIN |
 | --- | --- | --- |
-| Regular slots per day | 4 | Admin → General, Slots, Daily override |
-| Emergency slot | Slot 5, admin only | Admin → General, Slots, Daily override |
-| Regular bookings per tenant per calendar week | 2 | Admin → General |
-| Edit/cancel freeze before deployment | 48 hours | Admin → General |
+| Sign up | self-service | promoted by an admin |
+| See the weekly board | ✅ | ✅ |
+| Schedule a normal change | ✅ | ✅ |
+| See / edit / cancel a change | only their own | any |
+| Upload and download documents | only on their own changes | any |
+| Emergency changes | view only | create, edit, cancel |
+| Exceed the tenant weekly limit | ❌ | ✅ with an audited reason |
+| Edit inside the freeze window | ❌ | ✅ with an audited reason |
+| Users, tenants, holidays, slots, settings, audit | ❌ | ✅ |
+
+Everyone uses **one login**. There is no separate administrator sign-in and no
+separate administrator table — `users.role` is the only thing that grants
+administrator access, and it is re-read from the database on every request, so
+promoting, demoting or deactivating an account takes effect immediately.
+
+---
+
+## 3. Business rules
+
+| Rule | Default | Configurable in |
+| --- | --- | --- |
+| Normal deployment slots per day | 4 | Admin → General / Slots / Daily override |
+| Emergency changes | unlimited per date, admin only | Admin → General / Daily override |
+| Normal changes per **tenant** per week | 2 | Admin → General |
+| Edit/cancel freeze before deployment | **48 hours** | Admin → General |
 | Maximum upload size | 20 MB per file | Admin → General |
 | Mandatory documents | Test result, inventory, implementation plan, validation plan | Admin → Documents |
 | Working week | Monday–Friday | fixed |
 | Timezone | Asia/Kolkata | `TIMEZONE` |
 
-Emergency bookings never count against a tenant's weekly limit. A full-day
-holiday closes every regular slot; the emergency slot can optionally stay open.
+**The weekly limit is per tenant, not per user.** If user A and user B each
+schedule one change for Tenant X in the same week, Tenant X is at 2/2 and
+nobody may add a third — but both users still have the full quota available
+for any other tenant.
+
+**Emergency changes are a queue, not a slot.** Any number can sit on the same
+date, they carry no slot number, they never consume normal deployment capacity,
+and they never count against a tenant's weekly quota.
+
+```
+DAY
+├── Normal Slot 1   07:00 – 09:00
+├── Normal Slot 2   09:00 – 11:00
+├── Normal Slot 3   11:00 – 13:00
+├── Normal Slot 4   14:00 – 16:00
+│
+└── Emergency CR queue        (admin only)
+      ├── Emergency CR 1
+      ├── Emergency CR 2
+      └── + Add emergency CR
+```
 
 ---
 
-## 2. Architecture
+## 4. Requirements
 
-A **single monolithic application**: one process, one port, one origin. The
-FastAPI app owns the database, the business rules, the REST API, the uploaded
-files *and* the compiled React frontend. There is no reverse proxy, no API
-gateway, no second web server and no service boundary to keep in sync.
-
-```
-                       ┌──────────────────────────────────────┐
-   browser  ──────────▶│  python -m app      (port 8000)      │
-                       │                                      │
-   GET  /              │  web.py     → frontend/dist (SPA)    │
-   GET  /booking/...   │  web.py     → index.html (SPA route) │
-   GET  /assets/...    │  web.py     → hashed, immutable      │
-   POST /api/bookings  │  api/       → services/ → SQLAlchemy │
-   GET  /api/.../file  │  api/       → storage/deployments/   │
-                       │                                      │
-                       │  storage/scheduler.db  (SQLite)      │
-                       └──────────────────────────────────────┘
-```
-
-The frontend is a separate *build*, not a separate *deployment*: Vite compiles
-it to `frontend/dist`, and the same Python process serves that directory.
-Because the SPA is delivered from the origin it then calls, the browser never
-makes a cross-origin request and CORS is not involved at all.
-
-```
-production-deployment-scheduler/
-├── backend/                     the application
-│   ├── app/
-│   │   ├── __main__.py          `python -m app` — starts the whole thing
-│   │   ├── main.py              app assembly, middleware, router + SPA mount
-│   │   ├── web.py               serves the compiled SPA and its assets
-│   │   ├── config.py            env-driven settings
-│   │   ├── database.py          SQLAlchemy engine/session (SQLite → Postgres)
-│   │   ├── models/              AdminUser, DeploymentBooking, BookingAttachment,
-│   │   │                        Holiday, DailySlotOverride, DeploymentSlotConfiguration,
-│   │   │                        ApplicationSetting, BookingAudit
-│   │   ├── schemas/             Pydantic request/response models
-│   │   ├── api/                 schedule, bookings, attachments, admin routers
-│   │   ├── services/            business rules (the source of truth)
-│   │   ├── security/            hashing, JWT, auth deps, rate limiting
-│   │   ├── utils/               date/timezone helpers, safe file storage
-│   │   └── seed.py              development sample data
-│   ├── tests/                   100 backend tests
-│   └── requirements.txt
-├── frontend/                    React + TypeScript + Vite + Tailwind CSS v4
-│   ├── dist/                    build output, served by the Python process
-│   └── src/
-│       ├── components/          AppHeader, WeekNavigator, ScheduleSummary,
-│       │                        WeeklySchedule, DaySchedule, DeploymentSlot,
-│       │                        BookingDrawer, BookingForm, BookingDetailsDrawer,
-│       │                        DocumentUploader, DocumentReadiness,
-│       │                        OwnerVerificationModal, MyBookingsModal,
-│       │                        AdminLoginModal, AdminPanel, AuditHistory,
-│       │                        ToastNotification, Modal, Drawer, Icons
-│       ├── hooks/               useSchedule, useAdminSession
-│       ├── services/api.ts      REST client
-│       ├── types/               API types
-│       └── utils/               date + formatting helpers
-├── storage/                     runtime data (git-ignored)
-│   ├── scheduler.db             SQLite database
-│   └── deployments/<booking-id>/<category>/
-├── .env.example
-└── README.md
-```
-
-**Architectural rule:** the backend is the source of truth. Slot availability,
-the weekly limit, ownership, the emergency-slot restriction, freeze
-calculations and holiday handling are all revalidated in the API on every
-write. The frontend's copies exist only for immediate feedback.
-
-Communication is plain REST/JSON over relative `/api` paths. Request routing
-inside the process:
-
-| Request | Handled by |
-| --- | --- |
-| `/api/...` | the API routers; an unknown path returns a JSON 404 |
-| `/docs`, `/redoc`, `/openapi.json` | FastAPI's own docs |
-| an existing file under `frontend/dist` | served directly (hashed assets get a one-year immutable cache; `index.html` is never cached) |
-| anything else | `index.html`, so React handles the client-side route |
-
-The SPA catch-all is registered last, so a real endpoint always wins. Static
-paths are resolved and then re-checked against the build directory, so a
-crafted URL cannot read a file outside it.
+* **Docker Desktop** (Windows/macOS) or Docker Engine + Compose plugin (Linux).
+* For local development without Docker: Python 3.11+ and Node.js 20+.
 
 ---
 
-## 3. Prerequisites
-
-* Python 3.11+ (developed on 3.14)
-* Node.js 20+ (developed on 24)
-* No database server required — SQLite is the default.
-
----
-
-## 4. Configuration
+## 5. Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-Then edit `.env`:
+Edit `.env` — at minimum set `JWT_SECRET`, `POSTGRES_PASSWORD` and
+`BOOTSTRAP_ADMIN_PASSWORD` before exposing the app to anyone.
 
 ```ini
-ENVIRONMENT=development
-DATABASE_URL=sqlite:///./storage/scheduler.db
-STORAGE_DIR=./storage/deployments
+ENVIRONMENT=production
+POSTGRES_DB=scheduler
+POSTGRES_USER=scheduler
+POSTGRES_PASSWORD=<strong password>
 JWT_SECRET=<long random string>
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=<strong password>
-FRONTEND_DIST=./frontend/dist
-CORS_ORIGINS=
+BOOTSTRAP_ADMIN_USERNAME=admin
+BOOTSTRAP_ADMIN_PASSWORD=<strong password>
 TIMEZONE=Asia/Kolkata
+CORS_ORIGINS=
 ```
-
-Leave `CORS_ORIGINS` empty. The UI is served from the same origin as the API,
-so nothing is cross-origin; set it only if you deliberately host the UI
-elsewhere.
 
 Generate a secret:
 
@@ -171,20 +208,86 @@ Generate a secret:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-`ADMIN_USERNAME` / `ADMIN_PASSWORD` seed **one** administrator on first start.
-The password is hashed with bcrypt immediately and never stored in clear text.
-If that username already exists the row is left untouched, so changing the env
-var later will not silently reset a chosen password. With
-`ENVIRONMENT=production` the app refuses to start while `JWT_SECRET` or
-`ADMIN_PASSWORD` are still at their placeholder values.
+With `ENVIRONMENT=production` the app refuses to start while `JWT_SECRET` or
+`BOOTSTRAP_ADMIN_PASSWORD` are still at their placeholder values.
+
+### Bootstrap administrator
+
+On first start the app creates **one** administrator in the ordinary `users`
+table from `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD`:
+
+```
+IF that username does not exist:
+    create the user, hash the password with bcrypt, role = ADMIN
+ELSE:
+    do nothing
+```
+
+The password is hashed immediately and never stored in clear text. An existing
+account is left untouched, so restarting never resets a password somebody has
+already changed.
+
+**POC default: `admin` / `admin2024`. Change it before any real use.**
 
 ---
 
-## 5. Install and run
+## 6. Running with Docker
 
-Three commands to install, one to run.
+### Windows (Docker Desktop)
 
-### 1. Install the application
+Start Docker Desktop, then from the project folder in PowerShell:
+
+```powershell
+docker compose up -d --build
+```
+
+### Linux
+
+```bash
+docker compose up -d --build
+```
+
+Open <http://localhost:8000>.
+
+PostgreSQL runs on the internal Compose network as `postgres:5432` and is
+**not** published to the host. The application reaches it over that network
+only.
+
+Useful commands:
+
+```bash
+docker compose logs -f app
+```
+
+```bash
+docker compose ps
+```
+
+```bash
+docker compose down
+```
+
+`docker compose down` keeps the `postgres-data` and `app-storage` volumes.
+Use `docker compose down -v` only when you intend to destroy all data.
+
+### Health checks
+
+```bash
+curl http://localhost:8000/health
+```
+
+```bash
+curl http://localhost:8000/health/ready
+```
+
+`/health/ready` runs a real query against PostgreSQL and returns 503 when the
+database is unreachable; Compose uses it as the app container's healthcheck.
+
+---
+
+## 7. Local development without Docker
+
+You need a PostgreSQL to point at, or SQLite for a quick local run.
 
 ```bash
 cd backend && python -m venv .venv
@@ -194,170 +297,93 @@ cd backend && python -m venv .venv
 cd backend && .venv/Scripts/python -m pip install -r requirements.txt
 ```
 
-(macOS/Linux: `.venv/bin/python` instead of `.venv/Scripts/python` throughout.)
-
-### 2. Build the frontend
-
-```bash
-cd frontend && npm install && npm run build
-```
-
-This writes `frontend/dist`, which the application serves. Repeat it whenever
-you change frontend code (or use the dev server in §6 while working on it).
-
-### 3. Start the application
-
-```bash
-cd backend && .venv/Scripts/python -m app
-```
-
-That is the whole system: **<http://127.0.0.1:8000>** serves the scheduler UI,
-the REST API and the uploaded documents. Interactive API docs are at
-<http://127.0.0.1:8000/docs>.
-
-Options:
-
-```bash
-cd backend && .venv/Scripts/python -m app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-```bash
-cd backend && .venv/Scripts/python -m app --reload
-```
-
-`python -m app` is a thin wrapper around uvicorn, so the explicit form works
-too:
-
-```bash
-cd backend && .venv/Scripts/python -m uvicorn app.main:app --port 8000
-```
-
-If the frontend has not been built, the API still starts and the web root
-shows the build instructions instead of the board.
-
-### Database initialisation
-
-The schema, the default slot grid (4 regular + 1 emergency) and the seed
-administrator are created automatically on first start — no migration step is
-required. To do it explicitly:
-
-```bash
-cd backend && .venv/Scripts/python -c "from app.services import bootstrap; bootstrap.initialise()"
-```
-
-### Sample data (development only)
-
-```bash
-cd backend && .venv/Scripts/python -m app.seed
-```
-
-This adds the 14 Sep 2026 *Indian Public Holiday*, two bookings on 15 Sep 2026
-(Encounters / CHG0920798 / Databricks and EPCAT / CHG0920763 / AzDF) and one
-booking next week. **Every sample booking uses PIN `123456`.**
-
----
-
-## 6. Frontend development (optional)
-
-For hot-reloading while editing React code, run Vite alongside the application
-and work on <http://localhost:5173> instead. Vite proxies `/api` to port 8000,
-so the browser still only talks to one origin and no CORS configuration is
-needed.
-
-```bash
-cd frontend && npm run dev
-```
-
-This is a development convenience only — nothing is deployed this way. When
-you are finished, `npm run build` and go back to port 8000.
-
-```bash
-cd frontend && npm run typecheck
-```
-
----
-
-## 7. Deployment
-
-The deployable unit is the repository plus a built frontend. There is nothing
-to orchestrate.
+(macOS/Linux: `.venv/bin/python` throughout.)
 
 ```bash
 cd frontend && npm ci && npm run build
 ```
 
 ```bash
-cd backend && .venv/Scripts/python -m app --host 0.0.0.0 --port 8000 --workers 4
+cd backend && .venv/Scripts/python -m app
 ```
 
-Put TLS in front of it (nginx, Caddy, a load balancer) if it is internet
-facing. A proxy is optional and only terminates TLS — it does not need to route
-`/api` separately:
+The schema, the default four-slot grid and the bootstrap administrator are
+created automatically on first start.
 
-```nginx
-location / { proxy_pass http://127.0.0.1:8000; }
-```
-
-A systemd unit is enough to run it as a service:
-
-```ini
-[Service]
-WorkingDirectory=/srv/pds/backend
-EnvironmentFile=/srv/pds/.env
-ExecStart=/srv/pds/backend/.venv/bin/python -m app --host 0.0.0.0 --port 8000 --workers 4
-Restart=always
-```
-
-With SQLite, keep `--workers 1` for write-heavy use or move to PostgreSQL (§11)
-before scaling out; multiple workers also mean the login rate limiter and the
-logout revocation list are per-worker.
-
----
-
-## 8. Testing
+For hot-reloading React work, run Vite alongside it and use
+<http://localhost:5173>; Vite proxies `/api` to port 8000, so the browser still
+talks to a single origin:
 
 ```bash
-cd backend && .venv/Scripts/python -m pytest
+cd frontend && npm run dev
 ```
 
-100 tests cover the rules that matter:
+### Demo data
 
-* booking succeeds without login; reference numbers are sequential and unique
-* a slot cannot be double-booked — including **eight concurrent threads racing
-  for one slot**, where exactly one wins and the rest get a 409
-* the emergency slot is refused to the public and accepted for an admin
-* emergency bookings require a reason and a justification
-* the weekly tenant limit blocks the third booking, is case-insensitive, resets
-  next week, and can be overridden by an admin *with a recorded reason*
-* ownership: right PIN edits, wrong PIN and another user's email are refused
-* the freeze window blocks public edit/cancel and allows admin edits
-* holidays block regular slots, can keep or close the emergency slot, and
-  partial holidays stay open
-* daily overrides reduce slots and disable the emergency slot for one date
-* document readiness, mandatory-document configuration, file-type/size limits,
-  filename sanitisation and path-traversal safety
-* attachment download requires an admin session or the booking's own token
-* admin authentication, rate limiting, logout revocation, and the audit trail
-* the monolith's serving layer: the API and UI answer on one origin with no
-  CORS headers, an unknown `/api` path returns JSON rather than HTML, `/docs`
-  is not swallowed by the SPA catch-all, client-side routes such as
-  `/booking/manage/<token>` fall back to the shell, hashed assets are cached
-  immutably while `index.html` is not, and traversal attempts like
-  `/assets/../../.env` cannot read outside the build directory
+```bash
+cd backend && .venv/Scripts/python -m app.seed
+```
 
-### Frontend scenarios verified manually in the browser
-
-Against the single process on port 8000: previous/next week and Today, the
-booking drawer and success screen, emergency booking as admin, booking details,
-ownership verification (masked contacts becoming visible), admin login/logout,
-the seven admin-control sections, holiday display, emergency-slot lock for the
-public, and the stacked mobile layout at 375 px with no horizontal scrolling.
+Creates three tenants, a holiday, three normal changes across three different
+tenants owned by one person, and one emergency change.
+Demo sign-in: **`demo.user` / `DemoPass!2026`**.
 
 ---
 
-## 9. File storage
+## 8. Using the application
 
-Attachments live outside the database:
+**As a tenant user**
+
+1. Open the URL and **Sign up** (full name, username, email, password,
+   confirm password), then sign in. New accounts are always `TENANT_USER`.
+2. Navigate with **Previous week / Next week / Today**.
+3. Click **Book slot** on a free slot. Choose the **tenant** in the drawer —
+   this is per change record, not per account.
+4. Attach the required documents; readiness shows as `3 / 4 required`.
+5. Your own changes are badged **My booking**; the **My changes** card filters
+   the board to them.
+6. Edit or cancel your own change up to **48 hours** before deployment. Inside
+   that window the drawer shows **Booking locked** instead of the buttons.
+7. **Profile** shows your account and lets you change your password.
+
+**As an administrator**
+
+1. Sign in with the same form; the header gains **Admin controls**.
+2. *Users* — promote/demote, activate/deactivate, reset a password. You never
+   see an existing password or hash. The last active administrator cannot be
+   demoted or deactivated.
+3. *Tenants* — add, edit, activate, deactivate. Only active tenants appear in
+   the scheduling form.
+4. *General* — slots per day, weekly limit, freeze hours, upload size.
+   *Slots* — names and times of the normal slots.
+   *Holidays* — full or partial day, emergency allowed or not.
+   *Daily override* — a different grid for one date.
+   *Documents* — which categories are mandatory.
+   *Bookings* — open, complete or permanently delete.
+   *Audit* — every create, edit, move, cancel, document change and override.
+5. **Add emergency CR** on any day's emergency queue. The form additionally
+   requires an emergency reason and business justification.
+6. Overriding the weekly limit or the freeze window asks for a reason, which is
+   stored in the audit trail.
+
+---
+
+## 9. Documents
+
+Six categories, four mandatory by default:
+
+| Category | Default | Files |
+| --- | --- | --- |
+| Non-Production Test Result | required | one |
+| Inventory File | required | one |
+| Implementation Plan | required | one |
+| Validation Plan | required | one |
+| DBA Script | optional | one |
+| Supporting Documents | optional | many |
+
+Accepted types: `.pdf .doc .docx .xls .xlsx .csv .txt .zip .sql .png .jpg .jpeg`
+
+Files live outside the database:
 
 ```
 storage/deployments/<booking-id>/
@@ -366,173 +392,201 @@ storage/deployments/<booking-id>/
 ```
 
 Stored filenames are freshly generated UUIDs plus a whitelisted extension; the
-name the user uploaded is kept only as a display label. Files are never
-executed, never served inline, and every resolved path is re-checked against
-the storage root.
-
-Allowed types: `.pdf .doc .docx .xls .xlsx .csv .txt .zip .sql .png .jpg .jpeg`
+uploaded name is kept only as a display label. Files are never executed, never
+served inline, and every resolved path is re-checked against the storage root.
+Upload and download require the authenticated owner or an administrator.
 
 ---
 
-## 10. Backup procedure
+## 10. Database administration
 
-Two things need backing up — the database and the uploaded documents. Both are
-under `storage/`.
+The database is PostgreSQL inside the Compose network.
 
 ```bash
-sqlite3 storage/scheduler.db ".backup 'backup/scheduler-$(date +%F).db'"
+docker compose exec postgres psql -U scheduler -d scheduler
 ```
 
 ```bash
-tar -czf backup/deployments-$(date +%F).tar.gz storage/deployments
+docker compose exec postgres psql -U scheduler -d scheduler -c "\dt"
 ```
 
-Take both in the same window so references and files stay consistent. Restore
-by stopping the app, replacing `storage/`, and starting it again. On PostgreSQL
-use `pg_dump` for the database and keep the same archive step for `storage/`.
+Tables: `users`, `tenants`, `deployment_bookings`, `booking_attachments`,
+`holidays`, `slot_configurations`, `daily_slot_overrides`,
+`application_settings`, `booking_audit`.
+
+The schema is created from the SQLAlchemy models on start-up. This POC has no
+migration tooling: after a model change, recreate the database
+(`docker compose down -v && docker compose up -d --build`).
 
 ---
 
-## 11. Moving to PostgreSQL
+## 11. Persistent storage and backup
 
-```ini
-DATABASE_URL=postgresql+psycopg://scheduler:secret@localhost:5432/scheduler
+Two named volumes hold everything that matters:
+
+| Volume | Contents |
+| --- | --- |
+| `postgres-data` | the PostgreSQL database |
+| `app-storage` | uploaded deployment documents |
+
+Back both up in the same window so records and files stay consistent.
+
+```bash
+docker compose exec -T postgres pg_dump -U scheduler scheduler > backup/scheduler-$(date +%F).sql
 ```
 
-Install the driver (`pip install "psycopg[binary]"`) and restart. No code
-changes are needed: the only SQLite-specific code is the connection pragma
-block in `app/database.py`, and the partial unique index that prevents double
-booking is declared for both dialects.
+```bash
+docker run --rm -v pds_app-storage:/data -v "$PWD/backup:/backup" alpine tar -czf /backup/documents-$(date +%F).tar.gz -C /data .
+```
+
+Restore by stopping the stack, restoring the volumes, and starting again. Check
+your actual volume names with `docker volume ls` — Compose prefixes them with
+the project directory name.
 
 ---
 
-## 12. Security notes
+## 12. Testing
 
-* **Passwords and PINs are hashed** with bcrypt (cost 12) over a SHA-256
-  pre-hash, so nothing is truncated at bcrypt's 72-byte limit. Neither is ever
-  stored, logged, returned by an API, or written to the audit trail.
-* **Admin sessions** are HS256 JWTs carried in `Authorization: Bearer`. No
-  cookies are issued, so there is no CSRF surface. Logout revokes the token id
-  server-side in addition to the client discarding it.
-* **Ownership is verified in the backend** on every edit, cancel, upload and
-  attachment delete. Credentials travel in the request body — a booking PIN is
-  never placed in a URL, query string or browser history.
-* **Attachment downloads** require an admin session or the booking's opaque
-  management token (rotated on each successful PIN verification). They are sent
-  as `application/octet-stream` with `nosniff` and a `Content-Disposition`
-  attachment header.
-* **Rate limiting** protects the three endpoints that accept secrets: admin
-  login (8 per 5 min per IP), PIN verification and *Find my bookings* (10 per
-  5 min per IP).
-* **Anonymous visitors see a redacted booking**: tenant, JIRA, verifier,
-  technology, status and document readiness are public, but requester and
-  verifier email addresses and phone numbers are masked until the owner
-  verifies or an admin signs in.
-* **Failed logins return one message** for an unknown user and a wrong
-  password, so the endpoint cannot be used to enumerate accounts.
+```bash
+cd backend && .venv/Scripts/python -m pytest
+```
+
+**131 tests, all passing.** They cover the rules that matter:
+
+* sign-up creates a TENANT_USER and can never self-grant ADMIN
+* login by username or email; identical message for unknown user and wrong
+  password; rate limiting; passwords stored bcrypt-hashed
+* the administrator signs in through the same login from the same users table
+* the bootstrap administrator is not reset on restart
+* promotion, demotion and deactivation take effect on the very next request
+* admin routes reject anonymous (401) and tenant users (403)
+* the board, tenant list and every booking route require authentication
+* a user can schedule for several tenants; tenants come only from the master
+  and scheduling never creates one as a side effect
+* ownership: the owner may read/edit/cancel; another user gets 403; an admin
+  may act on anything
+* 2 normal changes per tenant per week — shared across users, independent per
+  tenant, resets weekly, freed by cancellation, overridable by an admin *with
+  an audited reason*
+* the 48-hour freeze blocks the owner's edit, cancel and upload; an admin may
+  override with a reason
+* multiple emergency changes on one date, admin-only, consuming neither slots
+  nor quota; tenant users are refused
+* holidays block normal slots and can keep or close the emergency queue;
+  partial holidays stay open; daily overrides resize one date
+* document readiness, configurable mandatory set, file-type and size limits,
+  filename sanitisation, and owner/admin-only download
+* concurrency: eight simultaneous requests for one slot leave exactly one
+  winner; five simultaneous emergency changes on one date all succeed
+* the monolith's serving layer, including traversal attempts under `/assets`
+
+SQLite backs the test suite on purpose — it gives each test a fresh isolated
+schema in milliseconds. Production runs on PostgreSQL; nothing in the
+application depends on which of the two sits behind SQLAlchemy.
+
+```bash
+cd frontend && npm run typecheck
+```
+
+```bash
+cd frontend && npm run build
+```
+
+---
+
+## 13. Security notes
+
+* **Passwords are hashed** with bcrypt (cost 12) over a SHA-256 pre-hash, so
+  nothing is truncated at bcrypt's 72-byte limit. A password is never stored,
+  logged, returned by an API, or written to the audit trail — administrators
+  can set a new one but can never see an existing one.
+* **Sessions** are HS256 JWTs in `Authorization: Bearer`. The token carries
+  identity only; the **role is read from the database on every request**, so
+  there is exactly one source of truth for authorization. No cookies are
+  issued, so there is no CSRF surface. Logout revokes the token id server-side.
+* **Ownership** is `created_by_user_id` versus the authenticated caller,
+  checked in the API for every read, edit, cancel, upload, download and delete.
+* **Authentication is checked before authorization**, so an anonymous caller
+  always gets 401 and never a misleading 403.
+* **Rate limiting** protects sign-up, login and password change.
 * **Concurrency** is handled by a partial unique index on
-  `(deployment_date, slot_number)` for non-cancelled rows, not by a
-  check-then-insert, so a race can only ever produce one winner.
-* **Same-origin by construction.** Serving the UI from the application removes
-  CORS from the picture entirely: `CORS_ORIGINS` is empty by default and the
-  middleware is not even installed unless you set it.
-* **Static serving is confined to the build directory.** Every requested path
-  is resolved and re-checked against `frontend/dist`, so `/../.env` or
-  `/assets/../../.env` cannot read application files. Only existing files are
-  served; everything else returns the SPA shell.
-* Unhandled exceptions return a generic message; stack traces and SQL are
-  logged server-side only.
+  `(deployment_date, slot_number)` for non-cancelled, non-emergency rows — not
+  by a check-then-insert — so a race can only ever produce one winner.
+* **Self-lockout protection**: the last active administrator cannot be demoted
+  or deactivated.
+* PostgreSQL is not published to the host; the app talks to it over the
+  Compose network only.
+* Unhandled exceptions return a generic message; stack traces and SQL stay in
+  the server log.
 * Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`
   and `Referrer-Policy: no-referrer`.
 
-Before going live: set `ENVIRONMENT=production`, a unique `JWT_SECRET`, a strong
-`ADMIN_PASSWORD`, leave `CORS_ORIGINS` empty, and terminate TLS in front of the
-process.
+The container runs a **single worker** on purpose: the login rate limiter and
+the logout revocation list are process-local, so extra workers would weaken
+both. Move them to Redis before scaling out.
+
+### Future LDAP
+
+Authentication is already separated from authorization: `api/auth.py` verifies
+a credential and issues a token, while `security/deps.py` resolves the role
+from the `users` table. Swapping the credential check for LDAP later means
+touching the first of those only — PostgreSQL stays the authority for roles.
+No unused LDAP scaffolding ships today.
 
 ---
 
-## 13. API overview
+## 14. API overview
 
 All routes are under `/api` on the same origin as the UI. Interactive
 documentation: `/docs`.
 
-### Public
+### Authentication
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/schedule?week=YYYY-MM-DD` | One week of the board (any date inside it) |
-| `GET` | `/config` | Public settings: limits, technologies, document catalogue |
-| `POST` | `/bookings` | Create a booking (emergency slot requires admin) |
-| `GET` | `/bookings/{id}` | Booking detail; contacts redacted for anonymous callers |
-| `POST` | `/bookings/{id}/verify-owner` | Email + PIN → full detail and a manage token |
-| `GET` | `/bookings/manage/token/{token}` | Open a booking from its management link |
-| `PUT` | `/bookings/{id}` | Edit (owner credentials, or admin bearer) |
-| `DELETE` | `/bookings/{id}` | Cancel and release the slot |
-| `POST` | `/bookings/{id}/attachments` | Upload one document (multipart) |
-| `GET` | `/bookings/{id}/attachments` | Attachment metadata |
-| `DELETE` | `/bookings/{id}/attachments/{attachment_id}` | Remove a document |
-| `GET` | `/bookings/{id}/attachments/{attachment_id}/download` | Download (admin or manage token) |
-| `POST` | `/my-bookings` | Find all bookings for an email + PIN |
-| `GET` | `/health` | Liveness |
-
-### Admin (requires `Authorization: Bearer <token>`)
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/admin/login` | Sign in |
+| `POST` | `/auth/register` | Self-service sign-up (always TENANT_USER) |
+| `POST` | `/auth/login` | The one login, for every role |
+| `GET` | `/auth/me` | Current account |
+| `POST` | `/auth/me/change-password` | Change your own password |
 | `POST` | `/admin/logout` | Revoke the current token |
-| `GET` | `/admin/me` | Current administrator |
+
+### Scheduling (authenticated)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/schedule?week=YYYY-MM-DD` | One week of the board |
+| `GET` | `/tenants/active` | Tenants selectable when scheduling |
+| `POST` | `/bookings` | Create a change (emergency requires ADMIN) |
+| `GET` | `/bookings/{id}` | Owner or admin only |
+| `PUT` | `/bookings/{id}` | Edit |
+| `DELETE` | `/bookings/{id}` | Cancel and release the slot |
+| `GET` | `/bookings/{id}/attachments` | Document metadata |
+| `POST` | `/bookings/{id}/attachments` | Upload one document |
+| `DELETE` | `/bookings/{id}/attachments/{attachment_id}` | Remove a document |
+| `GET` | `/bookings/{id}/attachments/{attachment_id}/download` | Download |
+
+### Administration (role = ADMIN)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/admin/me` | Confirm administrator access |
+| `GET` | `/admin/users` | List / search people |
+| `PATCH` | `/admin/users/{id}/role` | Promote or demote |
+| `PATCH` | `/admin/users/{id}/status` | Activate or deactivate |
+| `POST` | `/admin/users/{id}/reset-password` | Set a new password |
+| `GET` `POST` | `/admin/tenants` | Tenant master |
+| `PUT` `PATCH` | `/admin/tenants/{id}`, `/admin/tenants/{id}/status` | Edit / activate |
 | `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, freeze hours, file size, mandatory documents |
-| `GET` `PUT` | `/admin/slots` | Slot names, times, regular/emergency, enabled |
-| `GET` `POST` | `/admin/holidays` | List / create |
-| `GET` | `/tenants/active` | Active tenant options for scheduling |
-| `GET` `POST` | `/admin/tenants` | List / create tenant master records |
-| `PUT` | `/admin/tenants/{id}` | Edit a tenant |
-| `PATCH` | `/admin/tenants/{id}/status` | Activate / deactivate a tenant |
-| `GET` | `/admin/users` | Users without permanent tenant assignment |
-| `PUT` `DELETE` | `/admin/holidays/{id}` | Update / delete |
-| `GET` `PUT` | `/admin/overrides` | Per-date slot overrides |
-| `DELETE` | `/admin/overrides/{id}` | Clear an override |
-| `GET` | `/admin/bookings` | All bookings, optionally including cancelled |
-| `POST` | `/admin/bookings/emergency` | Emergency booking |
+| `GET` `PUT` | `/admin/slots` | Normal slot grid |
+| `GET` `POST` `PUT` `DELETE` | `/admin/holidays` | Holiday management |
+| `GET` `PUT` `DELETE` | `/admin/overrides` | Per-date slot overrides |
+| `GET` | `/admin/bookings` | All changes, optionally including cancelled |
+| `POST` | `/admin/bookings/emergency` | Emergency change |
 | `POST` | `/admin/bookings/{id}/move` | Move to another date/slot |
 | `POST` | `/admin/bookings/{id}/reassign` | Change tenant / requester / verifier |
 | `POST` | `/admin/bookings/{id}/status` | Set BOOKED, COMPLETED or CANCELLED |
-| `DELETE` | `/admin/bookings/{id}` | Permanently delete a booking and its files |
-| `GET` | `/admin/audit` | Audit history, optionally per booking |
-
----
-
-## 14. Using the app
-
-**As an authenticated user**
-
-1. Open the scheduler URL (`http://<server>:8000/`) and use
-   **Previous week / Next week / Today**.
-2. Click **Book slot** on a green slot; the drawer opens over the board.
-3. Select the tenant for this specific CR, then fill the change, people and deployment sections and choose a 6-digit PIN for legacy ownership flows.
-   confirm. The booking reference (`PDS-20260921-003`) appears immediately,
-   followed by the document uploader.
-4. Attach the four required documents. Readiness shows as `3 / 4 required`.
-5. To change anything later, click the booking → **Verify ownership** → enter
-   your email and PIN. Inside the 48-hour window the drawer shows
-   **Booking locked** instead of the action buttons.
-6. Forgot which slots are yours? **Find my bookings** → email + PIN.
-
-**As an administrator**
-
-1. **Admin login** (top right) → **Admin controls**.
-2. *General* — slots per day, weekly limit, freeze hours, file size.
-   *Slots* — names, times, emergency flag, enabled.
-   *Holidays* — add/edit/delete, full or partial day, emergency allowed.
-   *Daily override* — a different grid for one date.
-   *Documents* — which categories are mandatory.
-   *Bookings* — open, complete or permanently delete.
-   *Audit* — every create, edit, move, cancel, document change and override.
-3. Book slot 5 with **Book emergency change**; the form adds emergency reason,
-   approver, approval reference and business justification.
-4. Overriding the weekly limit or the freeze window asks for a reason, which is
-   stored in the audit trail.
+| `DELETE` | `/admin/bookings/{id}` | Permanently delete a change and its files |
+| `GET` | `/admin/audit` | Audit history |
 
 ---
 
@@ -544,10 +598,11 @@ documentation: `/docs`.
 | Slot 2 | 09:00 – 11:00 |
 | Slot 3 | 11:00 – 13:00 |
 | Slot 4 | 14:00 – 16:00 |
-| Emergency slot 5 | 16:00 – 18:00 (admin only) |
-| Weekly limit per tenant | 2 regular bookings |
+| Emergency changes | unlimited per date, administrators only |
+| Weekly limit per tenant | 2 normal changes |
 | Freeze window | 48 hours |
 | Max upload | 20 MB per file |
 | Booking reference | `PDS-YYYYMMDD-NNN` |
 | Timezone | Asia/Kolkata (timestamps stored in UTC) |
-| Admin session | 8 hours |
+| Session | 8 hours |
+| POC administrator | `admin` / `admin2024` |

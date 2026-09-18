@@ -5,7 +5,6 @@ import type {
   BookingDetail,
   BookingFormValues,
   DayView,
-  OwnerCredentials,
   PublicSettings,
   SlotView,
   Tenant,
@@ -25,17 +24,24 @@ import { Alert, Calendar, Check, Clock, Siren, Spinner } from './Icons'
 import { useToast } from './ToastNotification'
 import { formatDate, weekdayOf } from '../utils/dates'
 
+export interface CreateTarget {
+  day: DayView
+  slot: SlotView | null
+  isEmergency: boolean
+}
+
 interface BookingDrawerProps {
   open: boolean
   onClose: () => void
   settings: PublicSettings
   isAdmin: boolean
-  /** Present when booking a free slot. */
-  createTarget: { day: DayView; slot: SlotView } | null
+  /**
+   * Present when creating. A normal change carries the chosen slot; an
+   * emergency change carries none, because it joins the date's queue.
+   */
+  createTarget: CreateTarget | null
   /** Present when editing an existing booking. */
   editBooking: BookingDetail | null
-  /** Owner credentials, required for a non-admin edit. */
-  credentials: OwnerCredentials | null
   onSaved: () => void
 }
 
@@ -46,12 +52,11 @@ export function BookingDrawer({
   isAdmin,
   createTarget,
   editBooking,
-  credentials,
   onSaved,
 }: BookingDrawerProps) {
   const toast = useToast()
   const mode = editBooking ? 'edit' : 'create'
-  const isEmergency = editBooking?.is_emergency ?? createTarget?.slot.is_emergency ?? false
+  const isEmergency = editBooking?.is_emergency ?? createTarget?.isEmergency ?? false
 
   const [values, setValues] = useState<BookingFormValues>(EMPTY_BOOKING_VALUES)
   const [errors, setErrors] = useState<BookingFormErrors>({})
@@ -84,7 +89,7 @@ export function BookingDrawer({
   }, [open])
 
   const heading = useMemo(() => {
-    if (created) return 'Deployment slot booked'
+    if (created) return isEmergency ? 'Emergency change queued' : 'Deployment slot booked'
     if (editBooking) return `Edit ${editBooking.booking_reference}`
     if (isEmergency) return 'Book emergency change'
     return 'Book production deployment'
@@ -94,8 +99,8 @@ export function BookingDrawer({
     ? {
         weekday: createTarget.day.weekday,
         dateLabel: createTarget.day.date_label,
-        slotName: createTarget.slot.name,
-        timeLabel: createTarget.slot.time_label,
+        slotName: createTarget.slot?.name ?? 'Emergency queue',
+        timeLabel: createTarget.slot?.time_label ?? 'No fixed slot',
       }
     : editBooking
       ? {
@@ -112,7 +117,7 @@ export function BookingDrawer({
   }
 
   async function submit() {
-    const found = validateBookingForm(values, { requirePin: mode === 'create', isEmergency })
+    const found = validateBookingForm(values, { isEmergency })
     setErrors(found)
     if (Object.keys(found).length > 0) {
       toast.error('Please correct the highlighted fields.')
@@ -124,21 +129,22 @@ export function BookingDrawer({
       if (mode === 'create' && createTarget) {
         const payload = toBookingPayload(values, {
           deployment_date: createTarget.day.day,
-          slot_number: createTarget.slot.slot_number,
-          booking_pin: values.booking_pin,
-          confirm_booking_pin: values.confirm_booking_pin,
+          slot_number: createTarget.slot?.slot_number ?? null,
+          is_emergency: isEmergency,
           override_weekly_limit: isAdmin ? values.override_weekly_limit : false,
           override_reason: isAdmin ? values.override_reason || null : null,
         })
         const result = await api.createBooking(payload)
         setCreated(result)
         onSaved()
-        toast.success('Deployment slot booked successfully.', `Reference ${result.booking.booking_reference}`)
+        toast.success(
+          isEmergency ? 'Emergency change queued.' : 'Deployment slot booked successfully.',
+          `Reference ${result.booking.booking_reference}`,
+        )
       } else if (editBooking) {
         const payload = toBookingPayload(values, {
           deployment_date: editBooking.deployment_date,
           slot_number: editBooking.slot_number,
-          credentials: isAdmin ? null : credentials,
           override_weekly_limit: isAdmin ? values.override_weekly_limit : false,
           override_reason: isAdmin ? values.override_reason || null : null,
         })
@@ -240,11 +246,7 @@ export function BookingDrawer({
 
           <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             <Alert className="mt-0.5 size-4 shrink-0" />
-            <span>
-              <strong>Keep your booking PIN safe.</strong> You will need the requester email and PIN to
-              edit, upload documents or cancel this booking. It is stored hashed and cannot be
-              recovered.
-            </span>
+            <span>Your authenticated account owns this change record and controls future edits and documents.</span>
           </p>
 
           <div>
@@ -252,12 +254,8 @@ export function BookingDrawer({
             <DocumentUploader
               booking={created.booking}
               settings={settings}
-              credentials={{
-                requester_email: created.booking.requester_email,
-                booking_pin: values.booking_pin,
-              }}
-              manageToken={created.manage_token}
               isAdmin={isAdmin}
+              canManage={!isAdmin}
               onUpdated={(updated) => {
                 setCreated({ ...created, booking: updated })
                 onSaved()
@@ -276,7 +274,6 @@ export function BookingDrawer({
           settings={settings}
           isEmergency={isEmergency}
           isAdmin={isAdmin}
-          mode={mode}
           onChange={update}
           onSubmit={submit}
         />

@@ -1,19 +1,21 @@
-"""Administrator endpoints. Every route below requires a valid admin session
-(except login), and every mutation is written to the audit trail."""
+"""Administrator endpoints.
+
+Every route requires an authenticated account whose stored role is ADMIN
+(there is no separate administrator login), and every mutation is written
+to the audit trail.
+"""
 from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..auth import LocalAuthProvider
 from ..database import get_db
 from ..models import (
     ACTIVE_STATUSES,
-    AdminUser,
     BookingAudit,
     BookingStatus,
     DailySlotOverride,
@@ -24,8 +26,6 @@ from ..models import (
     User,
 )
 from ..schemas import (
-    AdminLoginRequest,
-    AdminSession,
     AuditEventOut,
     BookingCreate,
     BookingCreated,
@@ -45,13 +45,10 @@ from ..schemas import (
 )
 from ..security import (
     AdminPrincipal,
-    create_admin_token,
     hash_secret,
     require_admin,
     revoke_token,
-    verify_secret,
 )
-from ..security.ratelimit import enforce
 from ..services import attachment_service, audit_service, booking_service, presenters
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
@@ -65,35 +62,30 @@ SETTABLE_STATUSES = {BookingStatus.BOOKED, BookingStatus.COMPLETED, BookingStatu
 
 
 def _actor(admin: AdminPrincipal) -> Actor:
-    return Actor(is_admin=True, admin_username=admin.username)
+    return Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
+
+
+def _assert_not_last_active_admin(db: Session, target: User, admin: AdminPrincipal) -> None:
+    """Refuse a demotion/deactivation that would leave nobody able to administer."""
+    if target.role != "ADMIN" or not target.is_active:
+        return
+    remaining = db.scalar(
+        select(func.count(User.id)).where(
+            User.role == "ADMIN",
+            User.is_active.is_(True),
+            User.id != target.id,
+        )
+    )
+    if not remaining:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This is the only active administrator. Promote another account first.",
+        )
 
 
 # --------------------------------------------------------------------------- #
 # Authentication
 # --------------------------------------------------------------------------- #
-
-
-@router.post("/login", response_model=AdminSession)
-def login(request: Request, payload: AdminLoginRequest, db: Session = Depends(get_db)) -> AdminSession:
-    enforce(request, "admin-login", limit=8, window_seconds=300)
-    provider = LocalAuthProvider(
-        lambda username: db.scalars(select(AdminUser).where(AdminUser.username == username)).first()
-    )
-    user = db.scalars(select(AdminUser).where(AdminUser.username == payload.username)).first()
-    if user is None or not provider.authenticate(payload.username, payload.password):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid administrator credentials.")
-    user.last_login_at = now_utc()
-    token, expires_in = create_admin_token(user.username)
-    audit_service.record(
-        db, event_type="ADMIN_LOGIN", actor_type="ADMIN", admin_username=user.username
-    )
-    db.commit()
-    return AdminSession(
-        access_token=token,
-        expires_in=expires_in,
-        username=user.username,
-        display_name=user.display_name,
-    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -118,7 +110,6 @@ def list_tenants(
             "name": t.name,
             "tenant_code": t.tenant_code,
             "description": t.description,
-            "team_name": t.team_name,
             "is_active": t.is_active,
         }
         for t in tenants
@@ -271,6 +262,8 @@ def update_user_status(
     is_active = payload.get("is_active")
     if not isinstance(is_active, bool):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "is_active must be a boolean value.")
+    if not is_active:
+        _assert_not_last_active_admin(db, user, admin)
     user.is_active = is_active
     audit_service.record(
         db,
@@ -298,7 +291,19 @@ def update_user_role(
     role = str(payload.get("role", "")).strip().upper()
     if role not in {"ADMIN", "TENANT_USER"}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "role must be ADMIN or TENANT_USER.")
+    if role != "ADMIN":
+        _assert_not_last_active_admin(db, user, admin)
+    previous = user.role
     user.role = role
+    audit_service.record(
+        db,
+        event_type="USER_ROLE_UPDATED",
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        requester_email=user.email,
+        old_values={"role": previous},
+        new_values={"role": user.role},
+    )
     db.commit()
     return {"message": "Role updated.", "user_id": user.id, "role": user.role}
 
@@ -573,13 +578,13 @@ def create_emergency_booking(
 ) -> BookingCreated:
     """Convenience alias for the emergency form; the generic POST /bookings
     works identically for an authenticated admin."""
-    booking, token = booking_service.create_booking(db, payload, _actor(admin))
-    if not booking.is_emergency:
-        raise BusinessRuleError("The selected slot is not an emergency slot.")
+    booking = booking_service.create_booking(
+        db,
+        payload.model_copy(update={"is_emergency": True, "slot_number": None}),
+        _actor(admin),
+    )
     return BookingCreated(
         booking=presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True),
-        manage_token=token,
-        manage_url=f"/booking/manage/{token}",
         message=booking_service.success_message(db, booking),
     )
 
@@ -605,7 +610,6 @@ def move_booking(
 
     update = BookingUpdate(
         tenant_id=booking.tenant_id,
-        tenant_name=booking.tenant_name,
         jira_change=booking.jira_change,
         jira_task=booking.jira_task,
         jira_url=booking.jira_url,
@@ -641,11 +645,10 @@ def reassign_booking(
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
     before = audit_service.snapshot(booking)
-    if payload.tenant_id is not None or payload.tenant_name:
-        tenant = booking_service.resolve_tenant(db, payload.tenant_id, payload.tenant_name)
+    if payload.tenant_id is not None:
+        tenant = booking_service.resolve_tenant(db, payload.tenant_id)
         booking.tenant_id = tenant.id
         booking.tenant_name = tenant.name
-        booking.tenant_key = booking_service.tenant_key(tenant.name)
     for field in ("requester_name", "requester_email", "verifier_name", "verifier_email"):
         value = getattr(payload, field)
         if value:

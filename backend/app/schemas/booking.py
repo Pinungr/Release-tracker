@@ -1,26 +1,18 @@
-"""Request/response schemas for bookings and owner verification."""
+"""Request/response schemas for the authenticated booking API."""
 from __future__ import annotations
 
 import re
 from datetime import date, datetime, time
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from ..models import DocumentCategory, Technology
 
-PIN_PATTERN = re.compile(r"^\d{6}$")
 _HTTP_URL = re.compile(r"^https?://[^\s/$.?#].[^\s]*$", re.IGNORECASE)
 _SCP_GIT = re.compile(r"^(git|ssh)://[^\s]+$|^[\w.-]+@[\w.-]+:[\w./~-]+$", re.IGNORECASE)
 
-Pin = Annotated[str, Field(min_length=6, max_length=6)]
 ShortText = Annotated[str, Field(min_length=1, max_length=120)]
-
-
-def _validate_pin(value: str) -> str:
-    if not PIN_PATTERN.match(value or ""):
-        raise ValueError("Booking PIN must be exactly 6 digits.")
-    return value
 
 
 def _validate_repo(value: str) -> str:
@@ -42,8 +34,7 @@ def _validate_optional_url(value: str | None) -> str | None:
 class BookingBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    tenant_id: int | None = Field(default=None, ge=1)
-    tenant_name: Annotated[str | None, Field(default=None, max_length=120)] = None
+    tenant_id: int = Field(ge=1)
     jira_change: Annotated[str, Field(min_length=3, max_length=64)]
     jira_task: Annotated[str | None, Field(default=None, max_length=64)] = None
     jira_url: Annotated[str | None, Field(default=None, max_length=500)] = None
@@ -78,54 +69,23 @@ class BookingBase(BaseModel):
 
 class BookingCreate(BookingBase):
     deployment_date: date
-    slot_number: int = Field(ge=1, le=50)
-    booking_pin: Pin
-    confirm_booking_pin: Pin
-    #: Admin-only knobs; ignored for public callers.
+    slot_number: int | None = Field(default=None, ge=1, le=50)
+    is_emergency: bool = False
+    #: Administrator-only knobs; rejected for TENANT_USER callers.
     override_weekly_limit: bool = False
     override_reason: str | None = Field(default=None, max_length=500)
 
-    @field_validator("booking_pin", "confirm_booking_pin")
-    @classmethod
-    def _pins(cls, value: str) -> str:
-        return _validate_pin(value)
-
-    @model_validator(mode="after")
-    def _pins_match(self) -> "BookingCreate":
-        if self.booking_pin != self.confirm_booking_pin:
-            raise ValueError("Booking PIN and confirmation do not match.")
-        return self
-
-
-class OwnerCredentials(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    requester_email: EmailStr
-    booking_pin: Pin
-
-    @field_validator("booking_pin")
-    @classmethod
-    def _pin(cls, value: str) -> str:
-        return _validate_pin(value)
-
-
 class BookingUpdate(BookingBase):
-    """Public edits carry owner credentials; admin edits carry an override reason."""
+    """Authenticated owners edit their own bookings; admins may edit any booking."""
 
     deployment_date: date | None = None
     slot_number: int | None = Field(default=None, ge=1, le=50)
-    credentials: OwnerCredentials | None = None
     override_weekly_limit: bool = False
     override_reason: str | None = Field(default=None, max_length=500)
 
 
 class BookingCancel(BaseModel):
-    credentials: OwnerCredentials | None = None
     override_reason: str | None = Field(default=None, max_length=500)
-
-
-class MyBookingsRequest(OwnerCredentials):
-    pass
 
 
 class AttachmentOut(BaseModel):
@@ -158,14 +118,14 @@ class DocumentReadiness(BaseModel):
 
 
 class BookingSummary(BaseModel):
-    """Fields safe to show on the public weekly board."""
+    """Row-level view of a change record on the weekly board."""
 
     id: int
     booking_reference: str
     tenant_id: int
     tenant_name: str
     deployment_date: date
-    slot_number: int
+    slot_number: int | None
     jira_change: str
     jira_task: str | None
     jira_url: str | None
@@ -174,6 +134,7 @@ class BookingSummary(BaseModel):
     verifier_name: str
     status: str
     is_emergency: bool
+    created_by_user_id: int | None
     is_locked: bool
     lock_deadline: datetime | None
     documents: DocumentReadiness
@@ -182,7 +143,7 @@ class BookingSummary(BaseModel):
 
 
 class BookingDetail(BookingSummary):
-    """Adds contact details; only returned to the owner or an admin."""
+    """Full record. Only ever returned to its owner or an administrator."""
 
     requester_name: str
     requester_email: str
@@ -197,7 +158,6 @@ class BookingDetail(BookingSummary):
     emergency_approver: str | None
     business_justification: str | None
     cancelled_at: datetime | None
-    created_by_admin: str | None
     attachments: list[AttachmentOut]
     can_edit: bool
     slot_label: str
@@ -206,8 +166,6 @@ class BookingDetail(BookingSummary):
 
 class BookingCreated(BaseModel):
     booking: BookingDetail
-    manage_token: str
-    manage_url: str
     message: str
 
 
@@ -215,7 +173,7 @@ class AuditEventOut(BaseModel):
     id: int
     booking_reference: str | None
     event_type: str
-    actor_type: Literal["PUBLIC", "ADMIN", "SYSTEM"]
+    actor_type: Literal["USER", "ADMIN", "SYSTEM"]
     requester_email: str | None
     admin_username: str | None
     override_reason: str | None
@@ -225,17 +183,17 @@ class AuditEventOut(BaseModel):
 
 
 class SlotView(BaseModel):
+    """One normal deployment slot. Emergency changes are not slots."""
+
     slot_number: int
     name: str
     start_time: time
     end_time: time
     time_label: str
-    is_emergency: bool
     enabled: bool
     unavailable_reason: str | None
-    state: Literal["AVAILABLE", "BOOKED", "HOLIDAY", "DISABLED", "EMERGENCY_AVAILABLE"]
-    bookable_by_public: bool
-    bookable_by_admin: bool
+    state: Literal["AVAILABLE", "BOOKED", "HOLIDAY", "DISABLED"]
+    bookable: bool
     booking: BookingSummary | None
 
 
@@ -271,6 +229,10 @@ class DayView(BaseModel):
     regular_slots_total: int
     regular_slots_used: int
     slots: list[SlotView]
+    #: Emergency changes are an admin-only queue on the date, not a slot.
+    emergency_open: bool
+    emergency_closed_reason: str | None
+    emergency_bookings: list[BookingSummary]
 
 
 class ScheduleSummary(BaseModel):
@@ -278,8 +240,8 @@ class ScheduleSummary(BaseModel):
     regular_slots_available: int
     slots_booked: int
     holidays: int
-    emergency_slots_total: int
-    emergency_slots_booked: int
+    #: Emergency changes scheduled this week (any number per date).
+    emergency_changes: int
 
 
 class ScheduleResponse(BaseModel):

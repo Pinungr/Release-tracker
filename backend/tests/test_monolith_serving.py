@@ -9,34 +9,34 @@ BUILT = (settings.frontend_dist / "index.html").is_file()
 needs_build = pytest.mark.skipif(BUILT is False, reason="frontend/dist not built")
 
 
-def test_api_and_ui_share_one_origin(client):
+def test_api_and_ui_share_one_origin(anon):
     """No CORS headers are needed because nothing is cross-origin."""
-    assert client.get("/api/health").status_code == 200
-    assert "access-control-allow-origin" not in client.get("/api/health").headers
+    assert anon.get("/health").status_code == 200
+    assert "access-control-allow-origin" not in anon.get("/health").headers
 
 
-def test_unknown_api_path_returns_json_not_html(client):
-    response = client.get("/api/does-not-exist")
+def test_unknown_api_path_returns_json_not_html(anon):
+    response = anon.get("/api/does-not-exist")
     assert response.status_code == 404
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["detail"] == "Endpoint not found."
 
 
-def test_health_endpoint_and_ready_probe_are_available(client):
-    assert client.get("/health").status_code == 200
-    assert client.get("/health/ready").status_code == 200
-    assert client.get("/health").json()["status"] == "ok"
-    assert client.get("/health/ready").json()["status"] == "ok"
+def test_health_endpoint_and_ready_probe_are_available(anon):
+    assert anon.get("/health").status_code == 200
+    assert anon.get("/health/ready").status_code == 200
+    assert anon.get("/health").json()["status"] == "ok"
+    assert anon.get("/health/ready").json()["status"] == "ok"
 
 
-def test_openapi_docs_are_not_swallowed_by_the_spa_route(client):
-    assert client.get("/openapi.json").status_code == 200
-    assert client.get("/docs").status_code == 200
+def test_openapi_docs_are_not_swallowed_by_the_spa_route(anon):
+    assert anon.get("/openapi.json").status_code == 200
+    assert anon.get("/docs").status_code == 200
 
 
 @needs_build
-def test_root_serves_the_application_shell(client):
-    response = client.get("/")
+def test_root_serves_the_application_shell(anon):
+    response = anon.get("/")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "<div id=\"root\">" in response.text
@@ -44,20 +44,20 @@ def test_root_serves_the_application_shell(client):
 
 
 @needs_build
-def test_client_side_routes_fall_back_to_the_shell(client):
-    """/booking/manage/<token> is a React route, not a server route."""
-    response = client.get("/booking/manage/some-opaque-token")
+def test_client_side_routes_fall_back_to_the_shell(anon):
+    """Unknown paths are React routes, not server routes."""
+    response = anon.get("/some/client-side/route")
     assert response.status_code == 200
     assert "<div id=\"root\">" in response.text
 
 
 @needs_build
-def test_hashed_assets_are_served_and_cached_immutably(client):
-    index = client.get("/").text
+def test_hashed_assets_are_served_and_cached_immutably(anon):
+    index = anon.get("/").text
     asset = index.split('src="', 1)[1].split('"', 1)[0]
     assert asset.startswith("/assets/")
 
-    response = client.get(asset)
+    response = anon.get(asset)
     assert response.status_code == 200
     assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
@@ -72,9 +72,9 @@ def test_hashed_assets_are_served_and_cached_immutably(client):
         "/../backend/app/config.py",
     ],
 )
-def test_static_serving_cannot_escape_the_build_directory(client, path):
+def test_static_serving_cannot_escape_the_build_directory(anon, path):
     """A traversal attempt must never return a file from outside dist."""
-    response = client.get(path)
+    response = anon.get(path)
     # Either the shell (treated as an unknown SPA route) or a refusal — never
     # the contents of a file outside frontend/dist.
     assert response.status_code in (200, 400, 404)
@@ -84,8 +84,8 @@ def test_static_serving_cannot_escape_the_build_directory(client, path):
         assert "class Settings" not in response.text
 
 
-def test_security_headers_are_present_on_every_response(client):
-    headers = client.get("/api/health").headers
+def test_security_headers_are_present_on_every_response(anon):
+    headers = anon.get("/health").headers
     assert headers["x-content-type-options"] == "nosniff"
     assert headers["x-frame-options"] == "DENY"
     assert headers["referrer-policy"] == "no-referrer"

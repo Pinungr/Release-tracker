@@ -11,7 +11,11 @@ interface AuditHistoryProps {
 }
 
 function ValueList({ label, values }: { label: string; values: Record<string, unknown> }) {
-  const entries = Object.entries(values).filter(([key]) => !key.includes('pin'))
+  // Defensive: the API never writes secrets to the audit trail, but the
+  // renderer refuses to display anything that looks like one anyway.
+  const entries = Object.entries(values).filter(
+    ([key]) => !/pass|secret|token|hash/i.test(key),
+  )
   if (entries.length === 0) return null
   return (
     <div className="mt-1">

@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { api, ApiError } from '../services/api'
-import type { BookingDetail, OwnerCredentials, PublicSettings } from '../types'
+import type { BookingDetail, PublicSettings } from '../types'
 import { formatDate, formatTimestamp, relativeToNow } from '../utils/dates'
 import { DocumentReadinessPanel } from './DocumentReadiness'
 import { DocumentUploader } from './DocumentUploader'
 import { Drawer } from './Drawer'
-import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Shield, Spinner, Trash, User } from './Icons'
+import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Spinner, Trash, User } from './Icons'
 import { ConfirmationModal } from './Modal'
 import { BookingStatusBadge, EmergencyBadge, LockBadge } from './StatusBadge'
 import { useToast } from './ToastNotification'
@@ -18,10 +18,8 @@ interface BookingDetailsDrawerProps {
   settings: PublicSettings
   isAdmin: boolean
   timezone: string
-  credentials: OwnerCredentials | null
-  manageToken: string | null
+  userId: number | null
   onEdit: (booking: BookingDetail) => void
-  onRequestVerification: (booking: BookingDetail) => void
   onChanged: () => void
 }
 
@@ -42,10 +40,8 @@ export function BookingDetailsDrawer({
   settings,
   isAdmin,
   timezone,
-  credentials,
-  manageToken,
+  userId,
   onEdit,
-  onRequestVerification,
   onChanged,
 }: BookingDetailsDrawerProps) {
   const toast = useToast()
@@ -53,10 +49,7 @@ export function BookingDetailsDrawer({
   const [overrideReason, setOverrideReason] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const ownsBooking =
-    credentials !== null &&
-    booking !== null &&
-    credentials.requester_email.toLowerCase() === booking.requester_email.toLowerCase()
+  const ownsBooking = booking !== null && userId === booking.created_by_user_id
 
   const canAct = booking !== null && booking.status !== 'CANCELLED' && (isAdmin || ownsBooking)
   const publicLocked = booking !== null && booking.is_locked && !isAdmin
@@ -66,7 +59,6 @@ export function BookingDetailsDrawer({
     setBusy(true)
     try {
       await api.cancelBooking(booking.id, {
-        credentials: isAdmin ? null : credentials,
         override_reason: isAdmin ? overrideReason || null : null,
       })
       toast.success('Booking cancelled.', `${booking.booking_reference} · the slot is now free.`)
@@ -123,19 +115,11 @@ export function BookingDetailsDrawer({
                   ? 'Administrator: you can edit or cancel at any time.'
                   : ownsBooking
                     ? 'Verified as the booking owner for this session.'
-                    : 'Verify the requester email and PIN to manage this booking.'}
+                    : ownsBooking
+                      ? 'You are the authenticated owner of this change record.'
+                      : 'Only the authenticated booking owner can manage this change record.'}
               </p>
               <div className="flex gap-2">
-                {!isAdmin && !ownsBooking && booking.status !== 'CANCELLED' ? (
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => onRequestVerification(booking)}
-                  >
-                    <Shield className="size-4" />
-                    Verify ownership
-                  </button>
-                ) : null}
                 {canAct && !publicLocked ? (
                   <>
                     <button
@@ -259,9 +243,6 @@ export function BookingDetailsDrawer({
               ) : null}
               <Row label="Created">{formatTimestamp(booking.created_at, timezone)}</Row>
               <Row label="Last modified">{formatTimestamp(booking.updated_at, timezone)}</Row>
-              {booking.created_by_admin ? (
-                <Row label="Created by">Administrator {booking.created_by_admin}</Row>
-              ) : null}
             </dl>
 
             <DocumentReadinessPanel readiness={booking.documents} />
@@ -271,9 +252,8 @@ export function BookingDetailsDrawer({
               <DocumentUploader
                 booking={booking}
                 settings={settings}
-                credentials={credentials}
-                manageToken={manageToken}
                 isAdmin={isAdmin}
+                canManage={ownsBooking}
                 readOnly={!canAct || publicLocked}
                 onUpdated={() => onChanged()}
               />
