@@ -14,13 +14,19 @@ import jwt
 from ..config import settings
 
 
-def create_user_token(user_id: int, username: str, email: str | None = None) -> tuple[str, int]:
+def create_user_token(
+    user_id: int,
+    username: str,
+    email: str | None = None,
+    token_version: int = 0,
+) -> tuple[str, int]:
     expires_in = settings.session_minutes * 60
     now = datetime.now(timezone.utc)
     payload = {
         "sub": username,
         "user_id": user_id,
         "email": email or username,
+        "token_version": int(token_version),
         "jti": secrets.token_hex(16),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=expires_in)).timestamp()),

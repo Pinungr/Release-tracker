@@ -7,9 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..database import Base, SessionLocal, engine
+from ..database import SessionLocal
 from ..models import DeploymentSlotConfiguration, User
 from ..security import hash_secret
+from .migrations import upgrade_database
 
 #: Four normal deployment slots per working day. Emergency changes are a
 #: separate admin-only queue and never occupy a slot.
@@ -19,10 +20,6 @@ DEFAULT_SLOTS = [
     (3, "Slot 3", time(11, 0), time(13, 0)),
     (4, "Slot 4", time(14, 0), time(16, 0)),
 ]
-
-
-def create_schema() -> None:
-    Base.metadata.create_all(bind=engine)
 
 
 def ensure_slot_configurations(db: Session) -> None:
@@ -67,7 +64,7 @@ def ensure_bootstrap_admin(db: Session) -> None:
 
 
 def initialise() -> None:
-    create_schema()
+    upgrade_database()
     with SessionLocal() as db:
         ensure_slot_configurations(db)
         ensure_bootstrap_admin(db)

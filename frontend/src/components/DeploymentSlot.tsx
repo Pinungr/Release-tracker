@@ -1,6 +1,6 @@
 import type { DayView, SlotView } from '../types'
 import { DocumentReadinessPill } from './DocumentReadiness'
-import { Clock, Link as LinkIcon, Lock, Plus } from './Icons'
+import { Clock, Link as LinkIcon, Lock, Plus, Unlock } from './Icons'
 import {
   BookingStatusBadge,
   EmergencyBadge,
@@ -18,11 +18,15 @@ interface DeploymentSlotProps {
   day: DayView
   slot: SlotView
   isMine: boolean
+  isAdmin: boolean
+  isHistorical: boolean
   onBook: (day: DayView, slot: SlotView) => void
   onOpenBooking: (bookingId: number) => void
+  onToggleFreeze: (day: DayView, slot: SlotView) => void
 }
 
 function edgeFor(slot: SlotView, isMine: boolean): string {
+  if (slot.manually_frozen) return 'border-slate-300 bg-slate-50/70 ring-1 ring-slate-200'
   if (slot.booking) {
     if (isMine) return 'border-teal-300 bg-teal-50/40 ring-1 ring-teal-200'
     if (slot.booking.is_emergency) return 'border-orange-300 bg-orange-50/50'
@@ -61,11 +65,16 @@ export function DeploymentSlot({
   day,
   slot,
   isMine,
+  isAdmin,
+  isHistorical,
   onBook,
   onOpenBooking,
+  onToggleFreeze,
 }: DeploymentSlotProps) {
   const booking = slot.booking
-  const canBook = slot.bookable
+  // Past dates are immutable for everyone. Administrators may still override
+  // other restrictions on current/future dates, but never historical dates.
+  const canBook = booking === null && !isHistorical && (slot.bookable || isAdmin)
 
   return (
     <div
@@ -118,26 +127,25 @@ export function DeploymentSlot({
             </button>
           </Cell>
 
-          {/* JIRA */}
-          <Cell label="JIRA" className="mt-2 lg:mt-0">
-            {booking.jira_url ? (
-              <a
-                href={booking.jira_url}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="inline-flex max-w-full items-center gap-1 truncate text-sm font-medium text-brand-600 hover:underline"
-              >
-                {booking.jira_change}
-                <LinkIcon className="size-3.5 shrink-0" />
-              </a>
-            ) : (
-              <span className="block truncate text-sm font-medium text-ink">
-                {booking.jira_change}
-              </span>
-            )}
-            {booking.jira_task ? (
-              <p className="truncate text-xs text-ink-muted">{booking.jira_task}</p>
-            ) : null}
+          {/* Change / Jira */}
+          <Cell label="Change No. | Jira No." className="mt-2 lg:mt-0">
+            <div className="flex min-w-0 items-center gap-1.5 text-sm">
+              <span className="truncate font-semibold text-ink">{booking.change_number ?? 'Pending'}</span>
+              <span className="text-ink-muted">|</span>
+              {booking.jira_url ? (
+                <a
+                  href={booking.jira_url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex min-w-0 items-center gap-1 truncate font-medium text-brand-600 hover:underline"
+                >
+                  {booking.jira_number}
+                  <LinkIcon className="size-3.5 shrink-0" />
+                </a>
+              ) : (
+                <span className="truncate font-medium text-ink">{booking.jira_number}</span>
+              )}
+            </div>
           </Cell>
 
           {/* Verifier */}
@@ -163,6 +171,17 @@ export function DeploymentSlot({
             {booking.is_locked && booking.status !== 'CANCELLED' && !booking.is_emergency ? (
               <LockBadge />
             ) : null}
+            {isAdmin && !isHistorical ? (
+              <button
+                type="button"
+                onClick={() => onToggleFreeze(day, slot)}
+                className="btn-secondary btn-sm"
+                title={slot.manually_frozen ? 'Allow normal-user changes again' : 'Prevent normal-user changes to this slot'}
+              >
+                {slot.manually_frozen ? <Unlock className="size-3.5" /> : <Lock className="size-3.5" />}
+                {slot.manually_frozen ? 'Unfreeze' : 'Freeze'}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => onOpenBooking(booking.id)}
@@ -185,7 +204,18 @@ export function DeploymentSlot({
             </div>
           </Cell>
 
-          <div className="mt-3 flex items-center gap-2 lg:col-span-2 lg:mt-0 lg:justify-end">
+          <div className="mt-3 flex flex-wrap items-center gap-2 lg:col-span-2 lg:mt-0 lg:justify-end">
+            {isAdmin && !isHistorical ? (
+              <button
+                type="button"
+                onClick={() => onToggleFreeze(day, slot)}
+                className="btn-secondary btn-sm"
+                title={slot.manually_frozen ? 'Open this slot to normal users' : 'Freeze this slot for normal users'}
+              >
+                {slot.manually_frozen ? <Unlock className="size-3.5" /> : <Lock className="size-3.5" />}
+                {slot.manually_frozen ? 'Unfreeze' : 'Freeze'}
+              </button>
+            ) : null}
             {canBook ? (
               <button
                 type="button"

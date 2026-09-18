@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from conftest import booking_payload, create_booking, create_tenant
+from conftest import booking_payload, create_booking, create_tenant, post_booking
 
 
 def _user_named(admin, username: str) -> dict:
@@ -130,7 +130,6 @@ def test_settings_keep_the_poc_defaults(admin):
     settings = admin.get("/api/admin/settings").json()
     assert settings["regular_slots_per_day"] == 4
     assert settings["weekly_booking_limit"] == 2
-    assert settings["booking_freeze_hours"] == 48
     assert settings["max_file_size_mb"] == 20
     assert settings["emergency_changes_enabled"] is True
 
@@ -140,7 +139,25 @@ def test_reducing_slots_per_day_shrinks_the_board(admin, user, tenant, next_mond
     board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
     assert board["days"][0]["regular_slots_total"] == 3
     assert board["days"][0]["slots"][3]["state"] == "DISABLED"
-    assert user.post("/api/bookings", json=booking_payload(tenant, next_monday, 4)).status_code == 400
+    assert post_booking(user, booking_payload(tenant, next_monday, 4)).status_code == 400
+
+
+def test_admin_can_book_a_disabled_normal_slot(admin, tenant, next_monday):
+    admin.put("/api/admin/settings", json={"regular_slots_per_day": 3})
+    response = post_booking(admin, booking_payload(tenant, next_monday, 4))
+    assert response.status_code == 201, response.text
+
+
+def test_admin_can_book_future_weekends_but_not_past_dates(admin, tenant, next_monday):
+    saturday = next_monday + timedelta(days=5)
+    weekend = post_booking(admin, booking_payload(tenant, saturday, 1))
+    assert weekend.status_code == 201, weekend.text
+
+    # Historical dates are immutable for everyone, including administrators.
+    past_monday = next_monday - timedelta(days=21)
+    past = post_booking(admin, booking_payload(tenant, past_monday, 1))
+    assert past.status_code == 423
+    assert "read-only" in past.json()["detail"]
 
 
 def test_slot_configuration_can_be_renamed_and_retimed(admin, user, next_monday):
@@ -249,7 +266,7 @@ def test_audit_records_the_booking_lifecycle_without_secrets(admin, user, tenant
     booking = create_booking(user, tenant, next_monday, 1)
     user.put(
         f"/api/bookings/{booking['id']}",
-        json=booking_payload(tenant, next_monday, 1, jira_change="CHG0111111"),
+        json=booking_payload(tenant, next_monday, 1, jira_number="CHG0111111"),
     )
     user.request("DELETE", f"/api/bookings/{booking['id']}", json={})
 
@@ -265,3 +282,82 @@ def test_audit_records_the_booking_lifecycle_without_secrets(admin, user, tenant
 def test_audit_is_admin_only(anon, user):
     assert anon.get("/api/admin/audit").status_code == 401
     assert user.get("/api/admin/audit").status_code == 403
+
+
+def test_past_booking_is_read_only_even_for_admin(
+    admin, user, other_user, tenant, next_monday, monkeypatch
+):
+    import io
+    from app.services import booking_service, presenters
+
+    booking = create_booking(user, tenant, next_monday, 1)
+    rm_user = next(u for u in admin.get("/api/admin/users").json() if u["username"] == "user2")
+    assert admin.post(
+        f"/api/admin/bookings/{booking['id']}/assign-users",
+        json={"user_ids": [rm_user["id"]]},
+    ).status_code == 200
+
+    historical_today = next_monday + timedelta(days=1)
+    monkeypatch.setattr(booking_service, "today_local", lambda: historical_today)
+    monkeypatch.setattr(presenters, "today_local", lambda: historical_today)
+
+    detail = admin.get(f"/api/admin/bookings/{booking['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["is_past"] is True
+    assert detail.json()["can_edit"] is False
+
+    edit = admin.put(
+        f"/api/bookings/{booking['id']}",
+        json=booking_payload(tenant, next_monday, 1, jira_number="JIRA-HISTORICAL"),
+    )
+    assert edit.status_code == 423
+
+    move = admin.post(
+        f"/api/admin/bookings/{booking['id']}/move",
+        json={
+            "deployment_date": (historical_today + timedelta(days=2)).isoformat(),
+            "slot_number": 2,
+            "override_reason": None,
+        },
+    )
+    assert move.status_code == 423
+
+    assign = admin.post(
+        f"/api/admin/bookings/{booking['id']}/assign-users",
+        json={"user_ids": [rm_user["id"]]},
+    )
+    assert assign.status_code == 423
+
+    start_work = other_user.post(
+        f"/api/bookings/{booking['id']}/start-work",
+        json={"change_number": "CHG-HIST-001"},
+    )
+    assert start_work.status_code == 423
+
+    reassign = admin.post(
+        f"/api/admin/bookings/{booking['id']}/reassign",
+        json={"requester_name": "Historical Edit Attempt"},
+    )
+    assert reassign.status_code == 423
+
+    status_change = admin.post(
+        f"/api/admin/bookings/{booking['id']}/status",
+        json={"status": "COMPLETED", "override_reason": "historical test"},
+    )
+    assert status_change.status_code == 423
+
+    cancel = admin.request("DELETE", f"/api/bookings/{booking['id']}", json={})
+    assert cancel.status_code == 423
+
+    upload = admin.post(
+        f"/api/bookings/{booking['id']}/attachments",
+        data={"category": "TEST_RESULTS"},
+        files={"file": ("plan.pdf", io.BytesIO(b"data"), "application/pdf")},
+    )
+    assert upload.status_code == 423
+
+    hard_delete = admin.delete(f"/api/admin/bookings/{booking['id']}")
+    assert hard_delete.status_code == 423
+
+    # The record is still retained as historical data.
+    assert admin.get(f"/api/admin/bookings/{booking['id']}").status_code == 200

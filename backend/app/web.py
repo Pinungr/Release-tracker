@@ -61,7 +61,7 @@ def _cache_headers(url_path: str) -> dict[str, str]:
     first = url_path.lstrip("/").split("/", 1)[0]
     if first in IMMUTABLE_DIRS:
         return {"Cache-Control": "public, max-age=31536000, immutable"}
-    return {"Cache-Control": "no-cache"}
+    return {"Cache-Control": "no-store, max-age=0"}
 
 
 def mount_spa(app: FastAPI, dist: Path) -> None:
@@ -89,4 +89,4 @@ def mount_spa(app: FastAPI, dist: Path) -> None:
 
         # Every other path is a client-side route (including
         # /booking/manage/<token>): hand back the shell and let React route.
-        return FileResponse(index, headers={"Cache-Control": "no-cache"})
+        return FileResponse(index, headers={"Cache-Control": "no-store, max-age=0"})

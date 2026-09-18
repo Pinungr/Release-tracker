@@ -5,6 +5,7 @@ import { Check, Lock, Siren, Sun } from './Icons'
 const BOOKING_STYLES: Record<BookingStatus, string> = {
   BOOKED: 'bg-brand-50 text-brand-700 ring-1 ring-brand-100',
   LOCKED: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200',
+  IN_PROGRESS: 'bg-amber-50 text-amber-700 ring-1 ring-amber-100',
   COMPLETED: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100',
   CANCELLED: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200',
   VALIDATION_PENDING: 'bg-amber-50 text-amber-700 ring-1 ring-amber-100',

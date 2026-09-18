@@ -23,7 +23,7 @@ from ..models import (
     DeploymentSlotConfiguration,
     Holiday,
 )
-from ..utils.dates import week_start, working_week
+from ..utils.dates import is_deployment_weekday, week_start, working_week
 from .settings_service import AppSettings, get_app_settings
 
 
@@ -104,7 +104,7 @@ def resolve_day(
         emergency_enabled = override.emergency_enabled
 
     full_day_holiday = holiday is not None and holiday.is_full_day
-    weekend = day.weekday() >= 5
+    outside_deployment_week = not is_deployment_weekday(day)
 
     slots: list[ResolvedSlot] = []
     for position, cfg in enumerate(configs, start=1):
@@ -112,8 +112,8 @@ def resolve_day(
         reason: str | None = None
         if not enabled:
             reason = "Slot disabled for this date."
-        elif weekend:
-            reason = "Outside the Monday-Friday deployment week."
+        elif outside_deployment_week:
+            reason = "Outside the Sunday-Thursday deployment week."
         elif full_day_holiday:
             reason = f"{holiday.name}: no production deployments available."  # type: ignore[union-attr]
         slots.append(
@@ -131,8 +131,8 @@ def resolve_day(
     emergency_closed: str | None = None
     if not emergency_enabled:
         emergency_closed = "Emergency changes are disabled for this date."
-    elif weekend:
-        emergency_closed = "Outside the Monday-Friday deployment week."
+    elif outside_deployment_week:
+        emergency_closed = "Outside the Sunday-Thursday deployment week."
     elif full_day_holiday and not holiday.allow_emergency:  # type: ignore[union-attr]
         emergency_closed = "Emergency deployments are not permitted on this holiday."
 
@@ -146,9 +146,11 @@ def resolve_day(
     )
 
 
-def resolve_week(db: Session, any_day: date) -> tuple[date, list[DayPlan], AppSettings]:
-    monday = week_start(any_day)
-    days = working_week(monday)
+def resolve_week(
+    db: Session, any_day: date, *, include_weekend: bool = False
+) -> tuple[date, list[DayPlan], AppSettings]:
+    sunday = week_start(any_day)
+    days = working_week(sunday, include_weekend=include_weekend)
     app_settings = get_app_settings(db)
     configs = slot_configurations(db)
     holidays = holidays_between(db, days[0], days[-1])
@@ -165,7 +167,7 @@ def resolve_week(db: Session, any_day: date) -> tuple[date, list[DayPlan], AppSe
         )
         for day in days
     ]
-    return monday, plans, app_settings
+    return sunday, plans, app_settings
 
 
 def find_slot(db: Session, day: date, slot_number: int | None) -> ResolvedSlot | None:

@@ -124,9 +124,10 @@ interface SelectFieldProps extends BaseProps {
   onChange: (value: string) => void
   options: { value: string; label: string }[]
   disabled?: boolean
+  placeholder?: string
 }
 
-export function SelectField({ value, onChange, options, disabled, ...base }: SelectFieldProps) {
+export function SelectField({ value, onChange, options, disabled, placeholder, ...base }: SelectFieldProps) {
   return (
     <Wrapper {...base}>
       <select
@@ -138,6 +139,11 @@ export function SelectField({ value, onChange, options, disabled, ...base }: Sel
         aria-invalid={base.error ? true : undefined}
         className={`field ${base.error ? 'field-error' : ''}`}
       >
+        {placeholder ? (
+          <option value="" disabled>
+            {placeholder}
+          </option>
+        ) : null}
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}

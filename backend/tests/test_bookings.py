@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from conftest import booking_payload, create_booking, create_tenant
+from conftest import booking_payload, create_booking, create_tenant, post_booking
 
 
 def test_authenticated_user_can_schedule_a_change(user, tenant, next_monday):
-    response = user.post("/api/bookings", json=booking_payload(tenant, next_monday, 1))
+    response = post_booking(user, booking_payload(tenant, next_monday, 1))
     assert response.status_code == 201, response.text
     booking = response.json()["booking"]
     assert booking["booking_reference"].startswith("PDS-")
@@ -27,7 +27,7 @@ def test_booking_records_the_creating_user(user, tenant, next_monday):
 
 
 def test_anonymous_callers_cannot_schedule(anon, tenant, next_monday):
-    response = anon.post("/api/bookings", json=booking_payload(tenant, next_monday, 1))
+    response = post_booking(anon, booking_payload(tenant, next_monday, 1))
     assert response.status_code == 401
 
 
@@ -47,24 +47,24 @@ def test_one_user_can_schedule_for_several_tenants(user, admin, next_monday):
 
 
 def test_tenant_must_come_from_the_master_list(user, next_monday):
-    missing = user.post("/api/bookings", json=booking_payload(999_999, next_monday, 1))
+    missing = post_booking(user, booking_payload(999_999, next_monday, 1))
     assert missing.status_code == 422
 
     payload = booking_payload(1, next_monday, 1)
     payload.pop("tenant_id")
-    assert user.post("/api/bookings", json=payload).status_code == 422
+    assert post_booking(user, payload).status_code == 422
 
 
 def test_scheduling_never_creates_a_tenant_as_a_side_effect(user, admin, tenant, next_monday):
     before = len(admin.get("/api/admin/tenants").json())
     payload = booking_payload(tenant, next_monday, 1, tenant_name="Brand New Tenant")
-    assert user.post("/api/bookings", json=payload).status_code == 201
+    assert post_booking(user, payload).status_code == 201
     assert len(admin.get("/api/admin/tenants").json()) == before
 
 
 def test_inactive_tenant_is_rejected(user, admin, tenant, next_monday):
     admin.patch(f"/api/admin/tenants/{tenant}/status", json={"is_active": False})
-    response = user.post("/api/bookings", json=booking_payload(tenant, next_monday, 1))
+    response = post_booking(user, booking_payload(tenant, next_monday, 1))
     assert response.status_code == 409
     assert "inactive" in response.json()["detail"]
 
@@ -80,10 +80,10 @@ def test_owner_can_read_and_edit_their_change(user, tenant, next_monday):
 
     updated = user.put(
         f"/api/bookings/{booking['id']}",
-        json=booking_payload(tenant, next_monday, 1, jira_change="CHG0999999"),
+        json=booking_payload(tenant, next_monday, 1, jira_number="CHG0999999"),
     )
     assert updated.status_code == 200
-    assert updated.json()["jira_change"] == "CHG0999999"
+    assert updated.json()["jira_number"] == "CHG0999999"
 
 
 def test_another_user_cannot_read_edit_or_cancel(user, other_user, tenant, next_monday):
@@ -107,7 +107,7 @@ def test_admin_can_read_and_edit_any_change(admin, user, tenant, next_monday):
     assert admin.get(f"/api/bookings/{booking['id']}").status_code == 200
     updated = admin.put(
         f"/api/bookings/{booking['id']}",
-        json=booking_payload(tenant, next_monday, 1, jira_change="CHG0777777"),
+        json=booking_payload(tenant, next_monday, 1, jira_number="CHG0777777"),
     )
     assert updated.status_code == 200
 
@@ -119,9 +119,7 @@ def test_owner_can_cancel_and_the_slot_is_released(user, other_user, tenant, oth
     assert cancelled.json()["status"] == "CANCELLED"
 
     # The freed slot is immediately bookable by somebody else.
-    assert other_user.post(
-        "/api/bookings", json=booking_payload(other_tenant, next_monday, 1)
-    ).status_code == 201
+    assert post_booking(other_user, booking_payload(other_tenant, next_monday, 1)).status_code == 201
 
 
 def test_cancelled_change_cannot_be_edited(user, tenant, next_monday):
@@ -141,7 +139,7 @@ def test_cancelled_change_cannot_be_edited(user, tenant, next_monday):
 
 def test_normal_slot_cannot_be_double_booked(user, other_user, tenant, other_tenant, next_monday):
     create_booking(user, tenant, next_monday, 2)
-    clash = other_user.post("/api/bookings", json=booking_payload(other_tenant, next_monday, 2))
+    clash = post_booking(other_user, booking_payload(other_tenant, next_monday, 2))
     assert clash.status_code == 409
     assert "just been booked" in clash.json()["detail"]
 
@@ -157,32 +155,28 @@ def test_booking_reference_is_sequential_and_unique(user, tenant, other_tenant, 
 def test_past_dates_and_weekends_are_rejected(user, tenant, next_monday):
     from app.utils.dates import today_local
 
-    past = user.post(
-        "/api/bookings", json=booking_payload(tenant, today_local() - timedelta(days=3), 1)
-    )
-    assert past.status_code == 400
-    assert "past" in past.json()["detail"]
+    past = post_booking(user, booking_payload(tenant, today_local() - timedelta(days=3), 1))
+    assert past.status_code == 423
+    assert "read-only" in past.json()["detail"]
 
-    weekend = user.post(
-        "/api/bookings", json=booking_payload(tenant, next_monday + timedelta(days=5), 1)
-    )
+    weekend = post_booking(user, booking_payload(tenant, next_monday + timedelta(days=5), 1))
     assert weekend.status_code == 400
-    assert "Monday to Friday" in weekend.json()["detail"]
+    assert "Sunday to Thursday" in weekend.json()["detail"]
 
 
 def test_unknown_slot_is_rejected(user, tenant, next_monday):
-    assert user.post("/api/bookings", json=booking_payload(tenant, next_monday, 9)).status_code == 404
+    assert post_booking(user, booking_payload(tenant, next_monday, 9)).status_code == 404
 
 
 def test_field_validation_is_enforced_server_side(user, tenant, next_monday):
     bad_email = booking_payload(tenant, next_monday, 1, requester_email="not-an-email")
-    assert user.post("/api/bookings", json=bad_email).status_code == 422
+    assert post_booking(user, bad_email).status_code == 422
 
     bad_repo = booking_payload(tenant, next_monday, 1, git_repository="not a url")
-    assert user.post("/api/bookings", json=bad_repo).status_code == 422
+    assert post_booking(user, bad_repo).status_code == 422
 
     bad_jira = booking_payload(tenant, next_monday, 1, jira_url="javascript:alert(1)")
-    assert user.post("/api/bookings", json=bad_jira).status_code == 422
+    assert post_booking(user, bad_jira).status_code == 422
 
 
 def test_board_shows_the_owner_so_the_ui_can_mark_my_changes(user, tenant, next_monday):
@@ -198,11 +192,11 @@ def test_schedule_returns_only_the_requested_week(user, tenant, next_monday):
     week = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
     assert week["week_start"] == next_monday.isoformat()
     assert [d["weekday"] for d in week["days"]] == [
+        "Sunday",
         "Monday",
         "Tuesday",
         "Wednesday",
         "Thursday",
-        "Friday",
     ]
     assert week["summary"]["slots_booked"] == 1
     assert week["summary"]["regular_slots_total"] == 20

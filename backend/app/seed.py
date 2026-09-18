@@ -72,7 +72,7 @@ def _add_change(
     existing = db.scalars(
         select(DeploymentBooking).where(
             DeploymentBooking.deployment_date == day,
-            DeploymentBooking.jira_change == fields["jira_change"],
+            DeploymentBooking.jira_number == fields["jira_number"],
         )
     ).first()
     if existing is not None:
@@ -128,8 +128,7 @@ def run() -> None:
             owner=owner,
             day=tuesday,
             slot=1,
-            jira_change="CHG0920798",
-            jira_task="CTASK3388771",
+            jira_number="CHG0920798",
             jira_url="https://jira.example.com/browse/CHG0920798",
             environment="PROD",
             technology="Databricks",
@@ -150,8 +149,7 @@ def run() -> None:
             owner=owner,
             day=tuesday,
             slot=2,
-            jira_change="CHG0920763",
-            jira_task=None,
+            jira_number="CHG0920763",
             jira_url=None,
             environment="PROD",
             technology="AzDF",
@@ -172,8 +170,7 @@ def run() -> None:
             owner=owner,
             day=wednesday,
             slot=3,
-            jira_change="CHG0921004",
-            jira_task="CTASK3390115",
+            jira_number="CHG0921004",
             jira_url=None,
             environment="PROD",
             technology="Database",
@@ -196,8 +193,7 @@ def run() -> None:
             day=tuesday,
             slot=None,
             is_emergency=True,
-            jira_change="CHG0930911",
-            jira_task=None,
+            jira_number="CHG0930911",
             jira_url=None,
             environment="PROD",
             technology="Application",

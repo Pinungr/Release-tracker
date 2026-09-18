@@ -1,8 +1,7 @@
-"""Date/time helpers.
+"""Date helpers for the Production Deployment Scheduler.
 
-The scheduler is an India-facing tool: all business days, slot times and the
-48-hour freeze window are reasoned about in Asia/Kolkata, while every stored
-timestamp is UTC.
+Business scheduling is date-only in Asia/Kolkata. Normal deployment days are
+Sunday through Thursday. Friday and Saturday are non-deployment days.
 """
 from __future__ import annotations
 
@@ -12,12 +11,11 @@ from zoneinfo import ZoneInfo
 from ..config import settings
 
 LOCAL_TZ = ZoneInfo(settings.timezone)
-
 WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+DEPLOYMENT_WEEKDAYS = {6, 0, 1, 2, 3}  # Sunday .. Thursday (Python Monday=0)
 
 
 def now_utc() -> datetime:
-    """Naive UTC, matching how timestamps are stored."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -25,13 +23,23 @@ def today_local() -> date:
     return datetime.now(LOCAL_TZ).date()
 
 
+def is_deployment_weekday(day: date) -> bool:
+    return day.weekday() in DEPLOYMENT_WEEKDAYS
+
+
 def week_start(any_day: date) -> date:
-    """Monday of the calendar week containing ``any_day``."""
-    return any_day - timedelta(days=any_day.weekday())
+    """Sunday of the deployment week containing ``any_day``."""
+    days_since_sunday = (any_day.weekday() + 1) % 7
+    return any_day - timedelta(days=days_since_sunday)
 
 
-def working_week(monday: date) -> list[date]:
-    return [monday + timedelta(days=i) for i in range(5)]
+def working_week(sunday: date, *, include_weekend: bool = False) -> list[date]:
+    """The five normal deployment dates: Sunday through Thursday.
+
+    ``include_weekend`` is retained for API compatibility; Friday/Saturday are
+    never normal deployment rows.
+    """
+    return [sunday + timedelta(days=i) for i in range(5)]
 
 
 def local_datetime(day: date, at: time) -> datetime:
@@ -47,17 +55,15 @@ def slot_start_utc(day: date, start: time) -> datetime:
 
 
 def format_day(day: date) -> str:
-    """e.g. ``17 Sep 2026``."""
     return f"{day.day:02d} {day.strftime('%b')} {day.year}"
 
 
 def format_time(at: time) -> str:
-    """e.g. ``10:30 AM``."""
     return at.strftime("%I:%M %p")
 
 
-def format_week_range(monday: date) -> str:
-    friday = monday + timedelta(days=4)
-    if monday.month == friday.month:
-        return f"{monday.day:02d} - {friday.day:02d} {friday.strftime('%b')} {friday.year}"
-    return f"{monday.day:02d} {monday.strftime('%b')} - {friday.day:02d} {friday.strftime('%b')} {friday.year}"
+def format_week_range(sunday: date, *, include_weekend: bool = False) -> str:
+    end = sunday + timedelta(days=4)
+    if sunday.month == end.month:
+        return f"{sunday.day:02d} - {end.day:02d} {end.strftime('%b')} {end.year}"
+    return f"{sunday.day:02d} {sunday.strftime('%b')} - {end.day:02d} {end.strftime('%b')} {end.year}"

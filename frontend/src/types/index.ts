@@ -17,6 +17,7 @@ export type SlotState =
 export type BookingStatus =
   | 'BOOKED'
   | 'LOCKED'
+  | 'IN_PROGRESS'
   | 'COMPLETED'
   | 'CANCELLED'
   | 'VALIDATION_PENDING'
@@ -51,6 +52,14 @@ export interface Attachment {
   uploaded_at: string
 }
 
+export interface AssignedUser {
+  user_id: number
+  full_name: string
+  username: string
+  email: string
+  assigned_at: string
+}
+
 export interface BookingSummary {
   id: number
   booking_reference: string
@@ -59,8 +68,7 @@ export interface BookingSummary {
   deployment_date: string
   /** null for emergency changes: they join the date's queue, not a slot. */
   slot_number: number | null
-  jira_change: string
-  jira_task: string | null
+  jira_number: string
   jira_url: string | null
   technology: string
   environment: string
@@ -68,8 +76,12 @@ export interface BookingSummary {
   status: BookingStatus
   is_emergency: boolean
   created_by_user_id: number | null
+  change_number: string | null
+  assigned_users: AssignedUser[]
+  work_started_by_user_id: number | null
+  work_started_at: string | null
+  is_past: boolean
   is_locked: boolean
-  lock_deadline: string | null
   documents: DocumentReadiness
   created_at: string
   updated_at: string
@@ -117,6 +129,7 @@ export interface SlotView {
   unavailable_reason: string | null
   state: SlotState
   bookable: boolean
+  manually_frozen: boolean
   booking: BookingSummary | null
 }
 
@@ -172,7 +185,8 @@ export interface DocumentCatalogEntry {
 
 export interface PublicSettings {
   weekly_booking_limit: number
-  booking_freeze_hours: number
+  /** Deprecated compatibility field; automatic freeze is disabled and this is 0. */
+  booking_freeze_dates: number
   max_file_size_mb: number
   mandatory_documents: DocumentCategory[]
   document_catalog: DocumentCatalogEntry[]
@@ -230,7 +244,6 @@ export interface AuthUser {
 export interface AdminSettings {
   regular_slots_per_day: number
   weekly_booking_limit: number
-  booking_freeze_hours: number
   max_file_size_mb: number
   emergency_changes_enabled: boolean
   require_admin_override_reason: boolean
@@ -262,8 +275,7 @@ export interface AuditEvent {
 /** Everything the booking form collects. */
 export interface BookingFormValues {
   tenant_id: string
-  jira_change: string
-  jira_task: string
+  jira_number: string
   jira_url: string
   environment: string
   technology: string
@@ -291,5 +303,6 @@ export type FilterKey =
   | 'MINE'
   | 'EMERGENCY'
   | 'LOCKED'
+  | 'IN_PROGRESS'
   | 'MISSING_DOCS'
   | `TECH:${string}`

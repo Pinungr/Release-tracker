@@ -13,6 +13,7 @@ interface WeeklyScheduleProps {
   onBook: (day: DayView, slot: SlotView) => void
   onBookEmergency: (day: DayView) => void
   onOpenBooking: (bookingId: number) => void
+  onToggleFreeze: (day: DayView, slot: SlotView) => void
 }
 
 /**
@@ -26,8 +27,7 @@ export function matchesSearch(slot: SlotView, query: string): boolean {
   if (!booking) return false
   return [
     booking.tenant_name,
-    booking.jira_change,
-    booking.jira_task,
+    booking.jira_number,
     booking.verifier_name,
     booking.booking_reference,
     booking.technology,
@@ -71,6 +71,7 @@ export function WeeklySchedule({
   onBook,
   onBookEmergency,
   onOpenBooking,
+  onToggleFreeze,
 }: WeeklyScheduleProps) {
   const visibleByDay = useMemo(() => {
     if (!schedule) return new Map<string, SlotView[]>()
@@ -101,6 +102,7 @@ export function WeeklySchedule({
         <DaySchedule
           key={day.day}
           day={day}
+          today={schedule.today}
           isAdmin={isAdmin}
           myBookingIds={myBookingIds}
           visibleSlots={visibleByDay.get(day.day) ?? []}
@@ -108,6 +110,7 @@ export function WeeklySchedule({
           onBook={onBook}
           onBookEmergency={onBookEmergency}
           onOpenBooking={onOpenBooking}
+          onToggleFreeze={onToggleFreeze}
         />
       ))}
     </div>

@@ -53,6 +53,13 @@ export const Lock = (p: IconProps) => (
   </Base>
 )
 
+export const Unlock = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
+    <path d="M8 10.5V7.5a4 4 0 0 1 7-2.6" />
+  </Base>
+)
+
 export const Plus = (p: IconProps) => (
   <Base {...p}>
     <path d="M12 5v14M5 12h14" />

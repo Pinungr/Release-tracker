@@ -14,6 +14,7 @@ from conftest import (
     create_tenant,
     emergency_payload,
     login,
+    post_booking,
     register,
 )
 
@@ -27,8 +28,8 @@ def test_simultaneous_requests_cannot_double_book_one_slot(anon, admin, next_mon
         clients.append(authenticated(login(anon, f"racer{i}")))
 
     def attempt(index: int) -> int:
-        return clients[index].post(
-            "/api/bookings", json=booking_payload(tenants[index], next_monday, 2)
+        return post_booking(
+            clients[index], booking_payload(tenants[index], next_monday, 2)
         ).status_code
 
     try:
@@ -55,8 +56,8 @@ def test_booking_references_stay_unique_under_contention(anon, admin, next_monda
         clients.append(authenticated(login(anon, f"writer{i}")))
 
     def attempt(index: int) -> dict:
-        response = clients[index].post(
-            "/api/bookings", json=booking_payload(tenants[index], next_monday, index + 1)
+        response = post_booking(
+            clients[index], booking_payload(tenants[index], next_monday, index + 1)
         )
         return {"status": response.status_code, "body": response.json()}
 
@@ -76,10 +77,7 @@ def test_concurrent_emergency_changes_all_succeed(admin, tenant, next_monday):
     """Emergency changes are a queue: contention on a date is not a conflict."""
 
     def attempt(index: int) -> int:
-        return admin.post(
-            "/api/bookings",
-            json=emergency_payload(tenant, next_monday, jira_change=f"CHG07770{index}"),
-        ).status_code
+        return post_booking(admin, emergency_payload(tenant, next_monday, jira_number=f"CHG07770{index}")).status_code
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         statuses = list(pool.map(attempt, range(5)))

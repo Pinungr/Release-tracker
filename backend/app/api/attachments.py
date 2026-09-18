@@ -44,9 +44,9 @@ def upload_attachment(
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
     actor = _actor(booking, admin, user)
+    booking_service.assert_booking_not_past(booking)
     if not actor.is_admin and booking_service.is_locked_for_owner(db, booking):
-        settings = get_app_settings(db)
-        raise HTTPException(status.HTTP_423_LOCKED, f"Changes are disabled within {settings.booking_freeze_hours} hours of deployment.")
+        raise HTTPException(status.HTTP_423_LOCKED, "This deployment slot has been manually frozen by an administrator.")
     attachment_service.save_upload(db, booking, category, file, actor)
     return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin)
 
@@ -60,6 +60,12 @@ def delete_attachment(
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
     actor = _actor(booking, admin, user)
+    booking_service.assert_booking_not_past(booking)
+    if not actor.is_admin and booking_service.is_locked_for_owner(db, booking):
+        raise HTTPException(
+            status.HTTP_423_LOCKED,
+            "This deployment slot has been manually frozen by an administrator.",
+        )
     attachment = booking_service.attachment_of(booking, attachment_id)
     if attachment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Attachment not found.")
@@ -78,7 +84,7 @@ def download_attachment(
     if admin is None:
         if user is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-        if booking.created_by_user_id != user.user_id:
+        if booking.created_by_user_id != user.user_id and not booking_service.user_is_assigned(booking, user.user_id):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "You are not authorized to download this document."
             )

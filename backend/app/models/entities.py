@@ -26,14 +26,15 @@ from ..database import Base
 class BookingStatus(str, enum.Enum):
     """Stored booking lifecycle states.
 
-    ``LOCKED`` is accepted for compatibility but the UI lock is *derived* from
-    the configurable freeze window, not stored, so it can never go stale.
+    ``LOCKED`` is accepted for compatibility but the UI lock is derived from
+    an administrator-controlled manual slot freeze, not stored on the booking.
     Statuses after ``CANCELLED`` are reserved for future validation workflows
     and are deliberately not surfaced in the UI yet.
     """
 
     BOOKED = "BOOKED"
     LOCKED = "LOCKED"
+    IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
     VALIDATION_PENDING = "VALIDATION_PENDING"
@@ -46,6 +47,7 @@ class BookingStatus(str, enum.Enum):
 ACTIVE_STATUSES = (
     BookingStatus.BOOKED.value,
     BookingStatus.LOCKED.value,
+    BookingStatus.IN_PROGRESS.value,
     BookingStatus.COMPLETED.value,
     BookingStatus.VALIDATION_PENDING.value,
     BookingStatus.SUCCESSFUL.value,
@@ -66,7 +68,7 @@ class DocumentCategory(str, enum.Enum):
 DOCUMENT_LABELS: dict[str, str] = {
     DocumentCategory.TEST_RESULTS.value: "Non-Production Test Result",
     DocumentCategory.INVENTORY.value: "Inventory File",
-    DocumentCategory.IMPLEMENTATION_PLAN.value: "Implementation Plan",
+    DocumentCategory.IMPLEMENTATION_PLAN.value: "Implementation Document",
     DocumentCategory.VALIDATION_PLAN.value: "Validation Plan",
     DocumentCategory.DBA_SCRIPT.value: "DBA Script",
     DocumentCategory.SUPPORTING_DOCUMENTS.value: "Supporting Documents",
@@ -111,6 +113,10 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     role: Mapped[str] = mapped_column(String(32), default="TENANT_USER", nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Incremented whenever the password is changed/reset. JWTs carry the
+    # version that was current when they were issued, so older tokens remain
+    # invalid even after an application restart.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
@@ -166,9 +172,17 @@ class DeploymentBooking(Base):
     deployment_date: Mapped[date] = mapped_column(Date, nullable=False)
     slot_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    jira_change: Mapped[str] = mapped_column(String(64), nullable=False)
-    jira_task: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Legacy database column name ``jira_change`` stores the Jira number.
+    # The API/UI expose it as ``jira_number`` so it cannot be confused with
+    # the separate Change No. that RM users add after assignment.
+    jira_number: Mapped[str] = mapped_column("jira_change", String(64), nullable=False)
+    jira_task: Mapped[str | None] = mapped_column(String(64), nullable=True)  # legacy, no longer exposed
     jira_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    change_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    work_started_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    work_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     environment: Mapped[str] = mapped_column(String(32), default="PROD", nullable=False)
     technology: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -203,8 +217,34 @@ class DeploymentBooking(Base):
         back_populates="booking", cascade="all, delete-orphan", lazy="selectin"
     )
     audit_events: Mapped[list["BookingAudit"]] = relationship(
-        back_populates="booking", cascade="all, delete-orphan", order_by="BookingAudit.id.desc()"
+        back_populates="booking", order_by="BookingAudit.id.desc()", passive_deletes=True
     )
+    assignments: Mapped[list["BookingAssignment"]] = relationship(
+        back_populates="booking", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class BookingAssignment(Base):
+    __tablename__ = "booking_assignments"
+    __table_args__ = (
+        UniqueConstraint("booking_id", "user_id", name="uq_booking_assignment_user"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("deployment_bookings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    assigned_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    booking: Mapped[DeploymentBooking] = relationship(back_populates="assignments")
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+    assigned_by: Mapped[User | None] = relationship(foreign_keys=[assigned_by_user_id])
 
 
 class BookingAttachment(Base):
@@ -237,6 +277,25 @@ class Holiday(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class SlotFreeze(Base):
+    """Administrator-controlled lock for one normal deployment slot on one date."""
+
+    __tablename__ = "slot_freezes"
+    __table_args__ = (
+        UniqueConstraint("freeze_date", "slot_number", name="uq_slot_freeze_date_number"),
+        Index("ix_slot_freeze_date", "freeze_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    freeze_date: Mapped[date] = mapped_column(Date, nullable=False)
+    slot_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
 class DailySlotOverride(Base):
     """Per-date override of the default slot grid."""
 
@@ -262,7 +321,7 @@ class BookingAudit(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     booking_id: Mapped[int | None] = mapped_column(
-        ForeignKey("deployment_bookings.id", ondelete="CASCADE"), nullable=True, index=True
+        ForeignKey("deployment_bookings.id", ondelete="SET NULL"), nullable=True, index=True
     )
     booking_reference: Mapped[str | None] = mapped_column(String(32), nullable=True)
     event_type: Mapped[str] = mapped_column(String(48), nullable=False)

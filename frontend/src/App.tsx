@@ -5,6 +5,7 @@ import { BookingDetailsDrawer } from './components/BookingDetailsDrawer'
 import { BookingDrawer, type CreateTarget } from './components/BookingDrawer'
 import { Alert, Spinner } from './components/Icons'
 import { ProfileModal } from './components/ProfileModal'
+import { RequiredPasswordChangeScreen } from './components/RequiredPasswordChangeScreen'
 import { ScheduleFilters } from './components/ScheduleFilters'
 import { ScheduleSummary } from './components/ScheduleSummary'
 import { SignInScreen } from './components/SignInScreen'
@@ -20,7 +21,7 @@ import { addDays, toIsoDate, weekStart } from './utils/dates'
 /** Used only until the first schedule response arrives. */
 const FALLBACK_SETTINGS: PublicSettings = {
   weekly_booking_limit: 2,
-  booking_freeze_hours: 48,
+  booking_freeze_dates: 0,
   max_file_size_mb: 20,
   mandatory_documents: [],
   document_catalog: [],
@@ -43,6 +44,16 @@ export default function App() {
 
   if (!auth.isAuthenticated) {
     return <SignInScreen onSignedIn={auth.signIn} />
+  }
+
+  if (auth.user?.must_change_password) {
+    return (
+      <RequiredPasswordChangeScreen
+        user={auth.user}
+        onChanged={auth.refreshUser}
+        onLogout={() => void auth.signOut()}
+      />
+    )
   }
 
   // Remounting on identity change clears every cached booking and filter from
@@ -82,10 +93,10 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
     if (!schedule) return mine
     for (const day of schedule.days) {
       for (const slot of day.slots) {
-        if (slot.booking?.created_by_user_id === user.id) mine.add(slot.booking.id)
+        if (slot.booking && (slot.booking.created_by_user_id === user.id || slot.booking.assigned_users.some((assigned) => assigned.user_id === user.id))) mine.add(slot.booking.id)
       }
       for (const booking of day.emergency_bookings) {
-        if (booking.created_by_user_id === user.id) mine.add(booking.id)
+        if (booking.created_by_user_id === user.id || booking.assigned_users.some((assigned) => assigned.user_id === user.id)) mine.add(booking.id)
       }
     }
     return mine
@@ -120,12 +131,39 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }, [refresh, detailBooking])
 
   function startBooking(day: DayView, slot: SlotView) {
+    if (!schedule || day.is_past || day.day < schedule.today) {
+      toast.locked('Historical date is read-only', 'Past deployment dates cannot be booked or modified by any user, including administrators.')
+      return
+    }
     setEditBooking(null)
     setCreateTarget({ day, slot, isEmergency: false })
     setBookingDrawerOpen(true)
   }
 
+  async function toggleSlotFreeze(day: DayView, slot: SlotView) {
+    if (!auth.isAdmin || !schedule || day.is_past || day.day < schedule.today) return
+    try {
+      if (slot.manually_frozen) {
+        await api.unfreezeSlot(day.day, slot.slot_number)
+        toast.success(`Slot ${slot.slot_number} unfrozen`, 'Normal users can book or edit this slot again.')
+      } else {
+        await api.freezeSlot(day.day, slot.slot_number)
+        toast.locked(`Slot ${slot.slot_number} frozen`, 'Normal users can no longer book or edit this slot. Admin access remains available.')
+      }
+      refreshAll()
+    } catch (caught) {
+      toast.error(
+        slot.manually_frozen ? 'Could not unfreeze the slot' : 'Could not freeze the slot',
+        caught instanceof ApiError ? caught.message : '',
+      )
+    }
+  }
+
   function startEmergencyBooking(day: DayView) {
+    if (!schedule || day.is_past || day.day < schedule.today) {
+      toast.locked('Historical date is read-only', 'Past deployment dates cannot accept emergency changes, including for administrators.')
+      return
+    }
     if (!auth.isAdmin) {
       toast.locked(
         'Emergency changes are administrator only',
@@ -139,6 +177,10 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }
 
   function startEdit(booking: BookingDetail) {
+    if (booking.is_past) {
+      toast.locked('Historical record is read-only', 'Past deployment records cannot be edited by any user, including administrators.')
+      return
+    }
     if (!auth.isAdmin && booking.created_by_user_id !== user.id) {
       toast.error('You are not authorized to edit this change record.')
       return
@@ -220,12 +262,13 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onBook={startBooking}
           onBookEmergency={startEmergencyBooking}
           onOpenBooking={(id) => void openBooking(id)}
+          onToggleFreeze={(day, slot) => void toggleSlotFreeze(day, slot)}
         />
 
         <footer className="pt-2 pb-6 text-center text-xs text-ink-muted">
-          All times shown in {timezone.replace('_', ' ')}. Authentication, ownership, the tenant
-          weekly limit and the {settings.booking_freeze_hours}-hour freeze window are enforced by
-          the server.
+          All times shown in {timezone.replace('_', ' ')}. Authentication, ownership and the tenant
+          weekly limit are enforced by the server. Administrators manually freeze/unfreeze individual
+          future slots; past deployment dates are permanently read-only. Normal deployment days are Sunday through Thursday.
         </footer>
       </main>
 

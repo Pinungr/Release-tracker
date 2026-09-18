@@ -88,6 +88,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const json = (body: unknown) => JSON.stringify(body)
 
+async function download(path: string, filename: string): Promise<void> {
+  const response = await fetch(`${BASE}${path}`, { headers: authHeaders() })
+  if (!response.ok) {
+    if (response.status === 401) userToken.clear()
+    throw new ApiError(await readError(response), response.status)
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
 export const api = {
   // ---- public -------------------------------------------------------------
   getSchedule: (weekAnchor: string) => request<Schedule>(`/schedule?week=${weekAnchor}`),
@@ -100,21 +117,46 @@ export const api = {
 
   me: () => request<AuthUser>('/auth/me'),
 
-  changePassword: (payload: Record<string, unknown>) =>
-    request<{ message: string }>('/auth/me/change-password', { method: 'POST', body: json(payload) }),
+  changePassword: async (payload: Record<string, unknown>) => {
+    const response = await request<{
+      message: string
+      access_token: string
+      token_type: string
+      expires_in: number
+    }>('/auth/me/change-password', { method: 'POST', body: json(payload) })
+    // The server increments token_version during a password change, making
+    // every older JWT invalid. Keep only the freshly issued replacement.
+    userToken.set(response.access_token)
+    return response
+  },
 
   getActiveTenants: () => request<Tenant[]>('/tenants/active'),
 
   getBooking: (id: number) => request<BookingDetail>(`/bookings/${id}`),
 
-  createBooking: (payload: Record<string, unknown>) =>
-    request<BookingCreated>('/bookings', { method: 'POST', body: json(payload) }),
+  createBooking: (
+    payload: Record<string, unknown>,
+    documents: Partial<Record<DocumentCategory, File[]>>,
+  ) => {
+    const form = new FormData()
+    form.append('payload', JSON.stringify(payload))
+    for (const [category, files] of Object.entries(documents) as [DocumentCategory, File[]][]) {
+      for (const file of files ?? []) form.append(`document_${category}`, file)
+    }
+    return request<BookingCreated>('/bookings', { method: 'POST', body: form })
+  },
 
   updateBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingDetail>(`/bookings/${id}`, { method: 'PUT', body: json(payload) }),
 
   cancelBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingSummary>(`/bookings/${id}`, { method: 'DELETE', body: json(payload) }),
+
+  startWork: (id: number, change_number: string) =>
+    request<BookingDetail>(`/bookings/${id}/start-work`, {
+      method: 'POST',
+      body: json({ change_number }),
+    }),
 
   uploadAttachment: (id: number, category: DocumentCategory, file: File) => {
     const form = new FormData()
@@ -129,10 +171,11 @@ export const api = {
       body: '{}',
     }),
 
-  downloadUrl: (id: number, attachmentId: number) => `${BASE}/bookings/${id}/attachments/${attachmentId}/download`,
+  downloadAttachment: (id: number, attachmentId: number, filename: string) =>
+    download(`/bookings/${id}/attachments/${attachmentId}/download`, filename),
 
   // ---- admin --------------------------------------------------------------
-  logout: () => request<void>('/admin/logout', { method: 'POST' }),
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
 
   getSettings: () => request<AdminSettings>('/admin/settings'),
 
@@ -161,6 +204,15 @@ export const api = {
 
   deleteOverride: (id: number) => request<void>(`/admin/overrides/${id}`, { method: 'DELETE' }),
 
+  freezeSlot: (freeze_date: string, slot_number: number, note?: string) =>
+    request<{ id: number; freeze_date: string; slot_number: number; note: string | null }>(
+      '/admin/slot-freezes',
+      { method: 'POST', body: json({ freeze_date, slot_number, note: note ?? null }) },
+    ),
+
+  unfreezeSlot: (freeze_date: string, slot_number: number) =>
+    request<void>(`/admin/slot-freezes/${freeze_date}/${slot_number}`, { method: 'DELETE' }),
+
   listBookings: (includeCancelled = false) =>
     request<BookingSummary[]>(`/admin/bookings?include_cancelled=${includeCancelled}`),
 
@@ -171,6 +223,12 @@ export const api = {
     request<BookingDetail>(`/admin/bookings/${id}/reassign`, {
       method: 'POST',
       body: json(payload),
+    }),
+
+  assignBookingUsers: (id: number, user_ids: number[]) =>
+    request<BookingDetail>(`/admin/bookings/${id}/assign-users`, {
+      method: 'POST',
+      body: json({ user_ids }),
     }),
 
   setBookingStatus: (id: number, status: string, overrideReason?: string) =>

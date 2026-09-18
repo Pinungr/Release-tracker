@@ -153,12 +153,12 @@ def test_login_is_rate_limited(anon):
     assert 429 in statuses
 
 
-def test_no_password_material_is_ever_returned(anon):
+def test_no_password_secret_is_ever_returned(anon):
     body = anon.post(
         "/api/auth/login",
         json={"username_or_email": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
     ).text
-    assert "password" not in body.lower()
+    assert "password_hash" not in body.lower()
     assert ADMIN_PASSWORD not in body
 
 
@@ -187,7 +187,7 @@ def test_scheduler_requires_authentication(anon, user):
 
 def test_logout_invalidates_the_token(admin):
     assert admin.get("/api/admin/me").status_code == 200
-    assert admin.post("/api/admin/logout").status_code == 204
+    assert admin.post("/api/auth/logout").status_code == 204
     assert admin.get("/api/admin/me").status_code == 401
 
 
@@ -226,6 +226,56 @@ def test_deactivated_user_cannot_log_in(anon, admin, user):
 
 
 # --------------------------------------------------------------------------- #
+# Forced password change after administrator reset
+# --------------------------------------------------------------------------- #
+
+
+def test_admin_password_reset_restricts_user_until_password_is_changed(anon, admin, user):
+    target = next(u for u in admin.get("/api/admin/users").json() if u["username"] == "pinaki")
+    reset = admin.post(
+        f"/api/admin/users/{target['id']}/reset-password",
+        json={"new_password": "TemporaryPass!456", "confirm_new_password": "TemporaryPass!456"},
+    )
+    assert reset.status_code == 200
+
+    # Resetting the password increments token_version, so every JWT issued
+    # before the reset is invalid immediately and remains invalid after restart.
+    blocked = user.get("/api/schedule")
+    assert blocked.status_code == 401
+
+    login_response = anon.post(
+        "/api/auth/login",
+        json={"username_or_email": "pinaki", "password": "TemporaryPass!456"},
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["user"]["must_change_password"] is True
+
+    restricted = authenticated(login_response.json()["access_token"])
+    try:
+        assert restricted.get("/api/schedule").status_code == 403
+        assert restricted.get("/api/auth/me").status_code == 200
+        changed = restricted.post(
+            "/api/auth/me/change-password",
+            json={
+                "current_password": "TemporaryPass!456",
+                "new_password": "PermanentPass!789",
+                "confirm_new_password": "PermanentPass!789",
+            },
+        )
+        assert changed.status_code == 200
+        replacement = changed.json()["access_token"]
+
+        # The temporary-password JWT is now old and must never become valid
+        # again merely because must_change_password was cleared.
+        assert restricted.get("/api/schedule").status_code == 401
+        with authenticated(replacement) as refreshed:
+            assert refreshed.get("/api/schedule").status_code == 200
+            assert refreshed.get("/api/auth/me").json()["must_change_password"] is False
+    finally:
+        restricted.close()
+
+
+# --------------------------------------------------------------------------- #
 # Profile
 # --------------------------------------------------------------------------- #
 
@@ -248,6 +298,11 @@ def test_user_can_change_their_own_password(anon, user):
         },
     )
     assert changed.status_code == 200
+    replacement = changed.json()["access_token"]
+    # The token that authorized the password change is invalid immediately.
+    assert user.get("/api/auth/me").status_code == 401
+    with authenticated(replacement) as refreshed:
+        assert refreshed.get("/api/auth/me").status_code == 200
     assert login(anon, "pinaki", "BrandNew!456")
     assert (
         anon.post(

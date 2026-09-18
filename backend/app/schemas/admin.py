@@ -27,7 +27,6 @@ class AdminSession(BaseModel):
 class SettingsOut(BaseModel):
     regular_slots_per_day: int
     weekly_booking_limit: int
-    booking_freeze_hours: int
     max_file_size_mb: int
     emergency_changes_enabled: bool
     require_admin_override_reason: bool
@@ -37,7 +36,6 @@ class SettingsOut(BaseModel):
 class SettingsUpdate(BaseModel):
     regular_slots_per_day: int | None = Field(default=None, ge=1, le=12)
     weekly_booking_limit: int | None = Field(default=None, ge=1, le=25)
-    booking_freeze_hours: int | None = Field(default=None, ge=0, le=720)
     max_file_size_mb: int | None = Field(default=None, ge=1, le=200)
     emergency_changes_enabled: bool | None = None
     require_admin_override_reason: bool | None = None
@@ -98,7 +96,8 @@ class DailyOverrideIn(BaseModel):
 
 class MoveBookingRequest(BaseModel):
     deployment_date: date
-    slot_number: int = Field(ge=1, le=50)
+    # Emergency changes have no normal slot and may be moved by date only.
+    slot_number: int | None = Field(default=None, ge=1, le=50)
     override_reason: Annotated[str | None, Field(default=None, max_length=500)] = None
 
 
@@ -113,6 +112,25 @@ class ReassignBookingRequest(BaseModel):
     override_reason: Annotated[str | None, Field(default=None, max_length=500)] = None
 
 
+class AssignUsersRequest(BaseModel):
+    user_ids: list[int] = Field(min_length=1, max_length=50)
+
+
 class StatusUpdateRequest(BaseModel):
     status: str
     override_reason: Annotated[str | None, Field(default=None, max_length=500)] = None
+
+
+class SlotFreezeRequest(BaseModel):
+    freeze_date: date
+    slot_number: int = Field(ge=1, le=50)
+    note: Annotated[str | None, Field(default=None, max_length=255)] = None
+
+
+class SlotFreezeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    freeze_date: date
+    slot_number: int
+    note: str | None

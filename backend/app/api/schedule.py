@@ -29,4 +29,4 @@ def get_schedule(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "week must be YYYY-MM-DD.") from None
     else:
         anchor = today_local()
-    return presenters.schedule_response(db, anchor)
+    return presenters.schedule_response(db, anchor, is_admin=user.is_admin)

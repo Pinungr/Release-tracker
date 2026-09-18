@@ -27,11 +27,10 @@ export function addDays(iso: string, days: number): string {
   return toIsoDate(date)
 }
 
-/** Monday of the week containing `iso`. */
+/** Sunday of the deployment week containing `iso`. */
 export function weekStart(iso: string): string {
   const date = parseIsoDate(iso)
-  const weekday = (date.getUTCDay() + 6) % 7
-  return addDays(iso, -weekday)
+  return addDays(iso, -date.getUTCDay())
 }
 
 /** `17 Sep 2026` */

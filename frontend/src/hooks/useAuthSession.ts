@@ -19,6 +19,11 @@ export function useAuthSession() {
     setUser(session.user)
   }, [])
 
+  const refreshUser = useCallback(async () => {
+    const current = await api.me()
+    setUser(current)
+  }, [])
+
   const signOut = useCallback(async () => {
     try {
       await api.logout()
@@ -29,5 +34,13 @@ export function useAuthSession() {
     setUser(null)
   }, [])
 
-  return { user, isAuthenticated: user !== null, isAdmin: user?.role === 'ADMIN', checking, signIn, signOut }
+  return {
+    user,
+    isAuthenticated: user !== null,
+    isAdmin: user?.role === 'ADMIN',
+    checking,
+    signIn,
+    signOut,
+    refreshUser,
+  }
 }

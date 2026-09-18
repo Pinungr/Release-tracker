@@ -18,9 +18,18 @@ def get_booking(
     return booking
 
 
+def _assert_password_changed(user: UserPrincipal | None) -> UserPrincipal | None:
+    if user is not None and user.must_change_password:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Password change required before continuing.",
+        )
+    return user
+
+
 def current_admin(admin: AdminPrincipal | None = Depends(optional_admin)) -> AdminPrincipal | None:
-    return admin
+    return _assert_password_changed(admin)  # type: ignore[return-value]
 
 
 def current_user(user: UserPrincipal | None = Depends(optional_user)) -> UserPrincipal | None:
-    return user
+    return _assert_password_changed(user)

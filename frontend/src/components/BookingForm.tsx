@@ -1,10 +1,14 @@
-import type { BookingDetail, BookingFormValues, PublicSettings, Tenant } from '../types'
-import { CheckboxField, FormSection, SelectField, TextArea, TextField } from './FormControls'
+import type { BookingDetail, BookingFormValues, DocumentCategory, PublicSettings, Tenant } from '../types'
+import { FormSection, SelectField, TextArea, TextField } from './FormControls'
+
+const DOCUMENT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.sql,.png,.jpg,.jpeg'
+
+export type BookingDocumentFiles = Partial<Record<DocumentCategory, File[]>>
+export type BookingDocumentErrors = Partial<Record<DocumentCategory, string>>
 
 export const EMPTY_BOOKING_VALUES: BookingFormValues = {
   tenant_id: '',
-  jira_change: '',
-  jira_task: '',
+  jira_number: '',
   jira_url: '',
   environment: 'PROD',
   technology: 'Databricks',
@@ -29,8 +33,7 @@ export function valuesFromBooking(booking: BookingDetail): BookingFormValues {
   return {
     ...EMPTY_BOOKING_VALUES,
     tenant_id: String(booking.tenant_id),
-    jira_change: booking.jira_change,
-    jira_task: booking.jira_task ?? '',
+    jira_number: booking.jira_number,
     jira_url: booking.jira_url ?? '',
     environment: booking.environment,
     technology: booking.technology,
@@ -67,15 +70,12 @@ export function validateBookingForm(
   const errors: BookingFormErrors = {}
   const required: (keyof BookingFormValues)[] = [
     'tenant_id',
-    'jira_change',
+    'jira_number',
     'technology',
     'environment',
     'requester_name',
-    'requester_email',
     'verifier_name',
-    'verifier_email',
     'git_repository',
-    'implementation_summary',
     'deployment_description',
   ]
   for (const field of required) {
@@ -119,18 +119,17 @@ export function toBookingPayload(
   const optional = (value: string) => (value.trim() ? value.trim() : null)
   return {
     tenant_id: values.tenant_id ? Number(values.tenant_id) : null,
-    jira_change: values.jira_change.trim(),
-    jira_task: optional(values.jira_task),
+    jira_number: values.jira_number.trim(),
     jira_url: optional(values.jira_url),
     environment: values.environment.trim() || 'PROD',
     technology: values.technology,
     requester_name: values.requester_name.trim(),
-    requester_email: values.requester_email.trim(),
+    requester_email: optional(values.requester_email),
     requester_phone: optional(values.requester_phone),
     verifier_name: values.verifier_name.trim(),
-    verifier_email: values.verifier_email.trim(),
+    verifier_email: optional(values.verifier_email),
     git_repository: values.git_repository.trim(),
-    implementation_summary: values.implementation_summary.trim(),
+    implementation_summary: optional(values.implementation_summary),
     deployment_description: values.deployment_description.trim(),
     additional_comments: optional(values.additional_comments),
     emergency_reason: optional(values.emergency_reason),
@@ -148,7 +147,10 @@ interface BookingFormProps {
   errors: BookingFormErrors
   settings: PublicSettings
   isEmergency: boolean
-  isAdmin: boolean
+  showDocumentUpload?: boolean
+  documents?: BookingDocumentFiles
+  documentErrors?: BookingDocumentErrors
+  onDocumentsChange?: (category: DocumentCategory, files: File[]) => void
   onChange: <K extends keyof BookingFormValues>(field: K, value: BookingFormValues[K]) => void
   onSubmit: () => void
 }
@@ -160,7 +162,10 @@ export function BookingForm({
   errors,
   settings,
   isEmergency,
-  isAdmin,
+  showDocumentUpload = false,
+  documents = {},
+  documentErrors = {},
+  onDocumentsChange,
   onChange,
   onSubmit,
 }: BookingFormProps) {
@@ -184,6 +189,7 @@ export function BookingForm({
           value={values.tenant_id}
           onChange={(v) => onChange('tenant_id', v)}
           options={tenants.map((tenant) => ({ value: String(tenant.id), label: tenant.name }))}
+          placeholder="Select tenant"
           error={errors.tenant_id}
         />
         <SelectField
@@ -196,23 +202,13 @@ export function BookingForm({
           error={errors.technology}
         />
         <TextField
-          label="JIRA change number"
-          name="jira_change"
+          label="Jira No."
+          name="jira_number"
           required
-          value={values.jira_change}
-          onChange={(v) => onChange('jira_change', v)}
-          error={errors.jira_change}
-          placeholder="CHG0920798"
-          maxLength={64}
-        />
-        <TextField
-          label="JIRA task number"
-          name="jira_task"
-          value={values.jira_task}
-          onChange={(v) => onChange('jira_task', v)}
-          error={errors.jira_task}
-          placeholder="CTASK3388771"
-          hint="Optional."
+          value={values.jira_number}
+          onChange={(v) => onChange('jira_number', v)}
+          error={errors.jira_number}
+          placeholder="JIRA-12345"
           maxLength={64}
         />
         <TextField
@@ -223,7 +219,7 @@ export function BookingForm({
           onChange={(v) => onChange('jira_url', v)}
           error={errors.jira_url}
           placeholder="https://jira.example.com/browse/CHG0920798"
-          hint="Optional. When present, the JIRA number becomes a link on the board."
+          hint="Optional URL for the Jira record. The Jira No. itself is required."
           className="sm:col-span-2"
         />
         <TextField
@@ -260,10 +256,10 @@ export function BookingForm({
           label="Requester email"
           name="requester_email"
           type="email"
-          required
           value={values.requester_email}
           onChange={(v) => onChange('requester_email', v)}
           error={errors.requester_email}
+          hint="Optional."
           autoComplete="email"
         />
         <TextField
@@ -288,10 +284,10 @@ export function BookingForm({
           label="Verifier email"
           name="verifier_email"
           type="email"
-          required
           value={values.verifier_email}
           onChange={(v) => onChange('verifier_email', v)}
           error={errors.verifier_email}
+          hint="Optional."
         />
       </FormSection>
 
@@ -299,10 +295,10 @@ export function BookingForm({
         <TextArea
           label="Implementation summary"
           name="implementation_summary"
-          required
           value={values.implementation_summary}
           onChange={(v) => onChange('implementation_summary', v)}
           error={errors.implementation_summary}
+          hint="Optional."
           placeholder="What will be deployed, in one or two lines."
           className="sm:col-span-2"
           maxLength={4000}
@@ -330,6 +326,74 @@ export function BookingForm({
           maxLength={4000}
         />
       </FormSection>
+
+      {showDocumentUpload ? (
+        <section className="border-t border-line pt-5">
+          <h3 className="text-sm font-semibold text-ink">Deployment documents</h3>
+          <p className="mt-0.5 mb-3 text-xs text-ink-muted">
+            Upload every document marked Required before the slot can be booked. Supporting documents can be added now or later.
+          </p>
+          <div className="space-y-3">
+            {settings.document_catalog.map((entry) => {
+              const selected = documents[entry.category] ?? []
+              const error = documentErrors[entry.category]
+              return (
+                <div
+                  key={entry.category}
+                  className={`rounded-lg border p-3 ${
+                    error ? 'border-rose-300 bg-rose-50/40' : 'border-line bg-surface'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-ink">{entry.label}</span>
+                    <span
+                      className={`badge ${
+                        entry.required ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {entry.required ? 'Required' : 'Optional'}
+                    </span>
+                    {entry.multiple ? (
+                      <span className="text-xs text-ink-muted">Multiple files allowed</span>
+                    ) : null}
+                  </div>
+                  <input
+                    type="file"
+                    accept={DOCUMENT_ACCEPT}
+                    multiple={entry.multiple}
+                    className={`mt-2 block w-full text-sm text-ink-muted file:mr-3 file:rounded-md file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-brand-700 hover:file:bg-brand-100 ${
+                      error ? 'rounded-md ring-1 ring-rose-300' : ''
+                    }`}
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? [])
+                      onDocumentsChange?.(entry.category, files)
+                      event.target.value = ''
+                    }}
+                  />
+                  {selected.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <div className="min-w-0 flex-1 text-xs text-ink-muted">
+                        {selected.map((file) => file.name).join(', ')}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm"
+                        onClick={() => onDocumentsChange?.(entry.category, [])}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : null}
+                  {error ? <p className="mt-1 text-xs font-medium text-rose-600">{error}</p> : null}
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-3 text-xs text-ink-muted">
+            Maximum file size: {settings.max_file_size_mb} MB per file.
+          </p>
+        </section>
+      ) : null}
 
       {isEmergency ? (
         <FormSection
@@ -377,33 +441,6 @@ export function BookingForm({
         </FormSection>
       ) : null}
 
-      {isAdmin ? (
-        <FormSection
-          title="Administrator options"
-          description="Overrides are recorded in the audit history with the reason you give."
-        >
-          <div className="sm:col-span-2">
-            <CheckboxField
-              label="Override the weekly booking limit for this tenant"
-              name="override_weekly_limit"
-              checked={values.override_weekly_limit}
-              onChange={(v) => onChange('override_weekly_limit', v)}
-              hint={`The limit is ${settings.weekly_booking_limit} regular deployments per tenant, per week.`}
-            />
-          </div>
-          <TextField
-            label="Override reason"
-            name="override_reason"
-            value={values.override_reason}
-            onChange={(v) => onChange('override_reason', v)}
-            error={errors.override_reason}
-            placeholder="Critical business deployment."
-            hint="Required when you override a rule such as the weekly limit or the freeze window."
-            className="sm:col-span-2"
-            maxLength={500}
-          />
-        </FormSection>
-      ) : null}
     </form>
   )
 }

@@ -50,7 +50,7 @@ export function ScheduleSummary({ summary, myBookingCount, onShowMine }: Schedul
       <Card
         label="Regular available"
         value={`${summary.regular_slots_available} / ${summary.regular_slots_total}`}
-        hint="Monday to Friday"
+        hint="Sunday to Thursday"
         icon={<Check className="size-4 text-emerald-600" />}
         tone="bg-emerald-50"
       />

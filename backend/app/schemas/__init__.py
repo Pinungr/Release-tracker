@@ -1,5 +1,6 @@
 from .admin import (
     AdminLoginRequest,
+    AssignUsersRequest,
     AdminSession,
     DailyOverrideIn,
     HolidayIn,
@@ -10,9 +11,12 @@ from .admin import (
     SlotConfigIn,
     SlotConfigOut,
     SlotConfigReplace,
+    SlotFreezeOut,
+    SlotFreezeRequest,
     StatusUpdateRequest,
 )
 from .booking import (
+    AssignedUserOut,
     AttachmentOut,
     AuditEventOut,
     BookingCancel,
@@ -30,11 +34,14 @@ from .booking import (
     ScheduleResponse,
     ScheduleSummary,
     SlotView,
+    StartWorkRequest,
 )
 
 __all__ = [
     "AdminLoginRequest",
+    "AssignUsersRequest",
     "AdminSession",
+    "AssignedUserOut",
     "AttachmentOut",
     "AuditEventOut",
     "BookingCancel",
@@ -60,6 +67,9 @@ __all__ = [
     "SlotConfigIn",
     "SlotConfigOut",
     "SlotConfigReplace",
+    "SlotFreezeOut",
+    "SlotFreezeRequest",
     "SlotView",
+    "StartWorkRequest",
     "StatusUpdateRequest",
 ]

@@ -10,6 +10,7 @@ SQLAlchemy.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -147,7 +148,7 @@ def other_tenant(admin: TestClient) -> int:
 
 @pytest.fixture
 def next_monday() -> date:
-    """A Monday far enough ahead to sit outside the 48-hour freeze window."""
+    """A valid future deployment date used by scheduling tests."""
     return week_start(today_local()) + timedelta(days=14)
 
 
@@ -155,8 +156,7 @@ def booking_payload(tenant_id: int, day: date, slot: int, **overrides) -> dict:
     """A complete normal change record. Tenant comes from the master by id."""
     payload = {
         "tenant_id": tenant_id,
-        "jira_change": "CHG0920763",
-        "jira_task": "CTASK3388771",
+        "jira_number": "CHG0920763",
         "jira_url": "https://jira.example.com/browse/CHG0920763",
         "environment": "PROD",
         "technology": "Databricks",
@@ -193,7 +193,36 @@ def emergency_payload(tenant_id: int, day: date, **overrides) -> dict:
     return payload
 
 
+REQUIRED_BOOKING_DOCUMENTS = {
+    "TEST_RESULTS": ("non-prod-results.pdf", b"non-prod test evidence"),
+    "INVENTORY": ("inventory.xlsx", b"inventory evidence"),
+    "IMPLEMENTATION_PLAN": ("implementation.docx", b"implementation plan"),
+    "VALIDATION_PLAN": ("validation.docx", b"validation plan"),
+    "DBA_SCRIPT": ("dba.sql", b"-- dba script"),
+}
+
+
+def post_booking(
+    client: TestClient,
+    payload: dict,
+    *,
+    omit_documents: set[str] | None = None,
+):
+    """Create through the production multipart booking contract."""
+    omit = omit_documents or set()
+    files = [
+        (f"document_{category}", (filename, content, "application/octet-stream"))
+        for category, (filename, content) in REQUIRED_BOOKING_DOCUMENTS.items()
+        if category not in omit
+    ]
+    return client.post(
+        "/api/bookings",
+        data={"payload": json.dumps(payload)},
+        files=files,
+    )
+
+
 def create_booking(client: TestClient, tenant_id: int, day: date, slot: int, **overrides) -> dict:
-    response = client.post("/api/bookings", json=booking_payload(tenant_id, day, slot, **overrides))
+    response = post_booking(client, booking_payload(tenant_id, day, slot, **overrides))
     assert response.status_code == 201, response.text
     return response.json()["booking"]

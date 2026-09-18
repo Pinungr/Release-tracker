@@ -22,10 +22,12 @@ from ..models import (
     DeploymentBooking,
     DeploymentSlotConfiguration,
     Holiday,
+    SlotFreeze,
     Tenant,
     User,
 )
 from ..schemas import (
+    AssignUsersRequest,
     AuditEventOut,
     BookingCreate,
     BookingCreated,
@@ -41,15 +43,16 @@ from ..schemas import (
     SettingsUpdate,
     SlotConfigOut,
     SlotConfigReplace,
+    SlotFreezeOut,
+    SlotFreezeRequest,
     StatusUpdateRequest,
 )
 from ..security import (
     AdminPrincipal,
     hash_secret,
     require_admin,
-    revoke_token,
 )
-from ..services import attachment_service, audit_service, booking_service, presenters
+from ..services import attachment_service, audit_service, booking_service, presenters, schedule_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
 from ..utils.dates import now_utc, today_local
@@ -86,12 +89,6 @@ def _assert_not_last_active_admin(db: Session, target: User, admin: AdminPrincip
 # --------------------------------------------------------------------------- #
 # Authentication
 # --------------------------------------------------------------------------- #
-
-
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(admin: AdminPrincipal = Depends(require_admin)) -> None:
-    revoke_token(admin.payload)
-
 
 @router.get("/me", response_model=dict)
 def me(admin: AdminPrincipal = Depends(require_admin)) -> dict:
@@ -236,6 +233,9 @@ def reset_user_password(
 
     user.password_hash = hash_secret(new_password)
     user.must_change_password = True
+    # Immediately revoke all previously issued JWTs for this account. This
+    # value is stored in the database, so the invalidation survives restarts.
+    user.token_version += 1
     audit_service.record(
         db,
         event_type="PASSWORD_RESET_BY_ADMIN",
@@ -598,6 +598,17 @@ def read_booking(
     return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
 
 
+@router.post("/bookings/{booking_id}/assign-users", response_model=BookingDetail)
+def assign_booking_users(
+    payload: AssignUsersRequest,
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> BookingDetail:
+    updated = booking_service.assign_users_to_booking(db, booking, payload.user_ids, _actor(admin))
+    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=True)
+
+
 @router.post("/bookings/{booking_id}/move", response_model=BookingDetail)
 def move_booking(
     payload: MoveBookingRequest,
@@ -608,10 +619,12 @@ def move_booking(
     from ..schemas import BookingUpdate
     from ..models import Technology
 
+    if not booking.is_emergency and payload.slot_number is None:
+        raise BusinessRuleError("A normal deployment slot is required when moving this booking.")
+
     update = BookingUpdate(
         tenant_id=booking.tenant_id,
-        jira_change=booking.jira_change,
-        jira_task=booking.jira_task,
+        jira_number=booking.jira_number,
         jira_url=booking.jira_url,
         environment=booking.environment,
         technology=Technology(booking.technology),
@@ -644,6 +657,7 @@ def reassign_booking(
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
+    booking_service.assert_booking_not_past(booking)
     before = audit_service.snapshot(booking)
     if payload.tenant_id is not None:
         tenant = booking_service.resolve_tenant(db, payload.tenant_id)
@@ -677,11 +691,12 @@ def set_status(
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
+    booking_service.assert_booking_not_past(booking)
     try:
         new_status = BookingStatus(payload.status)
     except ValueError:
         raise BusinessRuleError("Unknown booking status.") from None
-    # LOCKED is derived from the freeze window, and the post-deployment
+    # LOCKED is derived from manual slot freezing, and the post-deployment
     # validation statuses are reserved for a future release, so neither can be
     # set here.
     if new_status not in SETTABLE_STATUSES:
@@ -742,6 +757,100 @@ def list_bookings(
         stmt = stmt.where(DeploymentBooking.status.in_(ACTIVE_STATUSES))
     app_settings = get_app_settings(db)
     return [presenters.booking_summary(db, b, app_settings) for b in db.scalars(stmt.limit(500)).all()]
+
+
+# --------------------------------------------------------------------------- #
+# Manual slot freeze
+# --------------------------------------------------------------------------- #
+
+
+def _booking_in_slot(db: Session, day: date, slot_number: int) -> DeploymentBooking | None:
+    return db.scalars(
+        select(DeploymentBooking).where(
+            DeploymentBooking.deployment_date == day,
+            DeploymentBooking.slot_number == slot_number,
+            DeploymentBooking.is_emergency.is_(False),
+            DeploymentBooking.status.in_(ACTIVE_STATUSES),
+        )
+    ).first()
+
+
+@router.post("/slot-freezes", response_model=SlotFreezeOut)
+def freeze_slot(
+    payload: SlotFreezeRequest,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> SlotFreezeOut:
+    booking_service.assert_day_not_past(payload.freeze_date)
+    if schedule_service.find_slot(db, payload.freeze_date, payload.slot_number) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected deployment slot does not exist.")
+
+    row = db.scalars(
+        select(SlotFreeze).where(
+            SlotFreeze.freeze_date == payload.freeze_date,
+            SlotFreeze.slot_number == payload.slot_number,
+        )
+    ).first()
+    if row is None:
+        row = SlotFreeze(
+            freeze_date=payload.freeze_date,
+            slot_number=payload.slot_number,
+            created_by_user_id=admin.user_id,
+            note=payload.note or None,
+        )
+        db.add(row)
+    else:
+        row.note = payload.note or row.note
+        row.created_by_user_id = admin.user_id
+
+    db.flush()
+    booking = _booking_in_slot(db, payload.freeze_date, payload.slot_number)
+    audit_service.record(
+        db,
+        event_type="SLOT_MANUALLY_FROZEN",
+        booking=booking,
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        new_values={
+            "deployment_date": payload.freeze_date,
+            "slot_number": payload.slot_number,
+            "note": row.note,
+        },
+    )
+    db.commit()
+    return SlotFreezeOut.model_validate(row)
+
+
+@router.delete("/slot-freezes/{freeze_date}/{slot_number}", status_code=status.HTTP_204_NO_CONTENT)
+def unfreeze_slot(
+    freeze_date: date,
+    slot_number: int,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> None:
+    booking_service.assert_day_not_past(freeze_date)
+    row = db.scalars(
+        select(SlotFreeze).where(
+            SlotFreeze.freeze_date == freeze_date, SlotFreeze.slot_number == slot_number
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This slot is not frozen.")
+    booking = _booking_in_slot(db, freeze_date, slot_number)
+    audit_service.record(
+        db,
+        event_type="SLOT_MANUALLY_UNFROZEN",
+        booking=booking,
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        old_values={
+            "deployment_date": freeze_date,
+            "slot_number": slot_number,
+            "note": row.note,
+        },
+    )
+    db.delete(row)
+    db.commit()
 
 
 # --------------------------------------------------------------------------- #

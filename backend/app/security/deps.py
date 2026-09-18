@@ -37,6 +37,7 @@ class UserPrincipal:
     username: str
     email: str
     role: str
+    must_change_password: bool
     payload: dict
 
     @property
@@ -70,21 +71,54 @@ def optional_user(request: Request, db: Session = Depends(get_db)) -> UserPrinci
     account = db.get(User, int(user_id))
     if account is None or not account.is_active:
         return None
+
+    # Password changes/resets increment the persisted token version. Any JWT
+    # issued before that change is rejected here, including after a process or
+    # container restart. Missing/invalid versions are also rejected so tokens
+    # created before this protection was introduced cannot remain usable.
+    try:
+        issued_version = int(payload.get("token_version"))
+    except (TypeError, ValueError):
+        return None
+    if issued_version != account.token_version:
+        return None
+
     return UserPrincipal(
         user_id=account.id,
         username=account.username,
         email=account.email,
         role=account.role,
+        must_change_password=account.must_change_password,
         payload=payload,
     )
 
 
-def require_user(user: UserPrincipal | None = Depends(optional_user)) -> UserPrincipal:
+def require_authenticated_user(
+    user: UserPrincipal | None = Depends(optional_user),
+) -> UserPrincipal:
+    """Require a valid account but allow password-change-only sessions."""
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required.",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+def require_user(
+    user: UserPrincipal = Depends(require_authenticated_user),
+) -> UserPrincipal:
+    """Require a fully usable session.
+
+    An administrator-reset password creates a restricted session until the
+    user changes that temporary credential. Only /auth/me, logout and the
+    change-password endpoint use require_authenticated_user directly.
+    """
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required before continuing.",
         )
     return user
 

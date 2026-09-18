@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import User
-from ..security import hash_secret, require_user, verify_secret
+from ..security import (
+    hash_secret,
+    require_authenticated_user,
+    require_user,
+    revoke_token,
+    verify_secret,
+)
 from ..security.tokens import create_user_token
 from ..security.ratelimit import enforce
 from ..utils.dates import now_utc
@@ -97,7 +103,7 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
         select(User).where((User.username == username_or_email) | (User.email == username_or_email.lower()))
     ).first()
     if user is not None and user.is_active and verify_secret(password, user.password_hash):
-        token, expires_in = create_user_token(user.id, user.username, user.email)
+        token, expires_in = create_user_token(user.id, user.username, user.email, user.token_version)
         user.last_login_at = now_utc()
         db.commit()
         return {
@@ -110,10 +116,17 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
                 "username": user.username,
                 "email": user.email,
                 "role": user.role,
+                "must_change_password": user.must_change_password,
             },
         }
 
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password.")
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(user=Depends(require_authenticated_user)) -> None:
+    """Revoke the current local-auth token for either user role."""
+    revoke_token(user.payload)
 
 
 @router.post("/me/change-password")
@@ -121,7 +134,7 @@ def change_password(
     request: Request,
     payload: ChangePasswordRequest,
     db: Session = Depends(get_db),
-    user=Depends(require_user),
+    user=Depends(require_authenticated_user),
 ):
     enforce(request, "tenant-change-password", limit=10, window_seconds=300)
     db_user = db.get(User, user.user_id)
@@ -133,12 +146,23 @@ def change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password and confirmation do not match.")
     db_user.password_hash = hash_secret(payload.new_password)
     db_user.must_change_password = False
+    # Invalidate every JWT issued with the old password/security state.
+    db_user.token_version += 1
+    db.flush()
+    token, expires_in = create_user_token(
+        db_user.id, db_user.username, db_user.email, db_user.token_version
+    )
     db.commit()
-    return {"message": "Password updated successfully."}
+    return {
+        "message": "Password updated successfully.",
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": expires_in,
+    }
 
 
 @router.get("/me")
-def read_me(user=Depends(require_user), db: Session = Depends(get_db)):
+def read_me(user=Depends(require_authenticated_user), db: Session = Depends(get_db)):
     account = db.get(User, user.user_id)
     if account is None or not account.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User account is unavailable.")

@@ -35,18 +35,17 @@ class BookingBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     tenant_id: int = Field(ge=1)
-    jira_change: Annotated[str, Field(min_length=3, max_length=64)]
-    jira_task: Annotated[str | None, Field(default=None, max_length=64)] = None
+    jira_number: Annotated[str, Field(min_length=3, max_length=64)]
     jira_url: Annotated[str | None, Field(default=None, max_length=500)] = None
     environment: Annotated[str, Field(default="PROD", max_length=32)] = "PROD"
     technology: Technology
     requester_name: ShortText
-    requester_email: EmailStr
+    requester_email: EmailStr | None = None
     requester_phone: Annotated[str | None, Field(default=None, max_length=40)] = None
     verifier_name: ShortText
-    verifier_email: EmailStr
+    verifier_email: EmailStr | None = None
     git_repository: Annotated[str, Field(max_length=500)]
-    implementation_summary: Annotated[str, Field(min_length=10, max_length=4000)]
+    implementation_summary: Annotated[str | None, Field(default=None, max_length=4000)] = None
     deployment_description: Annotated[str, Field(min_length=10, max_length=4000)]
     additional_comments: Annotated[str | None, Field(default=None, max_length=4000)] = None
 
@@ -117,6 +116,20 @@ class DocumentReadiness(BaseModel):
     items: list[DocumentStatus]
 
 
+class AssignedUserOut(BaseModel):
+    user_id: int
+    full_name: str
+    username: str
+    email: str
+    assigned_at: datetime
+
+
+class StartWorkRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    change_number: Annotated[str, Field(min_length=3, max_length=64)]
+
+
 class BookingSummary(BaseModel):
     """Row-level view of a change record on the weekly board."""
 
@@ -126,8 +139,7 @@ class BookingSummary(BaseModel):
     tenant_name: str
     deployment_date: date
     slot_number: int | None
-    jira_change: str
-    jira_task: str | None
+    jira_number: str
     jira_url: str | None
     technology: str
     environment: str
@@ -135,8 +147,12 @@ class BookingSummary(BaseModel):
     status: str
     is_emergency: bool
     created_by_user_id: int | None
+    change_number: str | None
+    assigned_users: list[AssignedUserOut]
+    work_started_by_user_id: int | None
+    work_started_at: datetime | None
+    is_past: bool
     is_locked: bool
-    lock_deadline: datetime | None
     documents: DocumentReadiness
     created_at: datetime
     updated_at: datetime
@@ -194,6 +210,7 @@ class SlotView(BaseModel):
     unavailable_reason: str | None
     state: Literal["AVAILABLE", "BOOKED", "HOLIDAY", "DISABLED"]
     bookable: bool
+    manually_frozen: bool = False
     booking: BookingSummary | None
 
 
@@ -257,7 +274,7 @@ class ScheduleResponse(BaseModel):
 
 class PublicSettings(BaseModel):
     weekly_booking_limit: int
-    booking_freeze_hours: int
+    booking_freeze_dates: int
     max_file_size_mb: int
     mandatory_documents: list[str]
     document_catalog: list[dict]

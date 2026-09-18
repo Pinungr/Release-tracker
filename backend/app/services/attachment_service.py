@@ -27,6 +27,8 @@ def save_upload(
     category: DocumentCategory,
     upload: UploadFile,
     actor: Actor,
+    *,
+    commit: bool = True,
 ) -> BookingAttachment:
     app_settings = get_app_settings(db)
     raw_name = upload.filename or ""
@@ -95,8 +97,11 @@ def save_upload(
         admin_username=actor.admin_username,
         new_values={"category": DOCUMENT_LABELS[category.value], "filename": display_name},
     )
-    db.commit()
-    db.refresh(booking)
+    if commit:
+        db.commit()
+        db.refresh(booking)
+    else:
+        db.flush()
     return attachment
 
 

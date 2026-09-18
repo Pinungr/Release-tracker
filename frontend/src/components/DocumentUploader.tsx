@@ -39,6 +39,7 @@ export function DocumentUploader({
 }: DocumentUploaderProps) {
   const toast = useToast()
   const [busy, setBusy] = useState<DocumentCategory | null>(null)
+  const [downloading, setDownloading] = useState<number | null>(null)
   const inputs = useRef<Partial<Record<DocumentCategory, HTMLInputElement | null>>>({})
   const canManage = !readOnly && (isAdmin || ownerCanManage)
 
@@ -64,6 +65,17 @@ export function DocumentUploader({
       toast.error('Upload failed', error instanceof ApiError ? error.message : 'Please try again.')
     } finally {
       setBusy(null)
+    }
+  }
+
+  async function downloadFile(attachmentId: number, name: string) {
+    setDownloading(attachmentId)
+    try {
+      await api.downloadAttachment(booking.id, attachmentId, name)
+    } catch (error) {
+      toast.error('Download failed', error instanceof ApiError ? error.message : 'Please try again.')
+    } finally {
+      setDownloading(null)
     }
   }
 
@@ -146,13 +158,19 @@ export function DocumentUploader({
                     </span>
                     <span className="shrink-0 tnum text-ink-muted">{formatBytes(file.size_bytes)}</span>
                     {isAdmin || ownerCanManage ? (
-                      <a
-                        href={api.downloadUrl(booking.id, file.id)}
+                      <button
+                        type="button"
+                        onClick={() => void downloadFile(file.id, file.original_filename)}
                         className="btn-ghost btn-sm shrink-0 px-1.5"
                         aria-label={`Download ${file.original_filename}`}
+                        disabled={downloading === file.id}
                       >
-                        <Download className="size-3.5" />
-                      </a>
+                        {downloading === file.id ? (
+                          <Spinner className="size-3.5" />
+                        ) : (
+                          <Download className="size-3.5" />
+                        )}
+                      </button>
                     ) : null}
                     {canManage ? (
                       <button

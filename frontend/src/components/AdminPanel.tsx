@@ -45,7 +45,7 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
 const DOCUMENT_LABELS: Record<DocumentCategory, string> = {
   TEST_RESULTS: 'Non-Production Test Result',
   INVENTORY: 'Inventory File',
-  IMPLEMENTATION_PLAN: 'Implementation Plan',
+  IMPLEMENTATION_PLAN: 'Implementation Document',
   VALIDATION_PLAN: 'Validation Plan',
   DBA_SCRIPT: 'DBA Script',
   SUPPORTING_DOCUMENTS: 'Supporting Documents',
@@ -194,10 +194,8 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             void save({
               regular_slots_per_day: data.regular_slots_per_day,
               weekly_booking_limit: data.weekly_booking_limit,
-              booking_freeze_hours: data.booking_freeze_hours,
               max_file_size_mb: data.max_file_size_mb,
               emergency_changes_enabled: data.emergency_changes_enabled,
-              require_admin_override_reason: data.require_admin_override_reason,
             })
           }}
         >
@@ -222,16 +220,6 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             hint="Regular deployments only; emergency changes never count."
           />
           <TextField
-            label="Booking freeze hours"
-            name="booking_freeze_hours"
-            type="number"
-            min={0}
-            max={720}
-            value={String(data.booking_freeze_hours)}
-            onChange={(v) => setData({ ...data, booking_freeze_hours: Number(v) || 0 })}
-            hint="Tenants cannot edit or cancel inside this window. Default 48."
-          />
-          <TextField
             label="Maximum file size (MB)"
             name="max_file_size_mb"
             type="number"
@@ -247,13 +235,6 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
               checked={data.emergency_changes_enabled}
               onChange={(v) => setData({ ...data, emergency_changes_enabled: v })}
               hint="When off, no emergency change can be queued on any date."
-            />
-            <CheckboxField
-              label="Require a reason for administrator overrides"
-              name="require_admin_override_reason"
-              checked={data.require_admin_override_reason}
-              onChange={(v) => setData({ ...data, require_admin_override_reason: v })}
-              hint="Recommended: the reason is stored in the audit history."
             />
           </div>
           <div className="sm:col-span-2">
@@ -651,7 +632,7 @@ function DailyOverrideManager({ onChanged }: { onChanged: () => void }) {
   return (
     <SectionShell
       title="Daily slot override"
-      description="Configure one date differently from the default grid — for example three regular slots on a change-freeze Friday."
+      description="Configure one date differently from the default grid — for example a special-date slot configuration."
       error={error}
       loading={!data}
     >
@@ -860,7 +841,7 @@ function BookingManagement({
   return (
     <SectionShell
       title="Booking management"
-      description="Open a booking to edit, move or cancel it. Deleting removes the record and its uploaded documents permanently."
+      description="Current and future bookings can be managed here. Past deployment records are retained as read-only history and cannot be modified or deleted."
       error={error}
       loading={!bookings}
     >
@@ -891,7 +872,7 @@ function BookingManagement({
                 <p className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-ink-muted">
                   <span className="tnum">{formatDate(booking.deployment_date)}</span>
                   <span>Slot {booking.slot_number}</span>
-                  <span>{booking.jira_change}</span>
+                  <span>{booking.jira_number}</span>
                   <span>{booking.technology}</span>
                   <span>Verifier: {booking.verifier_name}</span>
                 </p>
@@ -903,7 +884,7 @@ function BookingManagement({
                   >
                     Open
                   </button>
-                  {booking.status === 'BOOKED' ? (
+                  {!booking.is_past && booking.status === 'BOOKED' ? (
                     <button
                       type="button"
                       className="btn-ghost btn-sm"
@@ -913,14 +894,20 @@ function BookingManagement({
                       Mark completed
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm text-rose-600"
-                    onClick={() => setPendingDelete(booking)}
-                  >
-                    <Trash className="size-3.5" />
-                    Delete permanently
-                  </button>
+                  {!booking.is_past ? (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm text-rose-600"
+                      onClick={() => setPendingDelete(booking)}
+                    >
+                      <Trash className="size-3.5" />
+                      Delete permanently
+                    </button>
+                  ) : (
+                    <span className="badge bg-slate-100 text-slate-600 ring-1 ring-slate-200">
+                      Historical · read-only
+                    </span>
+                  )}
                 </div>
               </li>
             ))}
@@ -947,7 +934,7 @@ function BookingManagement({
               ]
             : []
         }
-        note="The booking and every uploaded document will be removed. Cancelling instead keeps the record for audit purposes."
+        note="The booking and every uploaded document will be removed. Its audit history and deletion event will be retained permanently."
         confirmLabel="Delete permanently"
         cancelLabel="Keep record"
         busy={busy}

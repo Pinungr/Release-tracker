@@ -88,7 +88,7 @@ production-deployment-scheduler/
 │   │   ├── security/            hashing, JWT, auth dependencies, rate limiting
 │   │   ├── utils/               date/timezone helpers, safe file storage
 │   │   └── seed.py              demo data
-│   ├── tests/                   149 backend tests
+│   ├── tests/                   backend regression tests
 │   └── requirements.txt
 ├── frontend/                    React + TypeScript + Vite + Tailwind CSS v4
 │   └── src/
@@ -110,7 +110,7 @@ production-deployment-scheduler/
 ```
 
 **Architectural rule:** the backend is the source of truth. Authentication,
-ownership, the tenant weekly limit, the freeze window, holiday blocking and
+ownership, the tenant weekly limit, the date-only deployment freeze, holiday blocking and
 emergency-change access are all revalidated in the API on every write. The
 frontend's copies exist only for immediate feedback.
 
@@ -123,11 +123,11 @@ frontend's copies exist only for immediate feedback.
 | Sign up | self-service | promoted by an admin |
 | See the weekly board | ✅ | ✅ |
 | Schedule a normal change | ✅ | ✅ |
-| See / edit / cancel a change | only their own | any |
+| See / edit / cancel a change | own changes; assigned RM users can view and start work | any |
 | Upload and download documents | only on their own changes | any |
 | Emergency changes | view only | create, edit, cancel |
-| Exceed the tenant weekly limit | ❌ | ✅ with an audited reason |
-| Edit inside the freeze window | ❌ | ✅ with an audited reason |
+| Exceed the tenant weekly limit | ❌ | ✅ automatic administrator bypass, audited |
+| Edit inside the protected deployment dates | ❌ | ✅ automatic administrator bypass, audited |
 | Users, tenants, holidays, slots, settings, audit | ❌ | ✅ |
 
 Everyone uses **one login**. There is no separate administrator sign-in and no
@@ -144,10 +144,10 @@ promoting, demoting or deactivating an account takes effect immediately.
 | Normal deployment slots per day | 4 | Admin → General / Slots / Daily override |
 | Emergency changes | unlimited per date, admin only | Admin → General / Daily override |
 | Normal changes per **tenant** per week | 2 | Admin → General |
-| Edit/cancel freeze before deployment | **48 hours** | Admin → General |
+| Booking/edit freeze | **Admin-controlled per slot**; no automatic freeze | Admin on weekly board |
 | Maximum upload size | 20 MB per file | Admin → General |
-| Mandatory documents | Test result, inventory, implementation plan, validation plan | Admin → Documents |
-| Working week | Monday–Friday | fixed |
+| Mandatory documents | Test result, inventory, implementation document, validation plan, DBA script | Admin → Documents |
+| Working week | Sunday–Thursday for normal deployment slots; Friday/Saturday skipped | fixed |
 | Timezone | Asia/Kolkata | `TIMEZONE` |
 
 **The weekly limit is per tenant, not per user.** If user A and user B each
@@ -158,6 +158,12 @@ for any other tenant.
 **Emergency changes are a queue, not a slot.** Any number can sit on the same
 date, they carry no slot number, they never consume normal deployment capacity,
 and they never count against a tenant's weekly quota.
+
+**Administrator scheduling overrides are automatic for current/future dates.** Administrators can schedule
+normal or emergency changes on holidays, Friday/Saturday and slots disabled by normal policy,
+and they are not constrained by a tenant weekly quota or a manual administrator slot freeze.
+Past deployment dates are immutable for administrators as well. Occupied normal slots remain protected from double-booking; use
+the emergency queue when the normal daily capacity is already consumed.
 
 ```
 DAY
@@ -211,6 +217,22 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 With `ENVIRONMENT=production` the app refuses to start while `JWT_SECRET` or
 `BOOTSTRAP_ADMIN_PASSWORD` are still at their placeholder values.
 
+
+### Database migrations
+
+Database schema evolution is managed with **Alembic**. Application startup runs
+`alembic upgrade head` before seeding configuration. Existing installations that
+predate Alembic are detected and stamped at the baseline revision so their
+current data is preserved; future schema changes should be added as Alembic
+revisions under `backend/migrations/versions/`.
+
+Manual commands from `backend/`:
+
+```bash
+alembic current
+alembic upgrade head
+```
+
 ### Bootstrap administrator
 
 On first start the app creates **one** administrator in the ordinary `users`
@@ -228,6 +250,12 @@ account is left untouched, so restarting never resets a password somebody has
 already changed.
 
 **POC default: `admin` / `admin2024`. Change it before any real use.**
+
+When an administrator resets a user's password, the account is marked
+`must_change_password`. The temporary password can authenticate only to the
+password-change/logout endpoints; scheduler and administration APIs remain
+blocked until the user sets a new password.
+
 
 ---
 
@@ -338,13 +366,13 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
    confirm password), then sign in. New accounts are always `TENANT_USER`.
 2. Navigate with **Previous week / Next week / Today**.
 3. Click **Book slot** on a free slot. Choose the **tenant** in the drawer —
-   this is per change record, not per account.
-4. Attach the required documents; readiness shows as `3 / 4 required`.
+   this is per change record, not per account. A **Jira No. is required**; Jira URL is stored separately. Requester email, verifier email and implementation summary are optional.
+4. Before confirming the slot, attach every required deployment document. The booking is created only after the mandatory files are accepted by the backend.
 5. Your own changes are badged **My booking**; the **My changes** card filters
    the board to them.
-6. Edit or cancel your own change up to **48 hours** before deployment. Inside
-   that window the drawer shows **Booking locked** instead of the buttons.
-7. **Profile** shows your account and lets you change your password.
+6. Past deployment dates are permanently read-only for everyone, including administrators. Future normal slots are **not frozen automatically**. An administrator explicitly freezes or unfreezes an individual slot from the weekly board. A manually frozen slot cannot be booked, edited, cancelled, or have documents changed by normal users; administrators retain override access until the date becomes historical.
+7. If an administrator assigns you to a booked change as an RM user, it appears in **My changes**. You can open it and **Start work** by entering the separate **Change No.**; assignment does not give you ownership/edit/cancel rights.
+8. **Profile** shows your account and lets you change your password.
 
 **As an administrator**
 
@@ -354,31 +382,31 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
    demoted or deactivated.
 3. *Tenants* — add, edit, activate, deactivate. Only active tenants appear in
    the scheduling form.
-4. *General* — slots per day, weekly limit, freeze hours, upload size.
+4. *General* — slots per day, weekly limit and upload size.
    *Slots* — names and times of the normal slots.
    *Holidays* — full or partial day, emergency allowed or not.
    *Daily override* — a different grid for one date.
    *Documents* — which categories are mandatory.
-   *Bookings* — open, complete or permanently delete.
-   *Audit* — every create, edit, move, cancel, document change and override.
+   *Bookings* — open, assign one or more RM users, complete or permanently delete.
+   Permanent deletion removes the booking/files but **retains its audit history**.
+   *Audit* — every create, edit, assignment, work start, move, cancel, document change, override and hard delete.
 5. **Add emergency CR** on any day's emergency queue. The form additionally
    requires an emergency reason and business justification.
-6. Overriding the weekly limit or the freeze window asks for a reason, which is
-   stored in the audit trail.
+6. Administrator policy bypasses are recorded in the audit trail. Jira No. remains the booking identifier; the separate Change No. is supplied later by an assigned RM user when work starts.
 
 ---
 
 ## 9. Documents
 
-Six categories, four mandatory by default:
+Six categories, five mandatory by default:
 
 | Category | Default | Files |
 | --- | --- | --- |
 | Non-Production Test Result | required | one |
 | Inventory File | required | one |
-| Implementation Plan | required | one |
+| Implementation Document | required | one |
 | Validation Plan | required | one |
-| DBA Script | optional | one |
+| DBA Script | required | one |
 | Supporting Documents | optional | many |
 
 Accepted types: `.pdf .doc .docx .xls .xlsx .csv .txt .zip .sql .png .jpg .jpeg`
@@ -451,7 +479,7 @@ the project directory name.
 cd backend && .venv/Scripts/python -m pytest
 ```
 
-**149 tests, all passing.** They cover the rules that matter:
+**131 tests, all passing.** They cover the rules that matter:
 
 * sign-up creates a TENANT_USER and can never self-grant ADMIN
 * login by username or email; identical message for unknown user and wrong
@@ -468,8 +496,7 @@ cd backend && .venv/Scripts/python -m pytest
 * 2 normal changes per tenant per week — shared across users, independent per
   tenant, resets weekly, freed by cancellation, overridable by an admin *with
   an audited reason*
-* the 48-hour freeze blocks the owner's edit, cancel and upload; an admin may
-  override with a reason
+* manual slot freezing blocks normal-user booking/edit/cancel/upload only after an administrator freezes that future slot; admins can unfreeze or override future locks, while past deployment dates are read-only for everyone
 * multiple emergency changes on one date, admin-only, consuming neither slots
   nor quota; tenant users are refused
 * holidays block normal slots and can keep or close the emergency queue;
@@ -479,8 +506,6 @@ cd backend && .venv/Scripts/python -m pytest
 * concurrency: eight simultaneous requests for one slot leave exactly one
   winner; five simultaneous emergency changes on one date all succeed
 * the monolith's serving layer, including traversal attempts under `/assets`
-* configuration safety: production refuses to start on any credential this
-  repository ships, and relative paths resolve against the project root
 
 SQLite backs the test suite on purpose — it gives each test a fresh isolated
 schema in milliseconds. Production runs on PostgreSQL; nothing in the
@@ -550,7 +575,7 @@ documentation: `/docs`.
 | `POST` | `/auth/login` | The one login, for every role |
 | `GET` | `/auth/me` | Current account |
 | `POST` | `/auth/me/change-password` | Change your own password |
-| `POST` | `/admin/logout` | Revoke the current token |
+| `POST` | `/auth/logout` | Revoke the current token |
 
 ### Scheduling (authenticated)
 
@@ -558,7 +583,7 @@ documentation: `/docs`.
 | --- | --- | --- |
 | `GET` | `/schedule?week=YYYY-MM-DD` | One week of the board |
 | `GET` | `/tenants/active` | Tenants selectable when scheduling |
-| `POST` | `/bookings` | Create a change (emergency requires ADMIN) |
+| `POST` | `/bookings` | Create a change with mandatory documents (`multipart/form-data`; emergency requires ADMIN) |
 | `GET` | `/bookings/{id}` | Owner or admin only |
 | `PUT` | `/bookings/{id}` | Edit |
 | `DELETE` | `/bookings/{id}` | Cancel and release the slot |
@@ -578,17 +603,20 @@ documentation: `/docs`.
 | `POST` | `/admin/users/{id}/reset-password` | Set a new password |
 | `GET` `POST` | `/admin/tenants` | Tenant master |
 | `PUT` `PATCH` | `/admin/tenants/{id}`, `/admin/tenants/{id}/status` | Edit / activate |
-| `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, freeze hours, file size, mandatory documents |
+| `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, file size, mandatory documents |
 | `GET` `PUT` | `/admin/slots` | Normal slot grid |
 | `GET` `POST` `PUT` `DELETE` | `/admin/holidays` | Holiday management |
 | `GET` `PUT` `DELETE` | `/admin/overrides` | Per-date slot overrides |
 | `GET` | `/admin/bookings` | All changes, optionally including cancelled |
 | `POST` | `/admin/bookings/emergency` | Emergency change |
+| `POST` | `/admin/bookings/{id}/assign-users` | Assign one or more active RM users |
 | `POST` | `/admin/bookings/{id}/move` | Move to another date/slot |
 | `POST` | `/admin/bookings/{id}/reassign` | Change tenant / requester / verifier |
 | `POST` | `/admin/bookings/{id}/status` | Set BOOKED, COMPLETED or CANCELLED |
-| `DELETE` | `/admin/bookings/{id}` | Permanently delete a change and its files |
+| `DELETE` | `/admin/bookings/{id}` | Permanently delete a change and its files while retaining audit history |
 | `GET` | `/admin/audit` | Audit history |
+
+Assigned RM users use `POST /bookings/{id}/start-work` with a required `change_number`. Jira No. remains unchanged and separate.
 
 ---
 
@@ -602,7 +630,7 @@ documentation: `/docs`.
 | Slot 4 | 14:00 – 16:00 |
 | Emergency changes | unlimited per date, administrators only |
 | Weekly limit per tenant | 2 normal changes |
-| Freeze window | 48 hours |
+| Freeze | Next 2 valid deployment dates (date-only) |
 | Max upload | 20 MB per file |
 | Booking reference | `PDS-YYYYMMDD-NNN` |
 | Timezone | Asia/Kolkata (timestamps stored in UTC) |

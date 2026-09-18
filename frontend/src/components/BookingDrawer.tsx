@@ -15,6 +15,8 @@ import {
   toBookingPayload,
   validateBookingForm,
   valuesFromBooking,
+  type BookingDocumentErrors,
+  type BookingDocumentFiles,
   type BookingFormErrors,
 } from './BookingForm'
 import { DocumentReadinessPanel } from './DocumentReadiness'
@@ -60,6 +62,8 @@ export function BookingDrawer({
 
   const [values, setValues] = useState<BookingFormValues>(EMPTY_BOOKING_VALUES)
   const [errors, setErrors] = useState<BookingFormErrors>({})
+  const [documents, setDocuments] = useState<BookingDocumentFiles>({})
+  const [documentErrors, setDocumentErrors] = useState<BookingDocumentErrors>({})
   const [saving, setSaving] = useState(false)
   const [created, setCreated] = useState<BookingCreated | null>(null)
   const [tenants, setTenants] = useState<Tenant[]>([])
@@ -75,6 +79,8 @@ export function BookingDrawer({
   useEffect(() => {
     if (!open) return
     setErrors({})
+    setDocuments({})
+    setDocumentErrors({})
     setCreated(null)
     setValues(
       editBooking
@@ -85,8 +91,24 @@ export function BookingDrawer({
 
   useEffect(() => {
     if (!open) return
-    api.getActiveTenants().then(setTenants).catch(() => setTenants([]))
-  }, [open])
+    api
+      .getActiveTenants()
+      .then((items) => {
+        setTenants(items)
+
+        // A controlled <select> with value="" but no empty option can
+        // visually display the first tenant while the actual form state is
+        // still blank. Keep the visible selection and submitted tenant_id in
+        // sync by selecting the first active tenant for new bookings.
+        if (!editBooking && items.length > 0) {
+          setValues((current) =>
+            current.tenant_id ? current : { ...current, tenant_id: String(items[0].id) },
+          )
+          setErrors((current) => ({ ...current, tenant_id: undefined }))
+        }
+      })
+      .catch(() => setTenants([]))
+  }, [open, editBooking])
 
   const heading = useMemo(() => {
     if (created) return isEmergency ? 'Emergency change queued' : 'Deployment slot booked'
@@ -116,11 +138,51 @@ export function BookingDrawer({
     setErrors((current) => ({ ...current, [field]: undefined }))
   }
 
+  function updateDocuments(category: keyof BookingDocumentFiles, files: File[]) {
+    setDocuments((current) => ({ ...current, [category]: files }))
+    setDocumentErrors((current) => ({ ...current, [category]: undefined }))
+  }
+
+  function validateDocuments(): BookingDocumentErrors {
+    if (mode !== 'create') return {}
+    const found: BookingDocumentErrors = {}
+    const allowed = new Set([
+      'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'zip', 'sql', 'png', 'jpg', 'jpeg',
+    ])
+    const maxBytes = settings.max_file_size_mb * 1024 * 1024
+
+    for (const entry of settings.document_catalog) {
+      const files = documents[entry.category] ?? []
+      if (entry.required && files.length === 0) {
+        found[entry.category] = `${entry.label} is required before booking the slot.`
+        continue
+      }
+      for (const file of files) {
+        const extension = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() ?? '' : ''
+        if (!allowed.has(extension)) {
+          found[entry.category] = `Unsupported file type for ${file.name}.`
+          break
+        }
+        if (file.size === 0) {
+          found[entry.category] = `${file.name} is empty.`
+          break
+        }
+        if (file.size > maxBytes) {
+          found[entry.category] = `${file.name} exceeds the ${settings.max_file_size_mb} MB limit.`
+          break
+        }
+      }
+    }
+    return found
+  }
+
   async function submit() {
     const found = validateBookingForm(values, { isEmergency })
+    const foundDocumentErrors = validateDocuments()
     setErrors(found)
-    if (Object.keys(found).length > 0) {
-      toast.error('Please correct the highlighted fields.')
+    setDocumentErrors(foundDocumentErrors)
+    if (Object.keys(found).length > 0 || Object.keys(foundDocumentErrors).length > 0) {
+      toast.error('Please correct the highlighted fields and attach all required documents.')
       return
     }
 
@@ -131,10 +193,10 @@ export function BookingDrawer({
           deployment_date: createTarget.day.day,
           slot_number: createTarget.slot?.slot_number ?? null,
           is_emergency: isEmergency,
-          override_weekly_limit: isAdmin ? values.override_weekly_limit : false,
-          override_reason: isAdmin ? values.override_reason || null : null,
+          override_weekly_limit: isAdmin,
+          override_reason: null,
         })
-        const result = await api.createBooking(payload)
+        const result = await api.createBooking(payload, documents)
         setCreated(result)
         onSaved()
         toast.success(
@@ -145,8 +207,8 @@ export function BookingDrawer({
         const payload = toBookingPayload(values, {
           deployment_date: editBooking.deployment_date,
           slot_number: editBooking.slot_number,
-          override_weekly_limit: isAdmin ? values.override_weekly_limit : false,
-          override_reason: isAdmin ? values.override_reason || null : null,
+          override_weekly_limit: isAdmin,
+          override_reason: null,
         })
         await api.updateBooking(editBooking.id, payload)
         onSaved()
@@ -224,7 +286,7 @@ export function BookingDrawer({
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <p className="flex items-center gap-2 text-sm font-semibold text-emerald-900">
               <Check className="size-4" />
-              Deployment slot booked successfully.
+              {isEmergency ? 'Emergency change queued successfully.' : 'Deployment slot booked successfully.'}
             </p>
             <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
               <dt className="text-emerald-900/70">Booking reference</dt>
@@ -250,7 +312,7 @@ export function BookingDrawer({
           </p>
 
           <div>
-            <h3 className="mb-2 text-sm font-semibold text-ink">Attach deployment documents</h3>
+            <h3 className="mb-2 text-sm font-semibold text-ink">Deployment documents</h3>
             <DocumentUploader
               booking={created.booking}
               settings={settings}
@@ -273,7 +335,10 @@ export function BookingDrawer({
           errors={errors}
           settings={settings}
           isEmergency={isEmergency}
-          isAdmin={isAdmin}
+          showDocumentUpload={mode === 'create'}
+          documents={documents}
+          documentErrors={documentErrors}
+          onDocumentsChange={updateDocuments}
           onChange={update}
           onSubmit={submit}
         />
