@@ -1,0 +1,26 @@
+# Source-control/editor files
+.git
+.gitignore
+.vscode
+.idea
+.claude
+
+# Python test/development artifacts
+backend/tests
+backend/pytest.ini
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.coverage
+htmlcov
+
+# Frontend local artifacts
+frontend/node_modules
+frontend/dist
+
+# Local/runtime files
+.env
+*.log
+*.sqlite
+*.sqlite3
+uploads

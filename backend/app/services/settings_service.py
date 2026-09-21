@@ -12,6 +12,8 @@ from ..models import ApplicationSetting, DocumentCategory
 DEFAULTS: dict[str, object] = {
     "regular_slots_per_day": 4,
     "weekly_booking_limit": 2,
+    "booking_freeze_dates": 2,
+    "jira_required_at_booking": False,
     "max_file_size_mb": 20,
     "emergency_changes_enabled": True,
     "require_admin_override_reason": True,
@@ -24,13 +26,14 @@ DEFAULTS: dict[str, object] = {
     ],
 }
 
-INT_KEYS = {"regular_slots_per_day", "weekly_booking_limit", "max_file_size_mb"}
-BOOL_KEYS = {"emergency_changes_enabled", "require_admin_override_reason"}
+INT_KEYS = {"regular_slots_per_day", "weekly_booking_limit", "booking_freeze_dates", "max_file_size_mb"}
+BOOL_KEYS = {"emergency_changes_enabled", "require_admin_override_reason", "jira_required_at_booking"}
 LIST_KEYS = {"mandatory_documents"}
 
 LIMITS = {
     "regular_slots_per_day": (1, 12),
     "weekly_booking_limit": (1, 25),
+    "booking_freeze_dates": (0, 25),
     "max_file_size_mb": (1, 200),
 }
 
@@ -39,6 +42,8 @@ LIMITS = {
 class AppSettings:
     regular_slots_per_day: int
     weekly_booking_limit: int
+    booking_freeze_dates: int
+    jira_required_at_booking: bool
     max_file_size_mb: int
     emergency_changes_enabled: bool
     require_admin_override_reason: bool

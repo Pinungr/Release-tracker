@@ -26,6 +26,7 @@ def list_active_tenants(
             "name": tenant.name,
             "tenant_code": tenant.tenant_code,
             "description": tenant.description,
+            "weekly_booking_limit": tenant.weekly_booking_limit,
         }
         for tenant in tenants
     ]

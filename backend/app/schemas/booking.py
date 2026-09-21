@@ -35,7 +35,7 @@ class BookingBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     tenant_id: int = Field(ge=1)
-    jira_number: Annotated[str, Field(min_length=3, max_length=64)]
+    jira_number: Annotated[str | None, Field(default=None, min_length=3, max_length=64)] = None
     jira_url: Annotated[str | None, Field(default=None, max_length=500)] = None
     environment: Annotated[str, Field(default="PROD", max_length=32)] = "PROD"
     technology: Technology
@@ -59,6 +59,13 @@ class BookingBase(BaseModel):
     @classmethod
     def _check_repo(cls, value: str) -> str:
         return _validate_repo(value)
+
+    @field_validator("jira_number", mode="before")
+    @classmethod
+    def _blank_jira_is_missing(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("jira_url")
     @classmethod
@@ -139,7 +146,7 @@ class BookingSummary(BaseModel):
     tenant_name: str
     deployment_date: date
     slot_number: int | None
-    jira_number: str
+    jira_number: str | None
     jira_url: str | None
     technology: str
     environment: str
@@ -275,6 +282,7 @@ class ScheduleResponse(BaseModel):
 class PublicSettings(BaseModel):
     weekly_booking_limit: int
     booking_freeze_dates: int
+    jira_required_at_booking: bool
     max_file_size_mb: int
     mandatory_documents: list[str]
     document_catalog: list[dict]

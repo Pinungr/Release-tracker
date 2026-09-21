@@ -194,6 +194,8 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             void save({
               regular_slots_per_day: data.regular_slots_per_day,
               weekly_booking_limit: data.weekly_booking_limit,
+              booking_freeze_dates: data.booking_freeze_dates,
+              jira_required_at_booking: data.jira_required_at_booking,
               max_file_size_mb: data.max_file_size_mb,
               emergency_changes_enabled: data.emergency_changes_enabled,
             })
@@ -210,14 +212,24 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             hint="Emergency changes are a separate admin-only queue and never use a slot."
           />
           <TextField
-            label="Weekly booking limit per tenant"
+            label="Default weekly booking limit"
             name="weekly_booking_limit"
             type="number"
             min={1}
             max={25}
             value={String(data.weekly_booking_limit)}
             onChange={(v) => setData({ ...data, weekly_booking_limit: Number(v) || 1 })}
-            hint="Regular deployments only; emergency changes never count."
+            hint="Fallback for tenants that do not have their own weekly limit."
+          />
+          <TextField
+            label="Freeze upcoming deployment dates"
+            name="booking_freeze_dates"
+            type="number"
+            min={0}
+            max={25}
+            value={String(data.booking_freeze_dates)}
+            onChange={(v) => setData({ ...data, booking_freeze_dates: Math.max(0, Number(v) || 0) })}
+            hint="Today and the configured upcoming valid deployment dates are frozen for everyone, including Admin. Friday/Saturday and full-day holidays are skipped when counting."
           />
           <TextField
             label="Maximum file size (MB)"
@@ -229,6 +241,13 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             onChange={(v) => setData({ ...data, max_file_size_mb: Number(v) || 1 })}
           />
           <div className="space-y-3 sm:col-span-2">
+            <CheckboxField
+              label="Require Jira No. during booking"
+              name="jira_required_at_booking"
+              checked={data.jira_required_at_booking}
+              onChange={(v) => setData({ ...data, jira_required_at_booking: v })}
+              hint="When off, Jira No. can be added later."
+            />
             <CheckboxField
               label="Emergency changes enabled"
               name="emergency_changes_enabled"
@@ -872,7 +891,7 @@ function BookingManagement({
                 <p className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-ink-muted">
                   <span className="tnum">{formatDate(booking.deployment_date)}</span>
                   <span>Slot {booking.slot_number}</span>
-                  <span>{booking.jira_number}</span>
+                  <span>{booking.jira_number ?? 'Jira pending'}</span>
                   <span>{booking.technology}</span>
                   <span>Verifier: {booking.verifier_name}</span>
                 </p>

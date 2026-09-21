@@ -311,11 +311,11 @@ export function BookingDetailsDrawer({
                     rel="noreferrer noopener"
                     className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline"
                   >
-                    {booking.jira_number}
+                    {booking.jira_number ?? 'Not provided'}
                     <LinkIcon className="size-3.5" />
                   </a>
                 ) : (
-                  booking.jira_number
+                  booking.jira_number ?? 'Not provided'
                 )}
               </Row>
               <Row label="Change No.">{booking.change_number ?? 'Pending RM update'}</Row>
@@ -489,7 +489,7 @@ export function BookingDetailsDrawer({
           title="Cancel deployment booking?"
           facts={[
             { label: 'Tenant', value: booking.tenant_name },
-            { label: 'JIRA', value: booking.jira_number },
+            { label: 'JIRA', value: booking.jira_number ?? 'Not provided' },
             { label: 'Date', value: formatDate(booking.deployment_date) },
             { label: 'Slot', value: `${booking.slot_label} · ${booking.slot_time}` },
           ]}

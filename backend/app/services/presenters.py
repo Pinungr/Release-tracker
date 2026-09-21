@@ -90,9 +90,14 @@ def booking_detail(
     base = booking_summary(db, booking, app_settings).model_dump()
     slot_label, slot_time = booking_service.slot_labels(db, booking)
     active = booking.status != BookingStatus.CANCELLED.value
+    automatically_frozen = (
+        not booking.is_emergency
+        and booking_service.is_date_automatically_frozen(db, booking.deployment_date, app_settings)
+    )
     can_edit = (
         active
-        and not base["is_past"]
+        and booking.deployment_date > today_local()
+        and not automatically_frozen
         and (is_admin or (not base["is_locked"] and not booking.is_emergency))
     )
     return BookingDetail(
@@ -120,7 +125,8 @@ def booking_detail(
 def public_settings(app_settings: AppSettings) -> PublicSettings:
     return PublicSettings(
         weekly_booking_limit=app_settings.weekly_booking_limit,
-        booking_freeze_dates=booking_service.FREEZE_DEPLOYMENT_DATES,
+        booking_freeze_dates=app_settings.booking_freeze_dates,
+        jira_required_at_booking=app_settings.jira_required_at_booking,
         max_file_size_mb=app_settings.max_file_size_mb,
         mandatory_documents=list(app_settings.mandatory_documents),
         document_catalog=[
@@ -168,6 +174,7 @@ def schedule_response(
         emergency_by_day.setdefault(booking.deployment_date, []).append(booking)
 
     today = today_local()
+    automatic_freezes = booking_service.automatic_frozen_dates(db, app_settings)
     manual_freezes = booking_service.slot_freezes_between(db, sunday, end_of_view)
     days: list[DayView] = []
     regular_capacity = regular_booked = emergency_total = holiday_count = 0
@@ -182,12 +189,20 @@ def schedule_response(
         for slot in plan.slots:
             booking = by_cell.get((plan.day, slot.slot_number))
             manually_frozen = (plan.day, slot.slot_number) in manual_freezes
-            state = _slot_state(
-                slot, booking is not None, on_holiday, plan.day < today or (manually_frozen and not is_admin)
+            current_or_past = plan.day <= today
+            automatically_frozen = plan.day in automatic_freezes
+            closed_for_view = current_or_past or automatically_frozen or (
+                not is_admin and manually_frozen
             )
-            open_for_booking = plan.day >= today and (
+            state = _slot_state(slot, booking is not None, on_holiday, closed_for_view)
+            open_for_booking = plan.day > today and (
                 is_admin
-                or (slot.enabled and slot.unavailable_reason is None and not manually_frozen)
+                or (
+                    slot.enabled
+                    and slot.unavailable_reason is None
+                    and not automatically_frozen
+                    and not manually_frozen
+                )
             )
             if open_for_booking or booking is not None:
                 regular_capacity += 1
@@ -206,14 +221,31 @@ def schedule_response(
                     enabled=slot.enabled,
                     unavailable_reason=(
                         slot.unavailable_reason
-                        or ("This date has passed." if plan.day < today else None)
-                        or ("Manually frozen by an administrator." if manually_frozen else None)
+                        or (
+                            "Past and current deployment dates are read-only."
+                            if current_or_past
+                            else None
+                        )
+                        or (
+                            "Inside the configured upcoming-date freeze window."
+                            if automatically_frozen
+                            else None
+                        )
+                        or (
+                            "Manually frozen by an administrator."
+                            if manually_frozen and not is_admin
+                            else None
+                        )
                     ),
                     state=state,  # type: ignore[arg-type]
                     bookable=(
                         booking is None
-                        and plan.day >= today
-                        and (is_admin or (slot.bookable and not manually_frozen))
+                        and plan.day > today
+                        and not automatically_frozen
+                        and (
+                            is_admin
+                            or (slot.bookable and not manually_frozen)
+                        )
                     ),
                     manually_frozen=manually_frozen,
                     booking=booking_summary(db, booking, app_settings) if booking else None,
@@ -236,11 +268,11 @@ def schedule_response(
                 regular_slots_used=day_regular_used,
                 slots=slot_views,
                 emergency_open=(
-                    plan.day >= today and (True if is_admin else plan.emergency_open)
+                    plan.day > today and (True if is_admin else plan.emergency_open)
                 ),
                 emergency_closed_reason=(
-                    "This date has passed."
-                    if plan.day < today
+                    "Past and current deployment dates are read-only."
+                    if plan.day <= today
                     else (None if is_admin else plan.emergency_closed_reason)
                 ),
                 emergency_bookings=[
@@ -295,6 +327,8 @@ def settings_out(db: Session) -> dict:
     return {
         "regular_slots_per_day": s.regular_slots_per_day,
         "weekly_booking_limit": s.weekly_booking_limit,
+        "booking_freeze_dates": s.booking_freeze_dates,
+        "jira_required_at_booking": s.jira_required_at_booking,
         "max_file_size_mb": s.max_file_size_mb,
         "emergency_changes_enabled": s.emergency_changes_enabled,
         "require_admin_override_reason": s.require_admin_override_reason,

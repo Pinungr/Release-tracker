@@ -68,7 +68,7 @@ export interface BookingSummary {
   deployment_date: string
   /** null for emergency changes: they join the date's queue, not a slot. */
   slot_number: number | null
-  jira_number: string
+  jira_number: string | null
   jira_url: string | null
   technology: string
   environment: string
@@ -92,6 +92,7 @@ export interface Tenant {
   name: string
   tenant_code: string | null
   description: string | null
+  weekly_booking_limit: number | null
 }
 
 export interface BookingDetail extends BookingSummary {
@@ -185,8 +186,9 @@ export interface DocumentCatalogEntry {
 
 export interface PublicSettings {
   weekly_booking_limit: number
-  /** Deprecated compatibility field; automatic freeze is disabled and this is 0. */
+  /** Number of upcoming valid deployment dates frozen for normal users. Today is always frozen. */
   booking_freeze_dates: number
+  jira_required_at_booking: boolean
   max_file_size_mb: number
   mandatory_documents: DocumentCategory[]
   document_catalog: DocumentCatalogEntry[]
@@ -222,6 +224,7 @@ export interface AdminTenant {
   name: string
   tenant_code: string | null
   description: string | null
+  weekly_booking_limit: number | null
   is_active: boolean
 }
 
@@ -244,6 +247,8 @@ export interface AuthUser {
 export interface AdminSettings {
   regular_slots_per_day: number
   weekly_booking_limit: number
+  booking_freeze_dates: number
+  jira_required_at_booking: boolean
   max_file_size_mb: number
   emergency_changes_enabled: boolean
   require_admin_override_reason: boolean

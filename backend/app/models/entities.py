@@ -27,7 +27,8 @@ class BookingStatus(str, enum.Enum):
     """Stored booking lifecycle states.
 
     ``LOCKED`` is accepted for compatibility but the UI lock is derived from
-    an administrator-controlled manual slot freeze, not stored on the booking.
+    date-based booking rules and administrator-controlled manual slot freezes,
+    not stored on the booking.
     Statuses after ``CANCELLED`` are reserved for future validation workflows
     and are deliberately not surfaced in the UI yet.
     """
@@ -95,6 +96,9 @@ class Tenant(Base):
     tenant_code: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Optional tenant-specific quota. NULL means use the global default from
+    # application_settings.weekly_booking_limit.
+    weekly_booking_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     updated_at: Mapped[datetime] = mapped_column(
@@ -175,7 +179,7 @@ class DeploymentBooking(Base):
     # Legacy database column name ``jira_change`` stores the Jira number.
     # The API/UI expose it as ``jira_number`` so it cannot be confused with
     # the separate Change No. that RM users add after assignment.
-    jira_number: Mapped[str] = mapped_column("jira_change", String(64), nullable=False)
+    jira_number: Mapped[str | None] = mapped_column("jira_change", String(64), nullable=True)
     jira_task: Mapped[str | None] = mapped_column(String(64), nullable=True)  # legacy, no longer exposed
     jira_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     change_number: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -1,13 +1,15 @@
-"""Weekly tenant quota and administrator-controlled manual slot freezing.
+"""Weekly tenant quotas plus automatic and manual freeze rules.
 
-The weekly limit counts change records **per tenant**, not per user. Normal
-users are locked only when an administrator explicitly freezes a slot.
+The weekly limit counts change records per tenant, with an optional tenant
+override. Today is always read-only; upcoming deployment-date freezes are
+configured in Booking Rules, and manual per-slot freezes remain available.
 """
 from __future__ import annotations
 
 from datetime import date, timedelta
 
 from conftest import booking_payload, create_booking, create_tenant, post_booking
+from app.utils.dates import is_deployment_weekday, today_local
 
 
 
@@ -102,14 +104,87 @@ def test_the_limit_is_configurable(admin, user, tenant, next_monday):
     assert post_booking(user, booking_payload(tenant, next_monday, 2)).status_code == 409
 
 
+def test_each_tenant_can_override_the_default_weekly_limit(admin, user, tenant, next_monday):
+    other = create_tenant(admin, "High Capacity", "HIGH")
+    updated_low = admin.put(
+        f"/api/admin/tenants/{tenant}",
+        json={
+            "name": "EPCAT",
+            "tenant_code": "EPCAT",
+            "description": None,
+            "weekly_booking_limit": 1,
+        },
+    )
+    updated_high = admin.put(
+        f"/api/admin/tenants/{other}",
+        json={
+            "name": "High Capacity",
+            "tenant_code": "HIGH",
+            "description": None,
+            "weekly_booking_limit": 3,
+        },
+    )
+    assert updated_low.status_code == 200, updated_low.text
+    assert updated_high.status_code == 200, updated_high.text
+
+    assert post_booking(user, booking_payload(tenant, next_monday, 1)).status_code == 201
+    assert post_booking(user, booking_payload(tenant, next_monday, 2)).status_code == 409
+
+    assert post_booking(user, booking_payload(other, next_monday, 2)).status_code == 201
+    assert post_booking(user, booking_payload(other, next_monday, 3)).status_code == 201
+    assert post_booking(user, booking_payload(other, next_monday, 4)).status_code == 201
+
+
 # --------------------------------------------------------------------------- #
 # Administrator-controlled manual slot freeze
 # --------------------------------------------------------------------------- #
 
 
-def test_automatic_freeze_is_disabled(admin):
+def test_automatic_freeze_defaults_to_two_upcoming_deployment_dates(admin):
     settings = admin.get("/api/schedule").json()["settings"]
-    assert settings["booking_freeze_dates"] == 0
+    assert settings["booking_freeze_dates"] == 2
+
+
+def _next_deployment_dates(count: int) -> list[date]:
+    result: list[date] = []
+    cursor = today_local() + timedelta(days=1)
+    while len(result) < count:
+        if is_deployment_weekday(cursor):
+            result.append(cursor)
+        cursor += timedelta(days=1)
+    return result
+
+
+def test_current_day_is_frozen_for_user_and_admin(user, admin, tenant):
+    today = today_local()
+    user_response = post_booking(user, booking_payload(tenant, today, 1))
+    admin_response = post_booking(admin, booking_payload(tenant, today, 1))
+    assert user_response.status_code == 423
+    assert admin_response.status_code == 423
+    assert "current" in user_response.json()["detail"].lower()
+
+
+def test_configured_upcoming_dates_are_frozen_for_user_and_admin(
+    user, admin, tenant
+):
+    first, second, third = _next_deployment_dates(3)
+    assert post_booking(user, booking_payload(tenant, first, 1)).status_code == 423
+    assert post_booking(user, booking_payload(tenant, second, 1)).status_code == 423
+    assert post_booking(admin, booking_payload(tenant, first, 1)).status_code == 423
+    assert post_booking(admin, booking_payload(tenant, second, 1)).status_code == 423
+    assert post_booking(user, booking_payload(tenant, third, 1)).status_code == 201
+
+    admin_board = admin.get(f"/api/schedule?week={first.isoformat()}").json()
+    first_day = next(d for d in admin_board["days"] if d["day"] == first.isoformat())
+    first_slot = next(s for s in first_day["slots"] if s["slot_number"] == 1)
+    assert first_slot["bookable"] is False
+
+
+def test_upcoming_freeze_count_is_configurable(admin, user, tenant):
+    updated = admin.put("/api/admin/settings", json={"booking_freeze_dates": 0})
+    assert updated.status_code == 200, updated.text
+    first = _next_deployment_dates(1)[0]
+    assert post_booking(user, booking_payload(tenant, first, 1)).status_code == 201
 
 
 def test_future_slot_is_open_until_admin_freezes_it(user, admin, tenant, next_monday):
@@ -222,3 +297,46 @@ def test_past_slot_cannot_be_frozen_or_unfrozen(admin):
     )
     assert response.status_code == 423
     assert "read-only" in response.json()["detail"]
+
+
+def test_full_day_holiday_is_skipped_when_counting_upcoming_freeze_dates(admin, user, tenant):
+    first, second, third, fourth = _next_deployment_dates(4)
+    created = admin.post(
+        "/api/admin/holidays",
+        json={"holiday_date": first.isoformat(), "name": "Release holiday", "is_full_day": True},
+    )
+    assert created.status_code == 201, created.text
+
+    # With two upcoming dates configured, the holiday is skipped; the next two
+    # actual deployment dates are frozen and the following one is open.
+    assert post_booking(user, booking_payload(tenant, second, 1)).status_code == 423
+    assert post_booking(user, booking_payload(tenant, third, 1)).status_code == 423
+    assert post_booking(user, booking_payload(tenant, fourth, 1)).status_code == 201
+
+
+def test_expanding_freeze_window_locks_existing_booking_for_owner_and_admin(
+    admin, user, tenant
+):
+    _, _, third = _next_deployment_dates(3)
+    booking = create_booking(user, tenant, third, 1)
+
+    updated = admin.put("/api/admin/settings", json={"booking_freeze_dates": 3})
+    assert updated.status_code == 200, updated.text
+
+    detail = user.get(f"/api/bookings/{booking['id']}").json()
+    assert detail["is_locked"] is True
+    assert detail["can_edit"] is False
+
+    blocked = user.put(
+        f"/api/bookings/{booking['id']}",
+        json=booking_payload(tenant, third, 1, jira_number="OWNER-EDIT"),
+    )
+    assert blocked.status_code == 423
+    assert "freeze window" in blocked.json()["detail"].lower()
+
+    admin_edit = admin.put(
+        f"/api/bookings/{booking['id']}",
+        json=booking_payload(tenant, third, 1, jira_number="ADMIN-EDIT"),
+    )
+    assert admin_edit.status_code == 423
+    assert "freeze window" in admin_edit.json()["detail"].lower()

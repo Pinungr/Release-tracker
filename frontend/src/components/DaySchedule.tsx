@@ -32,14 +32,14 @@ export function DaySchedule({
   // Treat the API's authoritative `today` value as a second guard. This keeps
   // historical actions hidden even if an older/mixed response contains a stale
   // `is_past` flag. Backend mutation endpoints still enforce the same rule.
-  const isHistorical = day.is_past || day.day < today
+  const isHistorical = day.is_past || day.day <= today
 
   const usage = day.regular_slots_total
     ? `${day.regular_slots_used} / ${day.regular_slots_total}`
     : '0 / 0'
   const firstFree = isHistorical
     ? undefined
-    : day.slots.find((slot) => slot.booking === null && (slot.bookable || isAdmin))
+    : day.slots.find((slot) => slot.booking === null && slot.bookable)
   const noBookings = day.slots.every((slot) => slot.booking === null)
 
   return (
@@ -89,7 +89,7 @@ export function DaySchedule({
           <span className="text-sm text-amber-800">
             {isAdmin
               ? isHistorical
-                ? 'This historical date is read-only for everyone, including administrators.'
+                ? 'This past/current date is read-only for everyone, including administrators.'
                 : 'Normal policy marks this date unavailable, but administrator scheduling and emergency changes remain available.'
               : <>
                   No production deployments available.
@@ -161,7 +161,7 @@ export function DaySchedule({
               <button key={booking.id} type="button" className="flex w-full items-center gap-3 rounded-lg border border-orange-200 bg-white p-3 text-left" onClick={() => onOpenBooking(booking.id)}>
                 <span className="font-semibold text-orange-950">{booking.booking_reference}</span>
                 <span className="text-sm text-ink">{booking.tenant_name}</span>
-                <span className="text-sm text-ink-muted">{booking.change_number ?? 'Pending'} | {booking.jira_number}</span>
+                <span className="text-sm text-ink-muted">{booking.change_number ?? 'Pending'} | {booking.jira_number ?? 'Pending'}</span>
               </button>
             ))}
           </div>

@@ -72,9 +72,9 @@ export function DeploymentSlot({
   onToggleFreeze,
 }: DeploymentSlotProps) {
   const booking = slot.booking
-  // Past dates are immutable for everyone. Administrators may still override
-  // other restrictions on current/future dates, but never historical dates.
-  const canBook = booking === null && !isHistorical && (slot.bookable || isAdmin)
+  // The backend is the source of truth for protected dates. Admins may bypass
+  // manual/availability restrictions outside the configured automatic freeze.
+  const canBook = booking === null && !isHistorical && slot.bookable
 
   return (
     <div
@@ -139,11 +139,11 @@ export function DeploymentSlot({
                   rel="noreferrer noopener"
                   className="inline-flex min-w-0 items-center gap-1 truncate font-medium text-brand-600 hover:underline"
                 >
-                  {booking.jira_number}
+                  {booking.jira_number ?? 'Pending'}
                   <LinkIcon className="size-3.5 shrink-0" />
                 </a>
               ) : (
-                <span className="truncate font-medium text-ink">{booking.jira_number}</span>
+                <span className="truncate font-medium text-ink">{booking.jira_number ?? 'Pending'}</span>
               )}
             </div>
           </Cell>

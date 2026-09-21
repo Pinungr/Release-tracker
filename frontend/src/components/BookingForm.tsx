@@ -33,7 +33,7 @@ export function valuesFromBooking(booking: BookingDetail): BookingFormValues {
   return {
     ...EMPTY_BOOKING_VALUES,
     tenant_id: String(booking.tenant_id),
-    jira_number: booking.jira_number,
+    jira_number: booking.jira_number ?? '',
     jira_url: booking.jira_url ?? '',
     environment: booking.environment,
     technology: booking.technology,
@@ -65,12 +65,11 @@ export type BookingFormErrors = Partial<Record<keyof BookingFormValues, string>>
  */
 export function validateBookingForm(
   values: BookingFormValues,
-  options: { isEmergency: boolean },
+  options: { isEmergency: boolean; jiraRequired: boolean },
 ): BookingFormErrors {
   const errors: BookingFormErrors = {}
   const required: (keyof BookingFormValues)[] = [
     'tenant_id',
-    'jira_number',
     'technology',
     'environment',
     'requester_name',
@@ -78,6 +77,7 @@ export function validateBookingForm(
     'git_repository',
     'deployment_description',
   ]
+  if (options.jiraRequired) required.push('jira_number')
   for (const field of required) {
     if (!String(values[field] ?? '').trim()) errors[field] = 'This field is required.'
   }
@@ -119,7 +119,7 @@ export function toBookingPayload(
   const optional = (value: string) => (value.trim() ? value.trim() : null)
   return {
     tenant_id: values.tenant_id ? Number(values.tenant_id) : null,
-    jira_number: values.jira_number.trim(),
+    jira_number: optional(values.jira_number),
     jira_url: optional(values.jira_url),
     environment: values.environment.trim() || 'PROD',
     technology: values.technology,
@@ -204,7 +204,7 @@ export function BookingForm({
         <TextField
           label="Jira No."
           name="jira_number"
-          required
+          required={settings.jira_required_at_booking}
           value={values.jira_number}
           onChange={(v) => onChange('jira_number', v)}
           error={errors.jira_number}
@@ -219,7 +219,11 @@ export function BookingForm({
           onChange={(v) => onChange('jira_url', v)}
           error={errors.jira_url}
           placeholder="https://jira.example.com/browse/CHG0920798"
-          hint="Optional URL for the Jira record. The Jira No. itself is required."
+          hint={
+            settings.jira_required_at_booking
+              ? 'Optional URL for the Jira record. Jira No. is required by Booking Rules.'
+              : 'Optional. Jira No. and URL can be added later.'
+          }
           className="sm:col-span-2"
         />
         <TextField

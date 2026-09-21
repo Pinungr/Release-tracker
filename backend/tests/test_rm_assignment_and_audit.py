@@ -4,11 +4,23 @@ from __future__ import annotations
 from conftest import booking_payload, create_booking, post_booking
 
 
-def test_jira_number_is_required_when_booking(user, tenant, next_monday):
+def test_jira_number_is_optional_by_default(user, tenant, next_monday):
+    payload = booking_payload(tenant, next_monday, 1)
+    payload.pop("jira_number")
+    response = post_booking(user, payload)
+    assert response.status_code == 201, response.text
+    assert response.json()["booking"]["jira_number"] is None
+
+
+def test_admin_can_require_jira_number_via_booking_rules(admin, user, tenant, next_monday):
+    updated = admin.put("/api/admin/settings", json={"jira_required_at_booking": True})
+    assert updated.status_code == 200, updated.text
+
     payload = booking_payload(tenant, next_monday, 1)
     payload.pop("jira_number")
     response = post_booking(user, payload)
     assert response.status_code == 422
+    assert "Jira No. is required" in response.json()["detail"]
 
 
 def test_admin_assigns_rm_and_assigned_user_starts_work(

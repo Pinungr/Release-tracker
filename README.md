@@ -127,7 +127,7 @@ frontend's copies exist only for immediate feedback.
 | Upload and download documents | only on their own changes | any |
 | Emergency changes | view only | create, edit, cancel |
 | Exceed the tenant weekly limit | ❌ | ✅ automatic administrator bypass, audited |
-| Edit inside the protected deployment dates | ❌ | ✅ automatic administrator bypass, audited |
+| Book/edit/cancel inside the automatic protected date window | ❌ | ❌ |
 | Users, tenants, holidays, slots, settings, audit | ❌ | ✅ |
 
 Everyone uses **one login**. There is no separate administrator sign-in and no
@@ -144,7 +144,7 @@ promoting, demoting or deactivating an account takes effect immediately.
 | Normal deployment slots per day | 4 | Admin → General / Slots / Daily override |
 | Emergency changes | unlimited per date, admin only | Admin → General / Daily override |
 | Normal changes per **tenant** per week | 2 | Admin → General |
-| Booking/edit freeze | **Admin-controlled per slot**; no automatic freeze | Admin on weekly board |
+| Booking/edit freeze | Today + next 2 valid deployment dates | Admin → General; manual per-slot freeze also available |
 | Maximum upload size | 20 MB per file | Admin → General |
 | Mandatory documents | Test result, inventory, implementation document, validation plan, DBA script | Admin → Documents |
 | Working week | Sunday–Thursday for normal deployment slots; Friday/Saturday skipped | fixed |
@@ -159,11 +159,11 @@ for any other tenant.
 date, they carry no slot number, they never consume normal deployment capacity,
 and they never count against a tenant's weekly quota.
 
-**Administrator scheduling overrides are automatic for current/future dates.** Administrators can schedule
+**Administrator scheduling overrides remain available outside the automatic protected-date window.** Administrators can schedule
 normal or emergency changes on holidays, Friday/Saturday and slots disabled by normal policy,
 and they are not constrained by a tenant weekly quota or a manual administrator slot freeze.
-Past deployment dates are immutable for administrators as well. Occupied normal slots remain protected from double-booking; use
-the emergency queue when the normal daily capacity is already consumed.
+Past dates, today, and the configured number of upcoming valid normal-deployment dates are immutable for administrators as well.
+Occupied normal slots remain protected from double-booking; use the emergency queue when the normal daily capacity is already consumed.
 
 ```
 DAY
@@ -220,11 +220,26 @@ With `ENVIRONMENT=production` the app refuses to start while `JWT_SECRET` or
 
 ### Database migrations
 
-Database schema evolution is managed with **Alembic**. Application startup runs
-`alembic upgrade head` before seeding configuration. Existing installations that
-predate Alembic are detected and stamped at the baseline revision so their
-current data is preserved; future schema changes should be added as Alembic
-revisions under `backend/migrations/versions/`.
+Database schema evolution is managed with **Alembic**. Because this project is
+still in its initial development stage, the migration history has been squashed
+into **one clean initial revision** representing the current schema. Application
+startup runs `alembic upgrade head` before creating the default slots and
+bootstrap administrator.
+
+If you used an older development build with the previous migration chain,
+recreate the local PostgreSQL volume once before starting this version:
+
+```bash
+docker compose down -v
+docker compose up -d --build
+```
+
+> `docker compose down -v` deletes the existing PostgreSQL volume and its data.
+> Use it only while you are intentionally resetting the development database.
+
+From the point where real data must be retained, do **not** edit or replace the
+initial migration. Add a new revision under `backend/migrations/versions/` for
+each schema change.
 
 Manual commands from `backend/`:
 
@@ -366,11 +381,11 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
    confirm password), then sign in. New accounts are always `TENANT_USER`.
 2. Navigate with **Previous week / Next week / Today**.
 3. Click **Book slot** on a free slot. Choose the **tenant** in the drawer —
-   this is per change record, not per account. A **Jira No. is required**; Jira URL is stored separately. Requester email, verifier email and implementation summary are optional.
+   this is per change record, not per account. **Jira No. can be optional or required from Admin → General**; Jira URL is stored separately. Requester email, verifier email and implementation summary are optional.
 4. Before confirming the slot, attach every required deployment document. The booking is created only after the mandatory files are accepted by the backend.
 5. Your own changes are badged **My booking**; the **My changes** card filters
    the board to them.
-6. Past deployment dates are permanently read-only for everyone, including administrators. Future normal slots are **not frozen automatically**. An administrator explicitly freezes or unfreezes an individual slot from the weekly board. A manually frozen slot cannot be booked, edited, cancelled, or have documents changed by normal users; administrators retain override access until the date becomes historical.
+6. Past dates and the current date are permanently read-only for everyone, including administrators. Admin → General controls how many **upcoming valid deployment dates** are also automatically frozen; Friday/Saturday and full-day holidays are skipped while counting. Those automatic date freezes cannot be bypassed by Admin. Manual per-slot freezes remain available for normal users, with Admin override outside the automatic protected-date window.
 7. If an administrator assigns you to a booked change as an RM user, it appears in **My changes**. You can open it and **Start work** by entering the separate **Change No.**; assignment does not give you ownership/edit/cancel rights.
 8. **Profile** shows your account and lets you change your password.
 
@@ -496,7 +511,7 @@ cd backend && .venv/Scripts/python -m pytest
 * 2 normal changes per tenant per week — shared across users, independent per
   tenant, resets weekly, freed by cancellation, overridable by an admin *with
   an audited reason*
-* manual slot freezing blocks normal-user booking/edit/cancel/upload only after an administrator freezes that future slot; admins can unfreeze or override future locks, while past deployment dates are read-only for everyone
+* past/current dates plus the configured upcoming valid deployment dates are hard-frozen for booking/edit/cancel for everyone, including administrators; separate manual slot freezes still block normal users and remain admin-overridable outside that automatic date window
 * multiple emergency changes on one date, admin-only, consuming neither slots
   nor quota; tenant users are refused
 * holidays block normal slots and can keep or close the emergency queue;

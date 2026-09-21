@@ -177,7 +177,10 @@ export function BookingDrawer({
   }
 
   async function submit() {
-    const found = validateBookingForm(values, { isEmergency })
+    const found = validateBookingForm(values, {
+      isEmergency,
+      jiraRequired: settings.jira_required_at_booking,
+    })
     const foundDocumentErrors = validateDocuments()
     setErrors(found)
     setDocumentErrors(foundDocumentErrors)

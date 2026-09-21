@@ -5,7 +5,7 @@ import { Plus, Spinner } from './Icons'
 import { TextField } from './FormControls'
 import { useToast } from './ToastNotification'
 
-const EMPTY = { name: '', tenant_code: '', description: '' }
+const EMPTY = { name: '', tenant_code: '', description: '', weekly_booking_limit: '' }
 
 /**
  * The tenant master. Tenants exist only here — scheduling picks one from this
@@ -42,12 +42,20 @@ export function AdminTenantManager({ onChanged }: { onChanged: () => void }) {
       toast.error('A tenant needs a name and a code.')
       return
     }
+    const weeklyLimit = draft.weekly_booking_limit.trim()
+      ? Number(draft.weekly_booking_limit)
+      : null
+    if (weeklyLimit !== null && (!Number.isInteger(weeklyLimit) || weeklyLimit < 1 || weeklyLimit > 25)) {
+      toast.error('Weekly booking limit must be between 1 and 25, or left blank for the default.')
+      return
+    }
     setBusy(true)
     try {
       const payload = {
         name: draft.name.trim(),
         tenant_code: draft.tenant_code.trim().toUpperCase(),
         description: draft.description.trim() || null,
+        weekly_booking_limit: weeklyLimit,
       }
       if (editingId) await api.updateAdminTenant(editingId, payload)
       else await api.createAdminTenant(payload)
@@ -111,6 +119,17 @@ export function AdminTenantManager({ onChanged }: { onChanged: () => void }) {
           maxLength={64}
         />
         <TextField
+          label="Weekly booking limit"
+          name="tenant_weekly_booking_limit"
+          type="number"
+          min={1}
+          max={25}
+          value={draft.weekly_booking_limit}
+          onChange={(v) => setDraft({ ...draft, weekly_booking_limit: v })}
+          placeholder="Use global default"
+          hint="Optional. Leave blank to inherit the default Booking Rule."
+        />
+        <TextField
           label="Description"
           name="tenant_description"
           value={draft.description}
@@ -164,6 +183,9 @@ export function AdminTenantManager({ onChanged }: { onChanged: () => void }) {
               >
                 {tenant.is_active ? 'Active' : 'Inactive'}
               </span>
+              <span className="badge bg-brand-50 text-brand-700 ring-1 ring-brand-100">
+                Weekly limit: {tenant.weekly_booking_limit ?? 'Default'}
+              </span>
               {tenant.description ? (
                 <span className="text-xs text-ink-muted">{tenant.description}</span>
               ) : null}
@@ -178,6 +200,8 @@ export function AdminTenantManager({ onChanged }: { onChanged: () => void }) {
                       name: tenant.name,
                       tenant_code: tenant.tenant_code ?? '',
                       description: tenant.description ?? '',
+                      weekly_booking_limit:
+                        tenant.weekly_booking_limit === null ? '' : String(tenant.weekly_booking_limit),
                     })
                   }}
                 >

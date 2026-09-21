@@ -27,6 +27,8 @@ class AdminSession(BaseModel):
 class SettingsOut(BaseModel):
     regular_slots_per_day: int
     weekly_booking_limit: int
+    booking_freeze_dates: int
+    jira_required_at_booking: bool
     max_file_size_mb: int
     emergency_changes_enabled: bool
     require_admin_override_reason: bool
@@ -36,6 +38,8 @@ class SettingsOut(BaseModel):
 class SettingsUpdate(BaseModel):
     regular_slots_per_day: int | None = Field(default=None, ge=1, le=12)
     weekly_booking_limit: int | None = Field(default=None, ge=1, le=25)
+    booking_freeze_dates: int | None = Field(default=None, ge=0, le=25)
+    jira_required_at_booking: bool | None = None
     max_file_size_mb: int | None = Field(default=None, ge=1, le=200)
     emergency_changes_enabled: bool | None = None
     require_admin_override_reason: bool | None = None

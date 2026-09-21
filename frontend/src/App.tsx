@@ -21,7 +21,8 @@ import { addDays, toIsoDate, weekStart } from './utils/dates'
 /** Used only until the first schedule response arrives. */
 const FALLBACK_SETTINGS: PublicSettings = {
   weekly_booking_limit: 2,
-  booking_freeze_dates: 0,
+  booking_freeze_dates: 2,
+  jira_required_at_booking: false,
   max_file_size_mb: 20,
   mandatory_documents: [],
   document_catalog: [],
@@ -131,8 +132,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }, [refresh, detailBooking])
 
   function startBooking(day: DayView, slot: SlotView) {
-    if (!schedule || day.is_past || day.day < schedule.today) {
-      toast.locked('Historical date is read-only', 'Past deployment dates cannot be booked or modified by any user, including administrators.')
+    if (!schedule || day.is_past || day.day <= schedule.today) {
+      toast.locked('Date is read-only', 'Past and current deployment dates cannot be booked or modified by any user, including administrators.')
       return
     }
     setEditBooking(null)
@@ -141,7 +142,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }
 
   async function toggleSlotFreeze(day: DayView, slot: SlotView) {
-    if (!auth.isAdmin || !schedule || day.is_past || day.day < schedule.today) return
+    if (!auth.isAdmin || !schedule || day.is_past || day.day <= schedule.today) return
     try {
       if (slot.manually_frozen) {
         await api.unfreezeSlot(day.day, slot.slot_number)
@@ -160,8 +161,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }
 
   function startEmergencyBooking(day: DayView) {
-    if (!schedule || day.is_past || day.day < schedule.today) {
-      toast.locked('Historical date is read-only', 'Past deployment dates cannot accept emergency changes, including for administrators.')
+    if (!schedule || day.is_past || day.day <= schedule.today) {
+      toast.locked('Date is read-only', 'Past and current deployment dates cannot accept emergency changes, including for administrators.')
       return
     }
     if (!auth.isAdmin) {
@@ -177,8 +178,13 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }
 
   function startEdit(booking: BookingDetail) {
-    if (booking.is_past) {
-      toast.locked('Historical record is read-only', 'Past deployment records cannot be edited by any user, including administrators.')
+    if (!booking.can_edit) {
+      toast.locked(
+        'This booking is locked',
+        booking.is_past
+          ? 'Past deployment records cannot be edited by any user, including administrators.'
+          : 'This booking is inside a protected date or slot freeze window.',
+      )
       return
     }
     if (!auth.isAdmin && booking.created_by_user_id !== user.id) {
@@ -266,9 +272,9 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         />
 
         <footer className="pt-2 pb-6 text-center text-xs text-ink-muted">
-          All times shown in {timezone.replace('_', ' ')}. Authentication, ownership and the tenant
-          weekly limit are enforced by the server. Administrators manually freeze/unfreeze individual
-          future slots; past deployment dates are permanently read-only. Normal deployment days are Sunday through Thursday.
+          All times shown in {timezone.replace('_', ' ')}. Authentication, ownership and tenant-specific
+          weekly limits are enforced by the server. Today and all past deployment dates are permanently
+          read-only; upcoming freeze dates come from Booking Rules. Normal deployment days are Sunday through Thursday.
         </footer>
       </main>
 

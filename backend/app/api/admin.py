@@ -68,6 +68,24 @@ def _actor(admin: AdminPrincipal) -> Actor:
     return Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
 
 
+def _tenant_weekly_limit(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "weekly_booking_limit must be between 1 and 25, or blank for the global default.",
+        ) from None
+    if not 1 <= parsed <= 25:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "weekly_booking_limit must be between 1 and 25, or blank for the global default.",
+        )
+    return parsed
+
+
 def _assert_not_last_active_admin(db: Session, target: User, admin: AdminPrincipal) -> None:
     """Refuse a demotion/deactivation that would leave nobody able to administer."""
     if target.role != "ADMIN" or not target.is_active:
@@ -107,6 +125,7 @@ def list_tenants(
             "name": t.name,
             "tenant_code": t.tenant_code,
             "description": t.description,
+            "weekly_booking_limit": t.weekly_booking_limit,
             "is_active": t.is_active,
         }
         for t in tenants
@@ -125,7 +144,14 @@ def create_tenant(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Tenant name and tenant code are required.")
     if db.scalars(select(Tenant).where((Tenant.name == name) | (Tenant.tenant_code == code))).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "Tenant name or code already exists.")
-    tenant = Tenant(name=name, tenant_code=code, description=payload.get("description"), is_active=True)
+    weekly_limit = _tenant_weekly_limit(payload.get("weekly_booking_limit"))
+    tenant = Tenant(
+        name=name,
+        tenant_code=code,
+        description=payload.get("description"),
+        weekly_booking_limit=weekly_limit,
+        is_active=True,
+    )
     db.add(tenant)
     db.flush()
     audit_service.record(
@@ -133,10 +159,22 @@ def create_tenant(
         event_type="TENANT_CREATED",
         actor_type="ADMIN",
         admin_username=admin.username,
-        new_values={"tenant_id": tenant.id, "name": tenant.name, "tenant_code": tenant.tenant_code},
+        new_values={
+            "tenant_id": tenant.id,
+            "name": tenant.name,
+            "tenant_code": tenant.tenant_code,
+            "weekly_booking_limit": tenant.weekly_booking_limit,
+        },
     )
     db.commit()
-    return {"id": tenant.id, "name": tenant.name, "tenant_code": tenant.tenant_code, "description": tenant.description, "is_active": tenant.is_active}
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "tenant_code": tenant.tenant_code,
+        "description": tenant.description,
+        "weekly_booking_limit": tenant.weekly_booking_limit,
+        "is_active": tenant.is_active,
+    }
 
 
 @router.put("/tenants/{tenant_id}")
@@ -162,8 +200,17 @@ def update_tenant(
     tenant.name = name
     tenant.tenant_code = code or None
     tenant.description = payload.get("description")
+    if "weekly_booking_limit" in payload:
+        tenant.weekly_booking_limit = _tenant_weekly_limit(payload.get("weekly_booking_limit"))
     db.commit()
-    return {"id": tenant.id, "name": tenant.name, "tenant_code": tenant.tenant_code, "description": tenant.description, "is_active": tenant.is_active}
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "tenant_code": tenant.tenant_code,
+        "description": tenant.description,
+        "weekly_booking_limit": tenant.weekly_booking_limit,
+        "is_active": tenant.is_active,
+    }
 
 
 @router.patch("/tenants/{tenant_id}/status")
@@ -180,7 +227,14 @@ def update_tenant_status(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "is_active must be a boolean value.")
     tenant.is_active = payload["is_active"]
     db.commit()
-    return {"id": tenant.id, "name": tenant.name, "is_active": tenant.is_active}
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "tenant_code": tenant.tenant_code,
+        "description": tenant.description,
+        "weekly_booking_limit": tenant.weekly_booking_limit,
+        "is_active": tenant.is_active,
+    }
 
 
 @router.get("/users", response_model=list[dict])
