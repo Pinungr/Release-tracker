@@ -57,8 +57,10 @@ class SlotConfigIn(BaseModel):
 
     @model_validator(mode="after")
     def _ordered(self) -> "SlotConfigIn":
-        if self.end_time <= self.start_time:
-            raise ValueError("Slot end time must be after the start time.")
+        # Overnight deployment windows are valid (for example 21:00 -> 05:00).
+        # Equal start/end values are rejected because they are ambiguous.
+        if self.end_time == self.start_time:
+            raise ValueError("Slot start and end time cannot be the same.")
         return self
 
 

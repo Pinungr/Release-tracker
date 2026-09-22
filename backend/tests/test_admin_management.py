@@ -134,6 +134,30 @@ def test_settings_keep_the_poc_defaults(admin):
     assert settings["emergency_changes_enabled"] is True
 
 
+def test_default_slots_use_overnight_window(admin):
+    slots = admin.get("/api/admin/slots").json()
+    assert len(slots) == 4
+    assert all(slot["start_time"] == "21:00:00" for slot in slots)
+    assert all(slot["end_time"] == "05:00:00" for slot in slots)
+
+
+def test_increasing_slots_per_day_creates_missing_rows(admin, user, next_monday):
+    response = admin.put("/api/admin/settings", json={"regular_slots_per_day": 6})
+    assert response.status_code == 200, response.text
+    assert response.json()["regular_slots_per_day"] == 6
+
+    slots = admin.get("/api/admin/slots").json()
+    assert [slot["slot_number"] for slot in slots] == [1, 2, 3, 4, 5, 6]
+    assert slots[4]["start_time"] == "21:00:00"
+    assert slots[4]["end_time"] == "05:00:00"
+    assert slots[5]["start_time"] == "21:00:00"
+    assert slots[5]["end_time"] == "05:00:00"
+
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert len(board["days"][0]["slots"]) == 6
+    assert board["days"][0]["slots"][5]["slot_number"] == 6
+
+
 def test_reducing_slots_per_day_shrinks_the_board(admin, user, tenant, next_monday):
     admin.put("/api/admin/settings", json={"regular_slots_per_day": 3})
     board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
@@ -176,9 +200,20 @@ def test_slot_configuration_can_be_renamed_and_retimed(admin, user, next_monday)
     assert first["time_label"] == "06:00 AM - 08:00 AM"
 
 
-def test_slot_end_must_follow_slot_start(admin):
+def test_overnight_slot_window_is_allowed(admin, user, next_monday):
     slots = admin.get("/api/admin/slots").json()
+    slots[0]["start_time"] = "21:00:00"
     slots[0]["end_time"] = "05:00:00"
+    assert admin.put("/api/admin/slots", json={"slots": slots}).status_code == 200
+
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert board["days"][0]["slots"][0]["time_label"] == "09:00 PM - 05:00 AM"
+
+
+def test_slot_start_and_end_cannot_be_identical(admin):
+    slots = admin.get("/api/admin/slots").json()
+    slots[0]["start_time"] = "21:00:00"
+    slots[0]["end_time"] = "21:00:00"
     assert admin.put("/api/admin/slots", json={"slots": slots}).status_code == 422
 
 

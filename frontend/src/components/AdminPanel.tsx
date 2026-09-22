@@ -209,7 +209,7 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             max={12}
             value={String(data.regular_slots_per_day)}
             onChange={(v) => setData({ ...data, regular_slots_per_day: Number(v) || 1 })}
-            hint="Emergency changes are a separate admin-only queue and never use a slot."
+            hint="Saving a higher number automatically creates the missing slot rows. New slots default to 09:00 PM–05:00 AM. Emergency changes remain separate."
           />
           <TextField
             label="Default weekly booking limit"
@@ -361,8 +361,8 @@ function SlotConfiguration({ onChanged }: { onChanged: () => void }) {
                   {
                     slot_number: Math.max(...data.map((s) => s.slot_number)) + 1,
                     name: `Slot ${Math.max(...data.map((s) => s.slot_number)) + 1}`,
-                    start_time: '18:00:00',
-                    end_time: '20:00:00',
+                    start_time: '21:00:00',
+                    end_time: '05:00:00',
                     enabled: true,
                   },
                 ])

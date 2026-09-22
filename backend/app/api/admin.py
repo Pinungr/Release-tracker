@@ -55,6 +55,7 @@ from ..security import (
 from ..services import attachment_service, audit_service, booking_service, presenters, schedule_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
+from ..services.bootstrap import ensure_regular_slot_count
 from ..utils.dates import now_utc, today_local
 from .deps import get_booking
 
@@ -385,6 +386,8 @@ def write_settings(
     if "mandatory_documents" in changes:
         changes["mandatory_documents"] = [c.value for c in payload.mandatory_documents or []]
     update_settings(db, changes)
+    if "regular_slots_per_day" in changes:
+        ensure_regular_slot_count(db, int(changes["regular_slots_per_day"]))
     after = presenters.settings_out(db)
     old, new = audit_service.diff(before, after)
     if old:
