@@ -1,6 +1,6 @@
 import type { DayView, SlotView } from '../types'
 import { DeploymentSlot, SLOT_GRID } from './DeploymentSlot'
-import { Calendar, Minus, Plus, Sun } from './Icons'
+import { Minus, Plus, Sun } from './Icons'
 
 interface DayScheduleProps {
   day: DayView
@@ -39,10 +39,6 @@ export function DaySchedule({
   const usage = day.regular_slots_total
     ? `${day.regular_slots_used} / ${day.regular_slots_total}`
     : '0 / 0'
-  const firstFree = isHistorical
-    ? undefined
-    : day.slots.find((slot) => slot.booking === null && slot.bookable)
-  const noBookings = day.slots.every((slot) => slot.booking === null)
 
   return (
     <section
@@ -198,29 +194,6 @@ export function DaySchedule({
           </div>
         ) : <p className="mt-2 text-sm text-orange-900/70">No emergency changes scheduled for this date.</p>}
       </section>
-
-      {noBookings && !filtered && !isHistorical && (!day.holiday?.is_full_day || isAdmin) && day.slots.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-3 border-t border-line bg-canvas/50 px-4 py-3">
-          <Calendar className="size-4 text-ink-muted" />
-          <p className="text-sm text-ink-muted">
-            No deployments booked yet.{' '}
-            <span className="font-medium text-ink">
-              {isAdmin ? day.slots.filter((slot) => slot.booking === null).length : day.regular_slots_total} regular slot
-              {(isAdmin ? day.slots.filter((slot) => slot.booking === null).length : day.regular_slots_total) === 1 ? '' : 's'} available.
-            </span>
-          </p>
-          {firstFree ? (
-            <button
-              type="button"
-              onClick={() => onBook(day, firstFree)}
-              className="btn-primary btn-sm ml-auto"
-            >
-              <Plus className="size-3.5" />
-              Book deployment
-            </button>
-          ) : null}
-        </div>
-      ) : null}
     </section>
   )
 }
