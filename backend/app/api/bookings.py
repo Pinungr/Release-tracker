@@ -126,7 +126,7 @@ async def create_booking(
             attachment_service.remove_booking_directory(booking.id)
         raise
 
-    detail = presenters.booking_detail(db, booking, app_settings, is_admin=actor.is_admin)
+    detail = presenters.booking_detail(db, booking, app_settings, is_admin=actor.is_admin, user_id=actor.user_id)
     return BookingCreated(booking=detail, message=booking_service.success_message(db, booking))
 
 
@@ -139,7 +139,7 @@ def read_booking(
 ) -> BookingDetail:
     _assert_can_view(booking, admin, user)
     return presenters.booking_detail(
-        db, booking, get_app_settings(db), is_admin=admin is not None
+        db, booking, get_app_settings(db), is_admin=admin is not None, user_id=user.user_id if user else None
     )
 
 
@@ -154,7 +154,7 @@ def update_booking(
 ) -> BookingDetail:
     actor = _owner_actor(booking, admin, user)
     updated = booking_service.update_booking(db, booking, payload, actor)
-    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin)
+    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
 @router.delete("/{booking_id}", response_model=BookingSummary)
@@ -208,7 +208,7 @@ def reschedule_booking(
         actor,
         payload.override_reason,
     )
-    return presenters.booking_detail(db, moved, get_app_settings(db), is_admin=actor.is_admin)
+    return presenters.booking_detail(db, moved, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
 @router.post("/{booking_id}/start-work", response_model=BookingDetail)
@@ -226,7 +226,7 @@ def start_work(
     else:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
     updated = booking_service.start_work(db, booking, payload.change_number, actor)
-    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin)
+    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
 @router.get("/{booking_id}/attachments", response_model=list[AttachmentOut])

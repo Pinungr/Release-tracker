@@ -173,6 +173,32 @@ def lock_deadline(db: Session, booking: DeploymentBooking, app_settings: AppSett
     return None
 
 
+def booking_lock_reason(db: Session, booking: DeploymentBooking, app_settings: AppSettings | None = None) -> str:
+    if booking.deployment_date < today_local():
+        return "PAST_DATE"
+    if booking.deployment_date == today_local():
+        return "CURRENT_DATE"
+    if is_date_automatically_frozen(db, booking.deployment_date, app_settings):
+        return "AUTOMATIC_DATE_FREEZE"
+    if is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
+        return "MANUAL_SLOT_FREEZE"
+    return "NONE"
+
+
+def assert_booking_date_mutable(db: Session, booking: DeploymentBooking) -> None:
+    assert_day_not_past(booking.deployment_date)
+    if is_date_automatically_frozen(db, booking.deployment_date):
+        raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
+
+
+def assert_booking_mutable(db: Session, booking: DeploymentBooking, actor: Actor) -> None:
+    assert_booking_date_mutable(db, booking)
+    if booking.status == BookingStatus.CANCELLED.value:
+        raise BusinessRuleError("This booking has been cancelled and cannot be modified.")
+    if not actor.is_admin and is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
+        raise BusinessRuleError(MANUAL_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
+
+
 def owner_lock_reason(
     db: Session, booking: DeploymentBooking, app_settings: AppSettings | None = None
 ) -> str | None:
@@ -181,7 +207,7 @@ def owner_lock_reason(
         return PAST_CURRENT_READ_ONLY_MESSAGE
     if booking.status == BookingStatus.CANCELLED.value:
         return "This booking has been cancelled and can no longer be modified."
-    if not booking.is_emergency and is_date_automatically_frozen(db, booking.deployment_date, app_settings):
+    if is_date_automatically_frozen(db, booking.deployment_date, app_settings):
         return AUTOMATIC_FREEZE_MESSAGE
     if not booking.is_emergency and is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
         return MANUAL_FREEZE_MESSAGE
@@ -276,37 +302,70 @@ def weekly_normal_count(db: Session, tenant_id: int, any_day: date, *, exclude_i
     return int(db.scalar(stmt) or 0)
 
 
+def normal_slot_rejection(
+    day: date,
+    slot: schedule_service.ResolvedSlot | None,
+    *,
+    today: date,
+    frozen_dates: set[date],
+    manually_frozen: bool,
+    occupied: bool = False,
+) -> tuple[str, int] | None:
+    """Shared normal availability policy for board, picker and API writes.
+
+    Caller privileges intentionally have no place in this policy.
+    """
+    if day <= today:
+        return PAST_CURRENT_READ_ONLY_MESSAGE, status.HTTP_423_LOCKED
+    if day in frozen_dates:
+        return AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED
+    if not is_deployment_weekday(day):
+        return "Deployments can only be scheduled Sunday to Thursday.", status.HTTP_400_BAD_REQUEST
+    if slot is None:
+        return "The selected deployment slot does not exist.", status.HTTP_404_NOT_FOUND
+    if not slot.bookable:
+        return slot.unavailable_reason or "That deployment slot is disabled for this date.", status.HTTP_400_BAD_REQUEST
+    if manually_frozen:
+        return MANUAL_FREEZE_MESSAGE, status.HTTP_423_LOCKED
+    if occupied:
+        return SLOT_TAKEN_MESSAGE, status.HTTP_409_CONFLICT
+    return None
+
+
 def _validate_slot_target(
     db: Session,
     day: date,
     slot_number: int | None,
     actor: Actor,
     app_settings: AppSettings,
+    *,
+    manual_override: bool = False,
+    override_reason: str | None = None,
+    exclude_id: int | None = None,
 ) -> schedule_service.ResolvedSlot:
-    # Past/current dates and the configured upcoming deployment-date freeze
-    # are immutable for everyone, including administrators. Administrators may
-    # still override manual slot freezes, weekends, holidays and disabled slots
-    # outside that protected date window.
-    assert_day_not_past(day)
-    if slot_number is None:
-        raise BusinessRuleError("A normal deployment slot is required for this booking.")
-    if is_date_automatically_frozen(db, day, app_settings):
-        raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
-    if not actor.is_admin:
-        if not is_deployment_weekday(day):
-            raise BusinessRuleError("Deployments can only be scheduled Sunday to Thursday.")
-        if is_slot_manually_frozen(db, day, slot_number):
-            raise BusinessRuleError(MANUAL_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
-
     plan = schedule_service.resolve_day(db, day, app_settings=app_settings)
     slot = next((s for s in plan.slots if s.slot_number == slot_number), None)
-    if slot is None:
-        raise BusinessRuleError("The selected deployment slot does not exist.", status.HTTP_404_NOT_FOUND)
-    if not actor.is_admin:
-        if not slot.enabled:
-            raise BusinessRuleError("That deployment slot is disabled for this date.")
-        if slot.unavailable_reason:
-            raise BusinessRuleError(slot.unavailable_reason)
+    frozen_dates = automatic_frozen_dates(db, app_settings)
+    occupied = _slot_taken(db, day, slot_number, exclude_id=exclude_id)
+    if manual_override:
+        # Explicit exceptional workflow only; never used by normal availability.
+        if not actor.is_admin or not (override_reason or "").strip():
+            raise BusinessRuleError("Manual scheduling override requires an administrator and a reason.", status.HTTP_403_FORBIDDEN)
+        assert_day_not_past(day)
+        if day in frozen_dates:
+            raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
+        if slot is None:
+            raise BusinessRuleError("The selected deployment slot does not exist.", status.HTTP_404_NOT_FOUND)
+        if occupied:
+            raise BusinessRuleError(SLOT_TAKEN_MESSAGE, status.HTTP_409_CONFLICT)
+    else:
+        rejection = normal_slot_rejection(
+            day, slot, today=today_local(), frozen_dates=frozen_dates,
+            manually_frozen=is_slot_manually_frozen(db, day, slot_number), occupied=occupied,
+        )
+        if rejection:
+            raise BusinessRuleError(*rejection)
+    assert slot is not None
     return slot
 
 
@@ -422,14 +481,15 @@ def create_booking(
     tenant = resolve_tenant(db, payload.tenant_id)
     jira_number = _normalise_jira_number(payload, app_settings)
     assert_day_not_past(payload.deployment_date)
+    if is_date_automatically_frozen(db, payload.deployment_date, app_settings):
+        raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
     if payload.is_emergency:
         if not actor.is_admin:
             raise BusinessRuleError("Only administrators can create emergency changes.", status.HTTP_403_FORBIDDEN)
-        # Emergency changes are explicitly an administrator capability. Date,
-        # holiday, weekend and per-day emergency switches do not block admins.
+        # Emergency changes are an explicit Admin queue; date protections still apply.
         is_emergency = True
     else:
-        _validate_slot_target(db, payload.deployment_date, payload.slot_number, actor, app_settings)
+        _validate_slot_target(db, payload.deployment_date, payload.slot_number, actor, app_settings, manual_override=payload.manual_override, override_reason=payload.override_reason)
         is_emergency = False
     _validate_emergency_fields(payload, is_emergency)
 
@@ -448,7 +508,7 @@ def create_booking(
         ),
         override=payload.override_weekly_limit,
     )
-    override_reason = None
+    override_reason = (payload.override_reason or "").strip() if payload.manual_override else None
     if override_applied:
         override_reason = (payload.override_reason or "").strip() or (
             "Administrator automatic override: tenant weekly booking limit."
@@ -514,10 +574,10 @@ def update_booking(
     assert_booking_not_past(booking)
     if booking.status == BookingStatus.CANCELLED.value:
         raise BusinessRuleError("This booking has been cancelled and can no longer be edited.")
-    if not booking.is_emergency and is_date_automatically_frozen(db, booking.deployment_date, app_settings):
+    if is_date_automatically_frozen(db, booking.deployment_date, app_settings):
         raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
 
-    override_reason: str | None = None
+    override_reason: str | None = (payload.override_reason or "").strip() if payload.manual_override else None
     if not actor.is_admin:
         lock_reason = owner_lock_reason(db, booking, app_settings)
         if lock_reason:
@@ -530,21 +590,20 @@ def update_booking(
                 "Emergency change records can only be modified by an administrator.",
                 status.HTTP_403_FORBIDDEN,
             )
-    elif is_locked_for_owner(db, booking, app_settings):
-        if is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
-            default_override_reason = "Administrator override: manually frozen deployment slot."
-        else:
-            default_override_reason = "Administrator override: configured upcoming-date freeze window."
+    elif is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
+        default_override_reason = "Administrator override: manually frozen deployment slot."
         override_reason = (payload.override_reason or "").strip() or default_override_reason
 
     before = audit_service.snapshot(booking)
 
     new_day = payload.deployment_date or booking.deployment_date
     assert_day_not_past(new_day)
+    if is_date_automatically_frozen(db, new_day, app_settings):
+        raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
     new_slot_number = payload.slot_number or booking.slot_number
     moved = (new_day, new_slot_number) != (booking.deployment_date, booking.slot_number)
     if moved and not booking.is_emergency:
-        _validate_slot_target(db, new_day, new_slot_number, actor, app_settings)
+        _validate_slot_target(db, new_day, new_slot_number, actor, app_settings, exclude_id=booking.id, manual_override=payload.manual_override, override_reason=payload.override_reason)
 
     tenant = resolve_tenant(db, payload.tenant_id)
     jira_number = _normalise_jira_number(payload, app_settings)
@@ -627,7 +686,7 @@ def cancel_booking(
     assert_booking_not_past(booking)
     if booking.status == BookingStatus.CANCELLED.value:
         raise BusinessRuleError("This booking is already cancelled.")
-    if not booking.is_emergency and is_date_automatically_frozen(db, booking.deployment_date, app_settings):
+    if is_date_automatically_frozen(db, booking.deployment_date, app_settings):
         raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
 
     reason: str | None = None
@@ -643,11 +702,8 @@ def cancel_booking(
                 "Emergency change records can only be cancelled by an administrator.",
                 status.HTTP_403_FORBIDDEN,
             )
-    elif is_locked_for_owner(db, booking, app_settings):
-        if is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
-            default_override_reason = "Administrator override: manually frozen deployment slot."
-        else:
-            default_override_reason = "Administrator override: configured upcoming-date freeze window."
+    elif is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
+        default_override_reason = "Administrator override: manually frozen deployment slot."
         reason = (override_reason or "").strip() or default_override_reason
 
     before = audit_service.snapshot(booking)
@@ -723,9 +779,15 @@ def next_available_slots(
     app_settings = get_app_settings(db)
     if booking.is_emergency or booking.status == BookingStatus.CANCELLED.value:
         return []
+    try:
+        assert_booking_mutable(db, booking, actor)
+    except BusinessRuleError:
+        return []
 
     tenant = db.get(Tenant, booking.tenant_id)
-    weekly_limit = _effective_weekly_limit(tenant, app_settings) if tenant else app_settings.weekly_booking_limit
+    if tenant is None or not tenant.is_active:
+        return []
+    weekly_limit = _effective_weekly_limit(tenant, app_settings)
     frozen_dates = automatic_frozen_dates(db, app_settings)
     configs = schedule_service.slot_configurations(db)
 
@@ -750,7 +812,7 @@ def next_available_slots(
         if day in frozen_dates:
             # The upcoming-date freeze is immutable for administrators too.
             continue
-        if not actor.is_admin and not is_deployment_weekday(day):
+        if not is_deployment_weekday(day):
             continue
 
         if not actor.is_admin:
@@ -775,16 +837,11 @@ def next_available_slots(
                 break
             if (day, slot.slot_number) == (booking.deployment_date, booking.slot_number):
                 continue
-            if slot.slot_number in taken.get(day, set()):
-                continue
-            if not actor.is_admin:
-                if not slot.bookable:
-                    continue
-                if (day, slot.slot_number) in manual_freezes:
-                    continue
-            elif not slot.enabled:
-                # Administrators bypass holidays and weekends but a slot that
-                # does not exist on the date is still not a destination.
+            if normal_slot_rejection(
+                day, slot, today=today_local(), frozen_dates=frozen_dates,
+                manually_frozen=(day, slot.slot_number) in manual_freezes,
+                occupied=slot.slot_number in taken.get(day, set()),
+            ):
                 continue
             options.append(
                 SlotOption(
@@ -835,19 +892,15 @@ def reschedule_booking(
                 lock_reason + " Contact an administrator for assistance.",
                 status.HTTP_423_LOCKED,
             )
-    elif is_locked_for_owner(db, booking, app_settings):
-        reason = (override_reason or "").strip() or (
-            "Administrator override: manually frozen deployment slot."
-            if is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number)
-            else "Administrator override: configured upcoming-date freeze window."
-        )
+    elif is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number):
+        reason = (override_reason or "").strip() or "Administrator override: manually frozen deployment slot."
 
     if (new_day, new_slot_number) == (booking.deployment_date, booking.slot_number):
         raise BusinessRuleError("This booking is already scheduled in that slot.")
 
     # Re-validate the destination at submit time: the picker's view of
     # availability may be seconds out of date.
-    _validate_slot_target(db, new_day, new_slot_number, actor, app_settings)
+    _validate_slot_target(db, new_day, new_slot_number, actor, app_settings, exclude_id=booking.id)
     if _slot_taken(db, new_day, new_slot_number, exclude_id=booking.id):
         raise BusinessRuleError(SLOT_TAKEN_MESSAGE, status.HTTP_409_CONFLICT)
 
@@ -912,7 +965,7 @@ def reschedule_booking(
 def delete_booking(db: Session, booking: DeploymentBooking, actor: Actor) -> None:
     """Hard delete a non-historical booking while retaining its audit trail."""
     assert_booking_not_past(booking)
-    if not booking.is_emergency and is_date_automatically_frozen(db, booking.deployment_date):
+    if is_date_automatically_frozen(db, booking.deployment_date):
         raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
     booking_id = booking.id
     reference = booking.booking_reference
@@ -947,7 +1000,7 @@ def assign_users_to_booking(
     """Replace the RM assignment list for a booking. Administrator only."""
     if not actor.is_admin:
         raise BusinessRuleError("Only administrators can assign RM users.", status.HTTP_403_FORBIDDEN)
-    assert_booking_not_past(booking)
+    assert_booking_mutable(db, booking, actor)
     if booking.status == BookingStatus.CANCELLED.value:
         raise BusinessRuleError("A cancelled booking cannot be assigned.")
 
@@ -1004,7 +1057,7 @@ def start_work(
     db: Session, booking: DeploymentBooking, change_number: str, actor: Actor
 ) -> DeploymentBooking:
     """Assigned RM user supplies the separate Change No. and starts work."""
-    assert_booking_not_past(booking)
+    assert_booking_mutable(db, booking, actor)
     if booking.status == BookingStatus.CANCELLED.value:
         raise BusinessRuleError("A cancelled booking cannot be started.")
     if not actor.is_admin:

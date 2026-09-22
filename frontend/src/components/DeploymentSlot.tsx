@@ -72,8 +72,7 @@ export function DeploymentSlot({
   onToggleFreeze,
 }: DeploymentSlotProps) {
   const booking = slot.booking
-  // The backend is the source of truth for protected dates. Admins may bypass
-  // manual/availability restrictions outside the configured automatic freeze.
+  // Normal board availability comes from the backend and is the same for Admin and users.
   const canBook = booking === null && !isHistorical && slot.bookable
 
   return (

@@ -30,13 +30,13 @@ def upgrade() -> None:
     with op.batch_alter_table('users') as batch:
         batch.add_column(
             sa.Column(
-                'is_owner', sa.Boolean(), server_default=sa.text('0'), nullable=False
+                'is_owner', sa.Boolean(), server_default=sa.false(), nullable=False
             )
         )
     # Adopt the earliest administrator as the owner of an existing database.
     op.execute(
         sa.text(
-            "UPDATE users SET is_owner = 1 WHERE id = ("
+            "UPDATE users SET is_owner = true WHERE id = ("
             "  SELECT MIN(id) FROM users WHERE role = 'ADMIN'"
             ")"
         )

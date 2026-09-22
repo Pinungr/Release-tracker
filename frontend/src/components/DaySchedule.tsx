@@ -121,7 +121,7 @@ export function DaySchedule({
             {isAdmin
               ? isHistorical
                 ? 'This past/current date is read-only for everyone, including administrators.'
-                : 'Normal policy marks this date unavailable, but administrator scheduling and emergency changes remain available.'
+                : 'Normal deployment slots are unavailable. The separate Admin emergency queue follows date protection.'
               : <>
                   No production deployments available.
                   {day.holiday.allow_emergency

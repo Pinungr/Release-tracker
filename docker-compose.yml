@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     container_name: pds-postgres
     restart: unless-stopped
     environment:
@@ -37,7 +37,11 @@ services:
       TIMEZONE: ${TIMEZONE:-Asia/Kolkata}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
     ports:
-      - "8000:8000"
+      # Host port only. The app always listens on 8000 inside the container.
+      # Windows reserves blocks of ports for Hyper-V/WinNAT (check with
+      # `netsh interface ipv4 show excludedportrange protocol=tcp`); if 8000
+      # falls inside one, set APP_PORT to a free port instead.
+      - "${APP_PORT:-8000}:8000"
     volumes:
       - app-storage:/var/lib/pds/storage
     healthcheck:

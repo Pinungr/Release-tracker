@@ -55,8 +55,10 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     settings = Settings()
     if settings.environment.lower() == "production":
-        if settings.jwt_secret == Settings.model_fields["jwt_secret"].default:
-            raise RuntimeError("JWT_SECRET must be set to a unique value in production.")
+        if settings.jwt_secret.strip().lower() in {
+            "change-me-in-production", "replace-with-a-long-random-string",
+        } or len(settings.jwt_secret.strip()) < 32:
+            raise RuntimeError("JWT_SECRET must be a unique secret of at least 32 characters in production; default placeholders are forbidden.")
         if settings.bootstrap_admin_password == Settings.model_fields["bootstrap_admin_password"].default:
             raise RuntimeError("BOOTSTRAP_ADMIN_PASSWORD must be set to a unique value in production.")
     elif len(settings.jwt_secret) < 32:

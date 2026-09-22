@@ -183,13 +183,15 @@ def test_reducing_slots_per_day_shrinks_the_board(admin, user, tenant, next_mond
 
 def test_admin_can_book_a_disabled_normal_slot(admin, tenant, next_monday):
     admin.put("/api/admin/settings", json={"regular_slots_per_day": 3})
-    response = post_booking(admin, booking_payload(tenant, next_monday, 4))
+    assert post_booking(admin, booking_payload(tenant, next_monday, 4)).status_code == 400
+    response = post_booking(admin, booking_payload(tenant, next_monday, 4, manual_override=True, override_reason="Exceptional approved deployment"))
     assert response.status_code == 201, response.text
 
 
 def test_admin_can_book_future_weekends_but_not_past_dates(admin, tenant, next_monday):
-    saturday = next_monday + timedelta(days=5)
-    weekend = post_booking(admin, booking_payload(tenant, saturday, 1))
+    saturday = next_monday + timedelta(days=6)
+    assert post_booking(admin, booking_payload(tenant, saturday, 1)).status_code == 400
+    weekend = post_booking(admin, booking_payload(tenant, saturday, 1, manual_override=True, override_reason="Exceptional approved deployment"))
     assert weekend.status_code == 201, weekend.text
 
     # Historical dates are immutable for everyone, including administrators.
@@ -285,7 +287,7 @@ def test_admin_can_reassign_a_change_to_another_tenant(admin, user, tenant, othe
 
 def test_admin_can_hard_delete_a_change(admin, user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
-    assert admin.delete(f"/api/admin/bookings/{booking['id']}").status_code == 204
+    assert admin.delete(f"/api/admin/bookings/{booking['id']}", params={"confirmation": booking["booking_reference"]}).status_code == 204
     assert admin.get(f"/api/bookings/{booking['id']}").status_code == 404
     assert any(e["event_type"] == "BOOKING_DELETED" for e in admin.get("/api/admin/audit").json())
 
@@ -406,7 +408,7 @@ def test_past_booking_is_read_only_even_for_admin(
     )
     assert upload.status_code == 423
 
-    hard_delete = admin.delete(f"/api/admin/bookings/{booking['id']}")
+    hard_delete = admin.delete(f"/api/admin/bookings/{booking['id']}", params={"confirmation": booking["booking_reference"]})
     assert hard_delete.status_code == 423
 
     # The record is still retained as historical data.

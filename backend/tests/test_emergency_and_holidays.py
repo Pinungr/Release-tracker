@@ -171,7 +171,8 @@ def test_admin_can_book_a_normal_slot_on_a_full_day_holiday(admin, tenant, next_
         "/api/admin/holidays",
         json={"holiday_date": next_monday.isoformat(), "name": "Festival", "is_full_day": True},
     )
-    response = post_booking(admin, booking_payload(tenant, next_monday, 1))
+    assert post_booking(admin, booking_payload(tenant, next_monday, 1)).status_code == 400
+    response = post_booking(admin, booking_payload(tenant, next_monday, 1, manual_override=True, override_reason="Exceptional approved deployment"))
     assert response.status_code == 201, response.text
 
 

@@ -99,7 +99,7 @@ def test_hard_delete_preserves_complete_audit_history(
     before_types = {e["event_type"] for e in before}
     assert {"BOOKING_CREATED", "RM_USERS_ASSIGNED", "WORK_STARTED"}.issubset(before_types)
 
-    deleted = admin.delete(f"/api/admin/bookings/{booking['id']}")
+    deleted = admin.delete(f"/api/admin/bookings/{booking['id']}", params={"confirmation": booking["booking_reference"]})
     assert deleted.status_code == 204, deleted.text
 
     after = [e for e in admin.get("/api/admin/audit?limit=500").json() if e["booking_reference"] == reference]

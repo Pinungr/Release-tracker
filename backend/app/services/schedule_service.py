@@ -51,6 +51,8 @@ class DayPlan:
     holiday: Holiday | None
     #: Effective number of normal slots offered on this date.
     normal_slot_count: int
+    #: Configured date limit, independent of disabled or missing rows.
+    configured_slot_count: int
     #: Set only when an administrator added/removed slots on this date; ``None``
     #: means the date simply follows the configured default.
     custom_slot_count: int | None = None
@@ -116,10 +118,10 @@ def resolve_day(
     # The grid keeps every configured slot row on every date. Rows above the
     # date's capacity are reported disabled rather than removed, so a booking
     # is never hidden by a capacity change and administrators keep their
-    # existing ability to schedule into a disabled slot.
+    # explicit manual override workflow.
     slots: list[ResolvedSlot] = []
-    for position, cfg in enumerate(configs, start=1):
-        enabled = cfg.enabled and position <= regular_limit
+    for cfg in configs:
+        enabled = cfg.enabled and cfg.slot_number <= regular_limit
         reason: str | None = None
         if not enabled:
             reason = "Slot disabled for this date."
@@ -152,6 +154,7 @@ def resolve_day(
         slots=slots,
         holiday=holiday,
         normal_slot_count=sum(1 for s in slots if s.enabled),
+        configured_slot_count=regular_limit,
         custom_slot_count=custom_slot_count,
         emergency_open=emergency_closed is None,
         emergency_closed_reason=emergency_closed,

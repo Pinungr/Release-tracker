@@ -41,7 +41,7 @@ export function DocumentUploader({
   const [busy, setBusy] = useState<DocumentCategory | null>(null)
   const [downloading, setDownloading] = useState<number | null>(null)
   const inputs = useRef<Partial<Record<DocumentCategory, HTMLInputElement | null>>>({})
-  const canManage = !readOnly && (isAdmin || ownerCanManage)
+  const canManage = !readOnly && booking.can_manage_attachments && (isAdmin || ownerCanManage)
 
   async function upload(category: DocumentCategory, file: File) {
     const extension = `.${file.name.split('.').pop()?.toLowerCase() ?? ''}`
@@ -157,7 +157,7 @@ export function DocumentUploader({
                       {file.original_filename}
                     </span>
                     <span className="shrink-0 tnum text-ink-muted">{formatBytes(file.size_bytes)}</span>
-                    {isAdmin || ownerCanManage ? (
+                    {booking.can_download_attachments ? (
                       <button
                         type="button"
                         onClick={() => void downloadFile(file.id, file.original_filename)}

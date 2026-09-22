@@ -674,7 +674,7 @@ function BookingManagement({
   const toast = useToast()
   const [bookings, setBookings] = useState<BookingSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [pendingDelete, setPendingDelete] = useState<BookingSummary | null>(null)
+  const [pendingCancel, setPendingCancel] = useState<BookingSummary | null>(null)
   const [busy, setBusy] = useState(false)
 
   const loadBookings = useCallback(() => {
@@ -690,16 +690,16 @@ function BookingManagement({
 
   useEffect(loadBookings, [loadBookings])
 
-  async function hardDelete(booking: BookingSummary) {
+  async function cancelBooking(booking: BookingSummary) {
     setBusy(true)
     try {
-      await api.deleteBooking(booking.id)
-      setPendingDelete(null)
+      await api.cancelBooking(booking.id, { override_reason: null })
+      setPendingCancel(null)
       loadBookings()
       onChanged()
-      toast.success('Booking deleted.', `${booking.booking_reference} and its documents were removed.`)
+      toast.success('Booking cancelled.', `${booking.booking_reference}: record, documents and audit history retained.`)
     } catch (caught) {
-      toast.error('Could not delete the booking', caught instanceof ApiError ? caught.message : '')
+      toast.error('Could not cancel the booking', caught instanceof ApiError ? caught.message : '')
     } finally {
       setBusy(false)
     }
@@ -719,7 +719,7 @@ function BookingManagement({
   return (
     <SectionShell
       title="Booking management"
-      description="Current and future bookings can be managed here. Past deployment records are retained as read-only history and cannot be modified or deleted."
+      description="Editable future bookings can be managed here. Past, current and protected dates are read-only for administrators too. Cancel a booking to retain its record, documents and audit history."
       error={error}
       loading={!bookings}
     >
@@ -762,7 +762,7 @@ function BookingManagement({
                   >
                     Open
                   </button>
-                  {!booking.is_past && booking.status === 'BOOKED' ? (
+                  {!booking.is_locked && booking.status === 'BOOKED' ? (
                     <button
                       type="button"
                       className="btn-ghost btn-sm"
@@ -772,18 +772,18 @@ function BookingManagement({
                       Mark completed
                     </button>
                   ) : null}
-                  {!booking.is_past ? (
+                  {!booking.is_locked && booking.status !== 'CANCELLED' ? (
                     <button
                       type="button"
                       className="btn-ghost btn-sm text-rose-600"
-                      onClick={() => setPendingDelete(booking)}
+                      onClick={() => setPendingCancel(booking)}
                     >
                       <Trash className="size-3.5" />
-                      Delete permanently
+                      Cancel booking
                     </button>
                   ) : (
                     <span className="badge bg-slate-100 text-slate-600 ring-1 ring-slate-200">
-                      Historical · read-only
+                      Read-only
                     </span>
                   )}
                 </div>
@@ -799,21 +799,21 @@ function BookingManagement({
       </div>
 
       <ConfirmationModal
-        open={pendingDelete !== null}
-        onClose={() => setPendingDelete(null)}
-        onConfirm={() => pendingDelete && void hardDelete(pendingDelete)}
-        title="Delete this booking permanently?"
+        open={pendingCancel !== null}
+        onClose={() => setPendingCancel(null)}
+        onConfirm={() => pendingCancel && void cancelBooking(pendingCancel)}
+        title="Cancel this booking?"
         facts={
-          pendingDelete
+          pendingCancel
             ? [
-                { label: 'Reference', value: pendingDelete.booking_reference },
-                { label: 'Tenant', value: pendingDelete.tenant_name },
-                { label: 'Date', value: formatDate(pendingDelete.deployment_date) },
+                { label: 'Reference', value: pendingCancel.booking_reference },
+                { label: 'Tenant', value: pendingCancel.tenant_name },
+                { label: 'Date', value: formatDate(pendingCancel.deployment_date) },
               ]
             : []
         }
-        note="The booking and every uploaded document will be removed. Its audit history and deletion event will be retained permanently."
-        confirmLabel="Delete permanently"
+        note="The slot is released. The booking, all uploaded documents and audit history are retained."
+        confirmLabel="Cancel booking"
         cancelLabel="Keep record"
         busy={busy}
       />

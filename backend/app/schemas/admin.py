@@ -103,6 +103,7 @@ class DaySlotCapacityOut(BaseModel):
 
 
 class MoveBookingRequest(BaseModel):
+    manual_override: bool = False
     deployment_date: date
     # Emergency changes have no normal slot and may be moved by date only.
     slot_number: int | None = Field(default=None, ge=1, le=50)

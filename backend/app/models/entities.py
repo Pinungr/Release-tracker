@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -122,7 +123,7 @@ class User(Base):
     # be targeted through the admin API. There is no endpoint that grants this
     # flag, so it cannot be escalated into.
     is_owner: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=text("0"), nullable=False
+        Boolean, default=False, server_default=false(), nullable=False
     )
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Incremented whenever the password is changed/reset. JWTs carry the

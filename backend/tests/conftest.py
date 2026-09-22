@@ -45,9 +45,8 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - cleanup
 @pytest.fixture(autouse=True)
 def fresh_database():
     """Every test starts from an empty migrated schema plus the bootstrap admin."""
-    # The development migration history is intentionally squashed into one
-    # initial revision. Reset Alembic's version table as well as the model
-    # tables so bootstrap.initialise() exercises that clean migration.
+    # Reset Alembic's version table along with the model tables so bootstrap
+    # exercises the complete existing migration chain on every clean database.
     Base.metadata.drop_all(bind=engine)
     with engine.begin() as connection:
         connection.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")

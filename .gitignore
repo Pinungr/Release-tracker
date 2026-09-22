@@ -1,8 +1,7 @@
 # Environment & secrets
-# The root .env holds committed PLACEHOLDERS only. Real secrets belong in
-# backend/.env, which stays ignored and overrides the root file.
+# Keep real root and backend environment files untracked.
+# Compose uses root .env; local Python also reads backend/.env.
 .env
-!/.env
 .env.local
 
 # Python

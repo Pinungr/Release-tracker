@@ -40,7 +40,9 @@ def test_root_serves_the_application_shell(anon):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "<div id=\"root\">" in response.text
-    assert response.headers["cache-control"] == "no-cache"
+    # The application middleware uses the stronger no-store policy for HTML.
+    assert "no-store" in response.headers["cache-control"]
+    assert "max-age=0" in response.headers["cache-control"]
 
 
 @needs_build

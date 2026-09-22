@@ -214,7 +214,8 @@ def test_admin_can_book_a_manually_frozen_future_slot(admin, tenant, next_monday
         "/api/admin/slot-freezes",
         json={"freeze_date": next_monday.isoformat(), "slot_number": 1},
     )
-    created = post_booking(admin, booking_payload(tenant, next_monday, 1))
+    assert post_booking(admin, booking_payload(tenant, next_monday, 1)).status_code == 423
+    created = post_booking(admin, booking_payload(tenant, next_monday, 1, manual_override=True, override_reason="Exceptional approved deployment"))
     assert created.status_code == 201, created.text
 
 

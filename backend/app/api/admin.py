@@ -13,6 +13,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..config import settings as runtime_settings
 from ..database import get_db
 from ..models import (
     ACTIVE_STATUSES,
@@ -631,7 +632,7 @@ def _day_capacity_out(db: Session, day: date) -> DaySlotCapacityOut:
     row = _capacity_row(db, day)
     return DaySlotCapacityOut(
         capacity_date=day,
-        slot_count=schedule_service.resolve_day(db, day).normal_slot_count,
+        slot_count=schedule_service.resolve_day(db, day).configured_slot_count,
         custom_slot_count=row.slot_count if row else None,
         max_slot_count=MAX_SLOTS_PER_DAY,
     )
@@ -679,7 +680,7 @@ def add_day_slot(
     admin: AdminPrincipal = Depends(require_admin),
 ) -> DaySlotCapacityOut:
     booking_service.assert_day_not_past(day)
-    current = schedule_service.resolve_day(db, day).normal_slot_count
+    current = schedule_service.resolve_day(db, day).configured_slot_count
     if current >= MAX_SLOTS_PER_DAY:
         raise BusinessRuleError(
             f"A deployment date cannot carry more than {MAX_SLOTS_PER_DAY} normal slots."
@@ -694,7 +695,7 @@ def remove_day_slot(
     admin: AdminPrincipal = Depends(require_admin),
 ) -> DaySlotCapacityOut:
     booking_service.assert_day_not_past(day)
-    current = schedule_service.resolve_day(db, day).normal_slot_count
+    current = schedule_service.resolve_day(db, day).configured_slot_count
     if current <= 0:
         raise BusinessRuleError("This deployment date has no normal slots left to remove.")
     highest_booked = db.scalar(
@@ -831,6 +832,7 @@ def move_booking(
         business_justification=booking.business_justification,
         deployment_date=payload.deployment_date,
         slot_number=payload.slot_number,
+        manual_override=payload.manual_override,
         override_weekly_limit=True,
         override_reason=payload.override_reason,
     )
@@ -845,7 +847,7 @@ def reassign_booking(
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
-    booking_service.assert_booking_not_past(booking)
+    booking_service.assert_booking_mutable(db, booking, _actor(admin))
     before = audit_service.snapshot(booking)
     if payload.tenant_id is not None:
         tenant = booking_service.resolve_tenant(db, payload.tenant_id)
@@ -879,7 +881,7 @@ def set_status(
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
-    booking_service.assert_booking_not_past(booking)
+    booking_service.assert_booking_mutable(db, booking, _actor(admin))
     try:
         new_status = BookingStatus(payload.status)
     except ValueError:
@@ -891,6 +893,9 @@ def set_status(
         raise BusinessRuleError(
             "Only BOOKED, COMPLETED and CANCELLED can be set from the admin panel."
         )
+    if new_status is BookingStatus.CANCELLED:
+        booking_service.cancel_booking(db, booking, _actor(admin), payload.override_reason)
+        return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
     if new_status is BookingStatus.COMPLETED:
         # A deployment cannot be signed off with required paperwork missing,
         # unless an administrator records a reason for the exception.
@@ -917,10 +922,16 @@ def set_status(
 
 @router.delete("/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
 def hard_delete_booking(
+    confirmation: str = Query(default=""),
     booking: DeploymentBooking = Depends(get_booking),
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> None:
+    if runtime_settings.environment.lower() != "development":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Permanent deletion is restricted to development cleanup. Cancel the booking to retain its documents.")
+    booking_service.assert_booking_date_mutable(db, booking)
+    if confirmation != booking.booking_reference:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Confirm permanent deletion with the exact booking reference. The record and documents will be removed; audit history is retained.")
     booking_id = booking.id
     booking_service.delete_booking(db, booking, _actor(admin))
     attachment_service.remove_booking_directory(booking_id)

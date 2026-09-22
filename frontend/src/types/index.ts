@@ -81,6 +81,7 @@ export interface BookingSummary {
   work_started_by_user_id: number | null
   work_started_at: string | null
   is_past: boolean
+  lock_reason: 'CURRENT_DATE' | 'PAST_DATE' | 'AUTOMATIC_DATE_FREEZE' | 'MANUAL_SLOT_FREEZE' | 'NONE'
   is_locked: boolean
   documents: DocumentReadiness
   created_at: string
@@ -114,6 +115,12 @@ export interface BookingDetail extends BookingSummary {
   cancelled_by_user_id: number | null
   attachments: Attachment[]
   can_edit: boolean
+  can_cancel: boolean
+  can_reschedule: boolean
+  can_assign_rm: boolean
+  can_start_work: boolean
+  can_download_attachments: boolean
+  can_manage_attachments: boolean
   slot_label: string
   slot_time: string
 }
@@ -174,6 +181,8 @@ export interface DayView {
   holiday: Holiday | null
   /** Set only when an administrator added/removed slots on this date. */
   custom_slot_count: number | null
+  configured_slots_total: number
+  regular_slots_available: number
   regular_slots_total: number
   regular_slots_used: number
   slots: SlotView[]

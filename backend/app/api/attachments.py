@@ -44,11 +44,9 @@ def upload_attachment(
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
     actor = _actor(booking, admin, user)
-    booking_service.assert_booking_not_past(booking)
-    if not actor.is_admin and booking_service.is_locked_for_owner(db, booking):
-        raise HTTPException(status.HTTP_423_LOCKED, "This deployment slot has been manually frozen by an administrator.")
+    booking_service.assert_booking_mutable(db, booking, actor)
     attachment_service.save_upload(db, booking, category, file, actor)
-    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin)
+    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
 @router.delete("/{booking_id}/attachments/{attachment_id}", response_model=BookingDetail)
@@ -60,17 +58,12 @@ def delete_attachment(
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
     actor = _actor(booking, admin, user)
-    booking_service.assert_booking_not_past(booking)
-    if not actor.is_admin and booking_service.is_locked_for_owner(db, booking):
-        raise HTTPException(
-            status.HTTP_423_LOCKED,
-            "This deployment slot has been manually frozen by an administrator.",
-        )
+    booking_service.assert_booking_mutable(db, booking, actor)
     attachment = booking_service.attachment_of(booking, attachment_id)
     if attachment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Attachment not found.")
     attachment_service.delete_attachment(db, booking, attachment, actor)
-    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin)
+    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
 @router.get("/{booking_id}/attachments/{attachment_id}/download")

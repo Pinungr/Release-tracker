@@ -82,6 +82,7 @@ class BookingCreate(BookingBase):
     slot_number: int | None = Field(default=None, ge=1, le=50)
     is_emergency: bool = False
     #: Administrator-only knobs; rejected for TENANT_USER callers.
+    manual_override: bool = False
     override_weekly_limit: bool = False
     override_reason: str | None = Field(default=None, max_length=500)
 
@@ -90,6 +91,7 @@ class BookingUpdate(BookingBase):
 
     deployment_date: date | None = None
     slot_number: int | None = Field(default=None, ge=1, le=50)
+    manual_override: bool = False
     override_weekly_limit: bool = False
     override_reason: str | None = Field(default=None, max_length=500)
 
@@ -163,6 +165,7 @@ class BookingSummary(BaseModel):
     work_started_by_user_id: int | None
     work_started_at: datetime | None
     is_past: bool
+    lock_reason: Literal["CURRENT_DATE", "PAST_DATE", "AUTOMATIC_DATE_FREEZE", "MANUAL_SLOT_FREEZE", "NONE"]
     is_locked: bool
     documents: DocumentReadiness
     created_at: datetime
@@ -190,6 +193,12 @@ class BookingDetail(BookingSummary):
     cancelled_by_user_id: int | None
     attachments: list[AttachmentOut]
     can_edit: bool
+    can_cancel: bool
+    can_reschedule: bool
+    can_assign_rm: bool
+    can_start_work: bool
+    can_download_attachments: bool
+    can_manage_attachments: bool
     slot_label: str
     slot_time: str
 
@@ -265,6 +274,8 @@ class DayView(BaseModel):
     holiday: HolidayOut | None
     #: Set only when an administrator added/removed slots on this date.
     custom_slot_count: int | None
+    configured_slots_total: int
+    regular_slots_available: int
     regular_slots_total: int
     regular_slots_used: int
     slots: list[SlotView]

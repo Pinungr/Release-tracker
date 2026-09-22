@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../services/api'
-import type { BookingDetail, ManagedUser, PublicSettings, SlotConfig } from '../types'
+import type { BookingDetail, ManagedUser, PublicSettings } from '../types'
 import { formatDate, formatTimestamp } from '../utils/dates'
 import { DocumentReadinessPanel } from './DocumentReadiness'
 import { DocumentUploader } from './DocumentUploader'
@@ -51,8 +51,6 @@ export function BookingDetailsDrawer({
   const [busy, setBusy] = useState(false)
   const [moveOpen, setMoveOpen] = useState(false)
   const [moveDate, setMoveDate] = useState('')
-  const [moveSlot, setMoveSlot] = useState('')
-  const [moveSlots, setMoveSlots] = useState<SlotConfig[]>([])
   const [moveBusy, setMoveBusy] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
   const [assignmentUsers, setAssignmentUsers] = useState<ManagedUser[]>([])
@@ -63,27 +61,28 @@ export function BookingDetailsDrawer({
   const [workError, setWorkError] = useState<string | null>(null)
 
   const ownsBooking = booking !== null && userId === booking.created_by_user_id
-  const historicalReadOnly = booking?.is_past ?? false
-
-  const canAct =
-    booking !== null &&
-    !historicalReadOnly &&
-    booking.status !== 'CANCELLED' &&
-    (isAdmin || ownsBooking)
-  const publicLocked = booking !== null && booking.is_locked && !isAdmin
+  const canAct = booking?.can_edit ?? false
+  const hasLockReason = booking !== null && booking.lock_reason !== 'NONE'
+  const lockMessages = {
+    CURRENT_DATE: 'This booking is locked because deployments scheduled for today are read-only.',
+    PAST_DATE: 'This booking is historical and cannot be modified.',
+    AUTOMATIC_DATE_FREEZE: 'This deployment date is inside the protected scheduling window.',
+    MANUAL_SLOT_FREEZE: 'This slot was manually frozen by an administrator.',
+    NONE: '',
+  }
   const isAssigned = booking !== null && userId !== null && booking.assigned_users.some((u) => u.user_id === userId)
 
   useEffect(() => {
     setSelectedAssignees(booking?.assigned_users.map((u) => u.user_id) ?? [])
     setChangeNumber(booking?.change_number ?? '')
     setWorkError(null)
-    if (open && isAdmin && !booking?.is_past) {
+    if (open && booking?.can_assign_rm) {
       void api.listUsers().then((users) => setAssignmentUsers(users.filter((u) => u.is_active && u.role === 'TENANT_USER' && u.id !== booking?.created_by_user_id))).catch(() => setAssignmentUsers([]))
     }
   }, [booking?.id, booking?.change_number, open, isAdmin])
 
   async function saveAssignments() {
-    if (!booking || !isAdmin || booking.is_past) return
+    if (!booking || !booking.can_assign_rm) return
     if (!selectedAssignees.length) {
       toast.error('Select at least one RM user.')
       return
@@ -101,7 +100,7 @@ export function BookingDetailsDrawer({
   }
 
   async function startWork() {
-    if (!booking || booking.is_past) return
+    if (!booking || !booking.can_start_work) return
     if (!changeNumber.trim()) {
       setWorkError('Change No. is required to start work.')
       return
@@ -138,18 +137,10 @@ export function BookingDetailsDrawer({
   }
 
   async function openMoveDialog() {
-    if (!booking || !isAdmin || booking.is_past) return
+    if (!booking || !booking.is_emergency || !isAdmin || !booking.can_reschedule) return
     setMoveDate(booking.deployment_date)
-    setMoveSlot(booking.slot_number ? String(booking.slot_number) : '')
     setMoveError(null)
     setMoveOpen(true)
-    if (!booking.is_emergency) {
-      try {
-        setMoveSlots(await api.getSlots())
-      } catch (error) {
-        setMoveError(error instanceof ApiError ? error.message : 'Could not load deployment slots.')
-      }
-    }
   }
 
   async function moveBooking() {
@@ -158,20 +149,16 @@ export function BookingDetailsDrawer({
       setMoveError('Select the new deployment date.')
       return
     }
-    if (!booking.is_emergency && !moveSlot) {
-      setMoveError('Select the new deployment slot.')
-      return
-    }
     setMoveBusy(true)
     setMoveError(null)
     try {
       await api.moveBooking(booking.id, {
         deployment_date: moveDate,
-        slot_number: booking.is_emergency ? null : Number(moveSlot),
+        slot_number: null,
         override_reason: null,
       })
       toast.success(
-        booking.is_emergency ? 'Emergency CRQ moved.' : 'Deployment rescheduled.',
+        'Emergency CRQ moved.',
         `${booking.booking_reference} · ${formatDate(moveDate)}`,
       )
       setMoveOpen(false)
@@ -220,41 +207,41 @@ export function BookingDetailsDrawer({
           booking ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-ink-muted">
-                {historicalReadOnly
-                  ? 'Historical record: past deployment data is read-only for everyone, including administrators.'
+                {hasLockReason && !canAct
+                  ? 'Past, current and protected deployment dates are read-only for everyone, including administrators.'
                   : isAdmin
-                    ? 'Administrator: future/current records can be edited, moved, assigned, documented or cancelled.'
+                    ? 'Administrator: actions are available only on editable future records.'
                     : ownsBooking
                     ? 'Verified as the booking owner for this session.'
                     : isAssigned
-                      ? 'Assigned RM user: you can start work and provide the Change No.'
+                      ? 'Assigned RM user: authorized documents are available to download; work actions depend on date protection.'
                       : 'Only the booking owner or an assigned RM user can access this change record.'}
               </p>
               {/* Owner and administrator get Edit | Reschedule | Cancel.
-                  Anyone else (an assigned RM user) can only view. */}
+                  Assigned RM work and download permissions are separate. */}
               <div className="flex gap-2">
-                {canAct && !publicLocked ? (
+                {canAct ? (
                   <>
                     <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
                       <Pencil className="size-4" />
                       Edit
                     </button>
-                    <button
+                    {booking.can_reschedule ? <button
                       type="button"
                       className="btn-secondary"
                       onClick={() => setRescheduleOpen(true)}
                     >
                       <Calendar className="size-4" />
                       Reschedule
-                    </button>
-                    <button
+                    </button> : null}
+                    {booking.can_cancel ? <button
                       type="button"
                       className="btn-danger"
                       onClick={() => setConfirmCancel(true)}
                     >
                       <Trash className="size-4" />
                       Cancel
-                    </button>
+                    </button> : null}
                   </>
                 ) : (
                   <span className="badge bg-canvas text-ink-muted ring-1 ring-line">View only</span>
@@ -271,25 +258,13 @@ export function BookingDetailsDrawer({
           </div>
         ) : (
           <div className="space-y-6">
-            {booking.is_past ? (
-              <div className="flex items-start gap-3 rounded-xl border border-slate-300 bg-slate-50 p-4">
-                <Lock className="mt-0.5 size-5 shrink-0 text-slate-600" />
-                <div>
-                  <p className="text-sm font-semibold text-ink">Historical record · read-only</p>
-                  <p className="mt-0.5 text-sm text-ink-muted">
-                    This deployment date has passed. No user or administrator can edit, move, cancel, reassign, change status, start work, change the Change No., or modify attachments.
-                  </p>
-                </div>
-              </div>
-            ) : null}
-
-            {publicLocked && !booking.is_past && booking.status !== 'CANCELLED' ? (
+            {hasLockReason && booking.status !== 'CANCELLED' ? (
               <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <Lock className="mt-0.5 size-5 shrink-0 text-slate-500" />
                 <div>
                   <p className="text-sm font-semibold text-ink">Booking locked</p>
                   <p className="mt-0.5 text-sm text-ink-muted">
-                    This slot was manually frozen by an administrator. Normal users cannot edit or cancel the booking while it is frozen; an administrator can unfreeze it from the schedule board.
+                    {lockMessages[booking.lock_reason]}
                   </p>
                 </div>
               </div>
@@ -377,7 +352,7 @@ export function BookingDetailsDrawer({
               <Row label="Last modified">{formatTimestamp(booking.updated_at, timezone)}</Row>
             </dl>
 
-            {isAdmin && !booking.is_past ? (
+            {booking.can_assign_rm ? (
               <section className="rounded-xl border border-line bg-canvas/50 p-4">
                 <h3 className="text-sm font-semibold text-ink">Assign RM team users</h3>
                 <p className="mt-1 text-xs text-ink-muted">Assigned users can open this CRQ and provide the separate Change No. when they start work.</p>
@@ -400,10 +375,10 @@ export function BookingDetailsDrawer({
               </section>
             ) : null}
 
-            {(isAssigned || isAdmin) && !booking.is_past && booking.status !== 'CANCELLED' ? (
+            {booking.can_start_work ? (
               <section className="rounded-xl border border-line bg-canvas/50 p-4">
                 <h3 className="text-sm font-semibold text-ink">Start RM work</h3>
-                <p className="mt-1 text-xs text-ink-muted">Jira No. was supplied during slot booking. Enter the separate Change No. when work begins.</p>
+                <p className="mt-1 text-xs text-ink-muted">Add the Change Number when RM work begins. Jira reference, if provided during booking, remains separate.</p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <input
                     className="field flex-1"
@@ -430,7 +405,7 @@ export function BookingDetailsDrawer({
                 settings={settings}
                 isAdmin={isAdmin}
                 canManage={ownsBooking}
-                readOnly={booking.is_past || !canAct || publicLocked}
+                readOnly={!booking.can_manage_attachments}
                 onUpdated={() => onChanged()}
               />
             </section>
@@ -442,8 +417,8 @@ export function BookingDetailsDrawer({
         <Modal
           open={moveOpen}
           onClose={() => setMoveOpen(false)}
-          title={booking.is_emergency ? 'Move emergency CRQ' : 'Move / reschedule deployment'}
-          description="Administrators can move an active CRQ to a current or future date. Past deployment records are immutable."
+          title="Move emergency CRQ"
+          description="Move an active CRQ to an unprotected future date. Past, current and protected dates are read-only for administrators too."
           size="md"
           footer={
             <div className="flex justify-end gap-2">
@@ -458,7 +433,7 @@ export function BookingDetailsDrawer({
           }
         >
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className={booking.is_emergency ? 'sm:col-span-2' : ''}>
+            <div className="sm:col-span-2">
               <label className="field-label" htmlFor="admin-move-date">New deployment date</label>
               <input
                 id="admin-move-date"
@@ -467,27 +442,8 @@ export function BookingDetailsDrawer({
                 value={moveDate}
                 onChange={(event) => setMoveDate(event.target.value)}
               />
-              <p className="mt-1 text-xs text-ink-muted">Past dates are never allowed. Administrators may override other future date restrictions when operationally required.</p>
+              <p className="mt-1 text-xs text-ink-muted">Past, current and protected dates are never allowed. Emergency changes use a separate queue with no slot number.</p>
             </div>
-            {!booking.is_emergency ? (
-              <div>
-                <label className="field-label" htmlFor="admin-move-slot">New slot</label>
-                <select
-                  id="admin-move-slot"
-                  className="field"
-                  value={moveSlot}
-                  onChange={(event) => setMoveSlot(event.target.value)}
-                >
-                  <option value="">Select slot</option>
-                  {moveSlots.map((slot) => (
-                    <option key={slot.slot_number} value={slot.slot_number}>
-                      {slot.name} · {slot.start_time.slice(0, 5)}-{slot.end_time.slice(0, 5)}
-                      {slot.enabled ? '' : ' · disabled (admin allowed)'}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
           </div>
           {moveError ? <p className="mt-3 text-xs font-medium text-rose-600">{moveError}</p> : null}
         </Modal>
