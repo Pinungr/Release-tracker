@@ -172,6 +172,8 @@ def booking_payload(tenant_id: int, day: date, slot: int, **overrides) -> dict:
         "git_repository": "https://github.example.com/epcat/data-factory",
         "implementation_summary": "Publish updated pipelines for the provider catalogue refresh.",
         "deployment_description": "Adds the incremental refresh trigger and retires the nightly copy.",
+        "justification": "Contractual go-live date for the provider catalogue refresh.",
+        "impacted_region": "APAC",
         "additional_comments": None,
         "deployment_date": day.isoformat(),
         "slot_number": slot,

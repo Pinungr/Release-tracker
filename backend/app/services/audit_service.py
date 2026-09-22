@@ -30,6 +30,8 @@ AUDITED_FIELDS = (
     "git_repository",
     "implementation_summary",
     "deployment_description",
+    "justification",
+    "impacted_region",
     "additional_comments",
     "status",
     "is_emergency",

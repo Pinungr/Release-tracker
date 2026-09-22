@@ -1,4 +1,4 @@
-"""Resolution of the weekly board: normal slot grid, holidays, per-day overrides.
+"""Resolution of the weekly board: normal slot grid, holidays, per-date capacity.
 
 Every rule here is also re-checked by ``booking_service`` before a write; this
 module exists so the read model and the write validations share one definition
@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     ACTIVE_STATUSES,
-    DailySlotOverride,
+    DailySlotCapacity,
     DeploymentBooking,
     DeploymentSlotConfiguration,
     Holiday,
@@ -49,7 +49,11 @@ class DayPlan:
     day: date
     slots: list[ResolvedSlot]
     holiday: Holiday | None
-    override: DailySlotOverride | None
+    #: Effective number of normal slots offered on this date.
+    normal_slot_count: int
+    #: Set only when an administrator added/removed slots on this date; ``None``
+    #: means the date simply follows the configured default.
+    custom_slot_count: int | None = None
     #: Whether an administrator may add an emergency change to this date.
     emergency_open: bool = True
     emergency_closed_reason: str | None = None
@@ -70,13 +74,13 @@ def holidays_between(db: Session, start: date, end: date) -> dict[date, Holiday]
     return {h.holiday_date: h for h in rows}
 
 
-def overrides_between(db: Session, start: date, end: date) -> dict[date, DailySlotOverride]:
+def capacities_between(db: Session, start: date, end: date) -> dict[date, DailySlotCapacity]:
     rows = db.scalars(
-        select(DailySlotOverride).where(
-            DailySlotOverride.override_date >= start, DailySlotOverride.override_date <= end
+        select(DailySlotCapacity).where(
+            DailySlotCapacity.capacity_date >= start, DailySlotCapacity.capacity_date <= end
         )
     ).all()
-    return {o.override_date: o for o in rows}
+    return {row.capacity_date: row for row in rows}
 
 
 def resolve_day(
@@ -86,26 +90,33 @@ def resolve_day(
     app_settings: AppSettings | None = None,
     configs: list[DeploymentSlotConfiguration] | None = None,
     holiday: Holiday | None = None,
-    override: DailySlotOverride | None = None,
+    capacity: DailySlotCapacity | None = None,
     prefetched: bool = False,
 ) -> DayPlan:
     app_settings = app_settings or get_app_settings(db)
     configs = configs if configs is not None else slot_configurations(db)
     if not prefetched:
         holiday = holidays_between(db, day, day).get(day)
-        override = overrides_between(db, day, day).get(day)
+        capacity = capacities_between(db, day, day).get(day)
 
-    regular_limit = app_settings.regular_slots_per_day
-    if override is not None and override.regular_slots is not None:
-        regular_limit = override.regular_slots
+    # The default slot count applies to every deployment date; a capacity row
+    # exists only where an administrator added or removed slots for that date.
+    custom_slot_count = capacity.slot_count if capacity is not None else None
+    regular_limit = (
+        custom_slot_count if custom_slot_count is not None else app_settings.regular_slots_per_day
+    )
 
+    # Emergency changes are a separate per-date admin queue, never a slot, so
+    # per-date normal capacity has no bearing on whether they are open.
     emergency_enabled = app_settings.emergency_changes_enabled
-    if override is not None and override.emergency_enabled is not None:
-        emergency_enabled = override.emergency_enabled
 
     full_day_holiday = holiday is not None and holiday.is_full_day
     outside_deployment_week = not is_deployment_weekday(day)
 
+    # The grid keeps every configured slot row on every date. Rows above the
+    # date's capacity are reported disabled rather than removed, so a booking
+    # is never hidden by a capacity change and administrators keep their
+    # existing ability to schedule into a disabled slot.
     slots: list[ResolvedSlot] = []
     for position, cfg in enumerate(configs, start=1):
         enabled = cfg.enabled and position <= regular_limit
@@ -140,7 +151,8 @@ def resolve_day(
         day=day,
         slots=slots,
         holiday=holiday,
-        override=override,
+        normal_slot_count=sum(1 for s in slots if s.enabled),
+        custom_slot_count=custom_slot_count,
         emergency_open=emergency_closed is None,
         emergency_closed_reason=emergency_closed,
     )
@@ -154,7 +166,7 @@ def resolve_week(
     app_settings = get_app_settings(db)
     configs = slot_configurations(db)
     holidays = holidays_between(db, days[0], days[-1])
-    overrides = overrides_between(db, days[0], days[-1])
+    capacities = capacities_between(db, days[0], days[-1])
     plans = [
         resolve_day(
             db,
@@ -162,7 +174,7 @@ def resolve_week(
             app_settings=app_settings,
             configs=configs,
             holiday=holidays.get(day),
-            override=overrides.get(day),
+            capacity=capacities.get(day),
             prefetched=True,
         )
         for day in days

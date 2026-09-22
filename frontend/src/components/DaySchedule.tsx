@@ -1,6 +1,6 @@
 import type { DayView, SlotView } from '../types'
 import { DeploymentSlot, SLOT_GRID } from './DeploymentSlot'
-import { Calendar, Plus, Sun } from './Icons'
+import { Calendar, Minus, Plus, Sun } from './Icons'
 
 interface DayScheduleProps {
   day: DayView
@@ -13,6 +13,7 @@ interface DayScheduleProps {
   onBookEmergency: (day: DayView) => void
   onOpenBooking: (bookingId: number) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
+  onAdjustCapacity: (day: DayView, delta: 1 | -1) => void
 }
 
 const COLUMNS = ['Slot', 'Time', 'Tenant', 'Change No. | Jira No.', 'Verifier', 'Status', 'Docs', '']
@@ -28,6 +29,7 @@ export function DaySchedule({
   onBookEmergency,
   onOpenBooking,
   onToggleFreeze,
+  onAdjustCapacity,
 }: DayScheduleProps) {
   // Treat the API's authoritative `today` value as a second guard. This keeps
   // historical actions hidden even if an older/mixed response contains a stale
@@ -67,11 +69,14 @@ export function DaySchedule({
           </span>
         ) : null}
 
-        {day.override ? (
+        {day.custom_slot_count !== null ? (
           <span className="tooltip-host">
-            <span className="badge bg-slate-100 text-slate-600 ring-1 ring-slate-200">Custom day</span>
+            <span className="badge bg-slate-100 text-slate-600 ring-1 ring-slate-200">
+              {day.custom_slot_count} custom slot{day.custom_slot_count === 1 ? '' : 's'}
+            </span>
             <span className="tooltip">
-              {day.override.note ?? 'Slot configuration overridden for this date.'}
+              An administrator changed the number of normal slots on this date. Every other date
+              still follows the configured default.
             </span>
           </span>
         ) : null}
@@ -79,6 +84,32 @@ export function DaySchedule({
         <span className="ml-auto text-xs font-semibold tnum text-ink-muted">
           Slots used: <span className="text-ink">{usage}</span>
         </span>
+
+        {/* Normal slot capacity for this one date. Emergency changes have
+            their own queue below and are never affected by these. */}
+        {isAdmin && !isHistorical ? (
+          <span className="inline-flex items-center gap-1">
+            <button
+              type="button"
+              className="btn-secondary btn-sm px-1.5"
+              title="Remove a normal deployment slot from this date"
+              aria-label={`Remove a slot from ${day.weekday} ${day.date_label}`}
+              onClick={() => onAdjustCapacity(day, -1)}
+              disabled={day.slots.length === 0}
+            >
+              <Minus className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              className="btn-secondary btn-sm px-1.5"
+              title="Add a normal deployment slot to this date"
+              aria-label={`Add a slot to ${day.weekday} ${day.date_label}`}
+              onClick={() => onAdjustCapacity(day, 1)}
+            >
+              <Plus className="size-3.5" />
+            </button>
+          </span>
+        ) : null}
       </header>
 
       {day.holiday?.is_full_day ? (

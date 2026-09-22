@@ -21,6 +21,8 @@ export const EMPTY_BOOKING_VALUES: BookingFormValues = {
   implementation_summary: '',
   deployment_description: '',
   additional_comments: '',
+  justification: '',
+  impacted_region: '',
   emergency_reason: '',
   emergency_approval_reference: '',
   emergency_approver: '',
@@ -46,6 +48,8 @@ export function valuesFromBooking(booking: BookingDetail): BookingFormValues {
     implementation_summary: booking.implementation_summary,
     deployment_description: booking.deployment_description,
     additional_comments: booking.additional_comments ?? '',
+    justification: booking.justification,
+    impacted_region: booking.impacted_region,
     emergency_reason: booking.emergency_reason ?? '',
     emergency_approval_reference: booking.emergency_approval_reference ?? '',
     emergency_approver: booking.emergency_approver ?? '',
@@ -75,7 +79,8 @@ export function validateBookingForm(
     'requester_name',
     'verifier_name',
     'git_repository',
-    'deployment_description',
+    'justification',
+    'impacted_region',
   ]
   if (options.jiraRequired) required.push('jira_number')
   for (const field of required) {
@@ -96,9 +101,6 @@ export function validateBookingForm(
   }
   if (values.implementation_summary.trim() && values.implementation_summary.trim().length < 10) {
     errors.implementation_summary = 'Add at least 10 characters.'
-  }
-  if (values.deployment_description.trim() && values.deployment_description.trim().length < 10) {
-    errors.deployment_description = 'Add at least 10 characters.'
   }
 
   if (options.isEmergency) {
@@ -130,8 +132,10 @@ export function toBookingPayload(
     verifier_email: optional(values.verifier_email),
     git_repository: values.git_repository.trim(),
     implementation_summary: optional(values.implementation_summary),
-    deployment_description: values.deployment_description.trim(),
+    deployment_description: optional(values.deployment_description),
     additional_comments: optional(values.additional_comments),
+    justification: values.justification.trim(),
+    impacted_region: values.impacted_region.trim(),
     emergency_reason: optional(values.emergency_reason),
     emergency_approval_reference: optional(values.emergency_approval_reference),
     emergency_approver: optional(values.emergency_approver),
@@ -307,11 +311,33 @@ export function BookingForm({
           className="sm:col-span-2"
           maxLength={4000}
         />
+        <TextField
+          label="Impacted region"
+          name="impacted_region"
+          required
+          value={values.impacted_region}
+          onChange={(v) => onChange('impacted_region', v)}
+          error={errors.impacted_region}
+          placeholder="APAC, EMEA, Global…"
+          maxLength={160}
+        />
+        <TextArea
+          label="Justification"
+          name="justification"
+          required
+          rows={3}
+          value={values.justification}
+          onChange={(v) => onChange('justification', v)}
+          error={errors.justification}
+          placeholder="Why this change needs to go to production in this window."
+          className="sm:col-span-2"
+          maxLength={4000}
+        />
         <TextArea
           label="Deployment description"
           name="deployment_description"
-          required
           rows={4}
+          hint="Optional."
           value={values.deployment_description}
           onChange={(v) => onChange('deployment_description', v)}
           error={errors.deployment_description}

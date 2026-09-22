@@ -160,6 +160,29 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
     }
   }
 
+  /**
+   * Adds or removes one normal deployment slot on a single date. The default
+   * count in Booking Rules still governs every other date.
+   */
+  async function adjustDayCapacity(day: DayView, delta: 1 | -1) {
+    if (!auth.isAdmin || !schedule || day.is_past || day.day <= schedule.today) return
+    try {
+      const capacity = delta === 1 ? await api.addDaySlot(day.day) : await api.removeDaySlot(day.day)
+      toast.success(
+        delta === 1 ? 'Slot added' : 'Slot removed',
+        `${day.weekday} ${day.date_label} now has ${capacity.slot_count} normal slot${
+          capacity.slot_count === 1 ? '' : 's'
+        }.`,
+      )
+      refreshAll()
+    } catch (caught) {
+      toast.error(
+        delta === 1 ? 'Could not add a slot' : 'Could not remove a slot',
+        caught instanceof ApiError ? caught.message : '',
+      )
+    }
+  }
+
   function startEmergencyBooking(day: DayView) {
     if (!schedule || day.is_past || day.day <= schedule.today) {
       toast.locked('Date is read-only', 'Past and current deployment dates cannot accept emergency changes, including for administrators.')
@@ -269,6 +292,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onBookEmergency={startEmergencyBooking}
           onOpenBooking={(id) => void openBooking(id)}
           onToggleFreeze={(day, slot) => void toggleSlotFreeze(day, slot)}
+          onAdjustCapacity={(day, delta) => void adjustDayCapacity(day, delta)}
         />
 
         <footer className="pt-2 pb-6 text-center text-xs text-ink-muted">

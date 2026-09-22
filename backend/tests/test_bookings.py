@@ -179,6 +179,67 @@ def test_field_validation_is_enforced_server_side(user, tenant, next_monday):
     assert post_booking(user, bad_jira).status_code == 422
 
 
+def test_justification_and_impacted_region_are_mandatory(user, tenant, next_monday):
+    for field in ("justification", "impacted_region"):
+        missing = booking_payload(tenant, next_monday, 1)
+        del missing[field]
+        assert post_booking(user, missing).status_code == 422, field
+
+        blank = booking_payload(tenant, next_monday, 1, **{field: "   "})
+        assert post_booking(user, blank).status_code == 422, field
+
+
+def test_justification_and_impacted_region_round_trip(user, tenant, next_monday):
+    booking = create_booking(
+        user, tenant, next_monday, 1,
+        justification="Regulatory deadline for the Q4 claims release.",
+        impacted_region="EMEA",
+    )
+    assert booking["justification"] == "Regulatory deadline for the Q4 claims release."
+    assert booking["impacted_region"] == "EMEA"
+
+    edited = user.put(
+        f"/api/bookings/{booking['id']}",
+        json=booking_payload(
+            tenant, next_monday, 1,
+            justification="Deadline moved forward by the release board.",
+            impacted_region="APAC, EMEA",
+        ),
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["justification"] == "Deadline moved forward by the release board."
+    assert edited.json()["impacted_region"] == "APAC, EMEA"
+
+
+def test_an_edit_cannot_blank_out_justification_or_impacted_region(user, tenant, next_monday):
+    booking = create_booking(user, tenant, next_monday, 1)
+    for field in ("justification", "impacted_region"):
+        payload = booking_payload(tenant, next_monday, 1, **{field: ""})
+        assert user.put(f"/api/bookings/{booking['id']}", json=payload).status_code == 422, field
+
+
+def test_deployment_description_is_optional(user, tenant, next_monday):
+    omitted = booking_payload(tenant, next_monday, 1)
+    del omitted["deployment_description"]
+    response = post_booking(user, omitted)
+    assert response.status_code == 201, response.text
+    assert response.json()["booking"]["deployment_description"] == ""
+
+    blank = booking_payload(tenant, next_monday, 2, deployment_description="")
+    assert post_booking(user, blank).status_code == 201
+
+
+def test_emergency_changes_also_require_the_new_fields(admin, tenant, next_monday):
+    """business_justification is emergency-only and does not substitute."""
+    from conftest import emergency_payload
+
+    payload = emergency_payload(tenant, next_monday)
+    del payload["justification"]
+    assert post_booking(admin, payload).status_code == 422
+
+    assert post_booking(admin, emergency_payload(tenant, next_monday)).status_code == 201
+
+
 def test_board_shows_the_owner_so_the_ui_can_mark_my_changes(user, tenant, next_monday):
     me = user.get("/api/auth/me").json()
     create_booking(user, tenant, next_monday, 1)

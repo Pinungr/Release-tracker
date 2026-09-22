@@ -1,14 +1,25 @@
 """Authenticated booking endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 from pydantic import ValidationError as PydanticValidationError
 from fastapi.exceptions import RequestValidationError
 
 from ..database import get_db
 from ..models import DeploymentBooking, DocumentCategory
-from ..schemas import AttachmentOut, BookingCancel, BookingCreate, BookingCreated, BookingDetail, BookingSummary, BookingUpdate, StartWorkRequest
+from ..schemas import (
+    AttachmentOut,
+    BookingCancel,
+    BookingCreate,
+    BookingCreated,
+    BookingDetail,
+    BookingSummary,
+    BookingUpdate,
+    RescheduleRequest,
+    SlotOptionOut,
+    StartWorkRequest,
+)
 from ..security import AdminPrincipal, UserPrincipal
 from ..security.ratelimit import enforce
 from ..services import attachment_service, booking_service, presenters
@@ -158,6 +169,46 @@ def cancel_booking(
     actor = _owner_actor(booking, admin, user)
     cancelled = booking_service.cancel_booking(db, booking, actor, payload.override_reason)
     return presenters.booking_summary(db, cancelled, get_app_settings(db))
+
+
+@router.get("/{booking_id}/reschedule-options", response_model=list[SlotOptionOut])
+def reschedule_options(
+    limit: int = Query(default=12, ge=1, le=100),
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+) -> list[SlotOptionOut]:
+    """Destinations this caller is allowed to move the booking to.
+
+    Only the owner or an administrator may reschedule, so the same check
+    guards the picker: nobody sees availability for a record they cannot move.
+    """
+    actor = _owner_actor(booking, admin, user)
+    return [
+        presenters.slot_option_out(option)
+        for option in booking_service.next_available_slots(db, booking, actor, limit=limit)
+    ]
+
+
+@router.post("/{booking_id}/reschedule", response_model=BookingDetail)
+def reschedule_booking(
+    payload: RescheduleRequest,
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+) -> BookingDetail:
+    actor = _owner_actor(booking, admin, user)
+    moved = booking_service.reschedule_booking(
+        db,
+        booking,
+        payload.deployment_date,
+        payload.slot_number,
+        actor,
+        payload.override_reason,
+    )
+    return presenters.booking_detail(db, moved, get_app_settings(db), is_admin=actor.is_admin)
 
 
 @router.post("/{booking_id}/start-work", response_model=BookingDetail)

@@ -7,6 +7,7 @@ import { DocumentUploader } from './DocumentUploader'
 import { Drawer } from './Drawer'
 import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Spinner, Trash, User } from './Icons'
 import { ConfirmationModal, Modal } from './Modal'
+import { RescheduleModal } from './RescheduleModal'
 import { BookingStatusBadge, EmergencyBadge, LockBadge } from './StatusBadge'
 import { useToast } from './ToastNotification'
 
@@ -46,6 +47,7 @@ export function BookingDetailsDrawer({
 }: BookingDetailsDrawerProps) {
   const toast = useToast()
   const [confirmCancel, setConfirmCancel] = useState(false)
+  const [rescheduleOpen, setRescheduleOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [moveOpen, setMoveOpen] = useState(false)
   const [moveDate, setMoveDate] = useState('')
@@ -228,29 +230,35 @@ export function BookingDetailsDrawer({
                       ? 'Assigned RM user: you can start work and provide the Change No.'
                       : 'Only the booking owner or an assigned RM user can access this change record.'}
               </p>
+              {/* Owner and administrator get Edit | Reschedule | Cancel.
+                  Anyone else (an assigned RM user) can only view. */}
               <div className="flex gap-2">
                 {canAct && !publicLocked ? (
                   <>
+                    <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
+                      <Pencil className="size-4" />
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setRescheduleOpen(true)}
+                    >
+                      <Calendar className="size-4" />
+                      Reschedule
+                    </button>
                     <button
                       type="button"
                       className="btn-danger"
                       onClick={() => setConfirmCancel(true)}
                     >
                       <Trash className="size-4" />
-                      Cancel booking
-                    </button>
-                    {isAdmin ? (
-                      <button type="button" className="btn-secondary" onClick={() => void openMoveDialog()}>
-                        <Calendar className="size-4" />
-                        Move / reschedule
-                      </button>
-                    ) : null}
-                    <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
-                      <Pencil className="size-4" />
-                      Edit booking
+                      Cancel
                     </button>
                   </>
-                ) : null}
+                ) : (
+                  <span className="badge bg-canvas text-ink-muted ring-1 ring-line">View only</span>
+                )}
               </div>
             </div>
           ) : undefined
@@ -348,8 +356,12 @@ export function BookingDetailsDrawer({
                   {booking.git_repository}
                 </a>
               </Row>
+              <Row label="Impacted region">{booking.impacted_region}</Row>
+              <Row label="Justification">{booking.justification}</Row>
               <Row label="Implementation">{booking.implementation_summary}</Row>
-              <Row label="Description">{booking.deployment_description}</Row>
+              {booking.deployment_description ? (
+                <Row label="Description">{booking.deployment_description}</Row>
+              ) : null}
               {booking.additional_comments ? (
                 <Row label="Comments">{booking.additional_comments}</Row>
               ) : null}
@@ -481,19 +493,28 @@ export function BookingDetailsDrawer({
         </Modal>
       ) : null}
 
+      <RescheduleModal
+        open={rescheduleOpen}
+        onClose={() => setRescheduleOpen(false)}
+        booking={booking}
+        onMoveEmergency={isAdmin ? () => void openMoveDialog() : undefined}
+        onDone={onChanged}
+      />
+
       {booking ? (
         <ConfirmationModal
           open={confirmCancel}
           onClose={() => setConfirmCancel(false)}
           onConfirm={() => void cancel()}
-          title="Cancel deployment booking?"
+          title="Cancel this booking?"
+          description="Are you sure you want to cancel this booking? The deployment slot will become available again."
           facts={[
             { label: 'Tenant', value: booking.tenant_name },
             { label: 'JIRA', value: booking.jira_number ?? 'Not provided' },
             { label: 'Date', value: formatDate(booking.deployment_date) },
             { label: 'Slot', value: `${booking.slot_label} · ${booking.slot_time}` },
           ]}
-          note="This action will release the slot for other tenants."
+          note="The booking record and its history are kept; only the slot is released."
           confirmLabel="Cancel booking"
           cancelLabel="Keep booking"
           busy={busy}

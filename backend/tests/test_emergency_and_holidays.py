@@ -6,7 +6,7 @@ deployment capacity or the tenant's weekly quota.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from conftest import booking_payload, create_booking, emergency_payload, post_booking
 
@@ -117,10 +117,7 @@ def test_emergency_changes_are_never_reported_as_locked(admin, tenant, next_mond
 
 
 def test_admin_emergency_bypasses_a_closed_date(admin, tenant, next_monday):
-    admin.put(
-        "/api/admin/overrides",
-        json={"override_date": next_monday.isoformat(), "emergency_enabled": False},
-    )
+    admin.put("/api/admin/settings", json={"emergency_changes_enabled": False})
     board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
     assert _day(board)["emergency_open"] is True
 
@@ -233,37 +230,91 @@ def test_holiday_management_is_admin_only(user, anon, next_monday):
 
 
 # --------------------------------------------------------------------------- #
-# Per-day slot overrides
+# Per-date normal slot capacity
+#
+# The configured default applies to every deployment date; an administrator
+# adds or removes slots on one date without disturbing any other.
 # --------------------------------------------------------------------------- #
 
 
-def test_daily_override_reduces_normal_capacity_for_one_date(admin, user, tenant, next_monday):
+def test_removing_a_slot_reduces_normal_capacity_for_one_date_only(admin, user, tenant, next_monday):
     tuesday = next_monday + timedelta(days=1)
-    response = admin.put(
-        "/api/admin/overrides",
-        json={
-            "override_date": tuesday.isoformat(),
-            "regular_slots": 2,
-            "note": "Change freeze window",
-        },
-    )
-    assert response.status_code == 200
+    for _ in range(2):
+        response = admin.post(f"/api/admin/day-capacity/{tuesday.isoformat()}/remove-slot")
+        assert response.status_code == 200, response.text
+    assert response.json() == {
+        "capacity_date": tuesday.isoformat(),
+        "slot_count": 2,
+        "custom_slot_count": 2,
+        "max_slot_count": 12,
+    }
 
     board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
     assert _day(board, 0)["regular_slots_total"] == 4  # Monday untouched
+    assert _day(board, 0)["custom_slot_count"] is None
     assert _day(board, 1)["regular_slots_total"] == 2
+    assert _day(board, 1)["custom_slot_count"] == 2
     assert _day(board, 1)["slots"][2]["state"] == "DISABLED"
 
     assert post_booking(user, booking_payload(tenant, tuesday, 3)).status_code == 400
     assert post_booking(user, booking_payload(tenant, tuesday, 2)).status_code == 201
 
 
-def test_daily_override_can_be_cleared(admin, user, next_monday):
+def test_adding_a_slot_creates_extra_capacity_for_one_date(admin, user, tenant, next_monday):
     tuesday = next_monday + timedelta(days=1)
-    created = admin.put(
-        "/api/admin/overrides", json={"override_date": tuesday.isoformat(), "regular_slots": 1}
-    ).json()
-    assert admin.delete(f"/api/admin/overrides/{created['id']}").status_code == 204
+    response = admin.post(f"/api/admin/day-capacity/{tuesday.isoformat()}/add-slot")
+    assert response.status_code == 200, response.text
+    assert response.json()["slot_count"] == 5
+
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    assert _day(board, 0)["regular_slots_total"] == 4  # Monday untouched
+    assert _day(board, 1)["regular_slots_total"] == 5
+    assert post_booking(user, booking_payload(tenant, tuesday, 5)).status_code == 201
+
+
+def test_a_slot_added_to_one_date_is_not_bookable_on_any_other(admin, user, tenant, next_monday):
+    """Extra capacity belongs to the date it was added to, and nowhere else."""
+    tuesday = next_monday + timedelta(days=1)
+    admin.post(f"/api/admin/day-capacity/{tuesday.isoformat()}/add-slot")
+
+    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
+    monday_slot_5 = next(s for s in _day(board, 0)["slots"] if s["slot_number"] == 5)
+    tuesday_slot_5 = next(s for s in _day(board, 1)["slots"] if s["slot_number"] == 5)
+    assert monday_slot_5["enabled"] is False and monday_slot_5["bookable"] is False
+    assert tuesday_slot_5["enabled"] is True and tuesday_slot_5["bookable"] is True
+    assert _day(board, 0)["regular_slots_total"] == 4
+    assert _day(board, 1)["regular_slots_total"] == 5
+
+    assert post_booking(user, booking_payload(tenant, next_monday, 5)).status_code == 400
+    assert post_booking(user, booking_payload(tenant, tuesday, 5)).status_code == 201
+
+
+def test_a_slot_holding_a_booking_cannot_be_removed(admin, user, tenant, next_monday):
+    tuesday = next_monday + timedelta(days=1)
+    assert post_booking(user, booking_payload(tenant, tuesday, 4)).status_code == 201
+    response = admin.post(f"/api/admin/day-capacity/{tuesday.isoformat()}/remove-slot")
+    assert response.status_code == 409
+    assert "Slot 4 is booked" in response.json()["detail"]
+
+
+def test_day_capacity_can_be_reset_to_the_default(admin, user, next_monday):
+    tuesday = next_monday + timedelta(days=1)
+    admin.post(f"/api/admin/day-capacity/{tuesday.isoformat()}/remove-slot")
+    reset = admin.delete(f"/api/admin/day-capacity/{tuesday.isoformat()}")
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["custom_slot_count"] is None
 
     board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
     assert _day(board, 1)["regular_slots_total"] == 4
+
+
+def test_only_an_administrator_can_change_day_capacity(anon, user, next_monday):
+    tuesday = next_monday + timedelta(days=1)
+    path = f"/api/admin/day-capacity/{tuesday.isoformat()}/add-slot"
+    assert anon.post(path).status_code == 401
+    assert user.post(path).status_code == 403
+
+
+def test_day_capacity_cannot_be_changed_on_a_read_only_date(admin):
+    today = date.today()
+    assert admin.post(f"/api/admin/day-capacity/{today.isoformat()}/add-slot").status_code == 423

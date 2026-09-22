@@ -10,12 +10,13 @@ import type {
   BookingCreated,
   BookingDetail,
   BookingSummary,
-  DailyOverride,
+  DaySlotCapacity,
   DocumentCategory,
   Holiday,
   ManagedUser,
   Schedule,
   SlotConfig,
+  SlotOption,
   Tenant,
 } from '../types'
 
@@ -152,6 +153,15 @@ export const api = {
   cancelBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingSummary>(`/bookings/${id}`, { method: 'DELETE', body: json(payload) }),
 
+  getRescheduleOptions: (id: number) =>
+    request<SlotOption[]>(`/bookings/${id}/reschedule-options`),
+
+  rescheduleBooking: (id: number, deployment_date: string, slot_number: number) =>
+    request<BookingDetail>(`/bookings/${id}/reschedule`, {
+      method: 'POST',
+      body: json({ deployment_date, slot_number, override_reason: null }),
+    }),
+
   startWork: (id: number, change_number: string) =>
     request<BookingDetail>(`/bookings/${id}/start-work`, {
       method: 'POST',
@@ -197,12 +207,16 @@ export const api = {
 
   deleteHoliday: (id: number) => request<void>(`/admin/holidays/${id}`, { method: 'DELETE' }),
 
-  getOverrides: () => request<DailyOverride[]>('/admin/overrides'),
+  // Per-date normal slot capacity. The default comes from Booking Rules;
+  // these adjust one date without disturbing any other.
+  addDaySlot: (day: string) =>
+    request<DaySlotCapacity>(`/admin/day-capacity/${day}/add-slot`, { method: 'POST' }),
 
-  upsertOverride: (payload: Omit<DailyOverride, 'id'>) =>
-    request<DailyOverride>('/admin/overrides', { method: 'PUT', body: json(payload) }),
+  removeDaySlot: (day: string) =>
+    request<DaySlotCapacity>(`/admin/day-capacity/${day}/remove-slot`, { method: 'POST' }),
 
-  deleteOverride: (id: number) => request<void>(`/admin/overrides/${id}`, { method: 'DELETE' }),
+  resetDayCapacity: (day: string) =>
+    request<DaySlotCapacity>(`/admin/day-capacity/${day}`, { method: 'DELETE' }),
 
   freezeSlot: (freeze_date: string, slot_number: number, note?: string) =>
     request<{ id: number; freeze_date: string; slot_number: number; note: string | null }>(

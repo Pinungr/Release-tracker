@@ -203,6 +203,13 @@ class DeploymentBooking(Base):
     deployment_description: Mapped[str] = mapped_column(Text, nullable=False)
     additional_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Required on every change record. ``business_justification`` below is a
+    # separate, emergency-only field and is not a substitute for this one.
+    justification: Mapped[str] = mapped_column(Text, server_default="", nullable=False)
+    impacted_region: Mapped[str] = mapped_column(
+        String(160), server_default="", nullable=False
+    )
+
     status: Mapped[str] = mapped_column(String(32), default=BookingStatus.BOOKED.value, nullable=False)
 
     is_emergency: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -216,6 +223,9 @@ class DeploymentBooking(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     attachments: Mapped[list["BookingAttachment"]] = relationship(
         back_populates="booking", cascade="all, delete-orphan", lazy="selectin"
@@ -300,16 +310,28 @@ class SlotFreeze(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
-class DailySlotOverride(Base):
-    """Per-date override of the default slot grid."""
+class DailySlotCapacity(Base):
+    """How many normal deployment slots one specific date carries.
 
-    __tablename__ = "daily_slot_overrides"
+    The administrator configures a default count in ``application_settings``
+    (``regular_slots_per_day``) that applies to every deployment date. A row
+    here exists only for dates where an administrator has added or removed
+    slots; deleting the row restores that date to the default.
+
+    Emergency changes are governed separately and are never affected by this.
+    """
+
+    __tablename__ = "daily_slot_capacity"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    override_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
-    regular_slots: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    emergency_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    capacity_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
+    slot_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class ApplicationSetting(Base):

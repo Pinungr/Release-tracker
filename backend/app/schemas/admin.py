@@ -91,13 +91,15 @@ class HolidayIn(BaseModel):
     allow_emergency: bool = True
 
 
-class DailyOverrideIn(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+class DaySlotCapacityOut(BaseModel):
+    """Normal slot capacity for one deployment date."""
 
-    override_date: date
-    regular_slots: int | None = Field(default=None, ge=0, le=12)
-    emergency_enabled: bool | None = None
-    note: Annotated[str | None, Field(default=None, max_length=255)] = None
+    capacity_date: date
+    #: Slots actually offered on this date.
+    slot_count: int
+    #: ``None`` when the date follows the configured default.
+    custom_slot_count: int | None
+    max_slot_count: int
 
 
 class MoveBookingRequest(BaseModel):

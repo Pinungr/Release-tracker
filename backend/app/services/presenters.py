@@ -22,12 +22,12 @@ from ..schemas.booking import (
     AuditEventOut,
     BookingDetail,
     BookingSummary,
-    DailyOverrideOut,
     DayView,
     HolidayOut,
     PublicSettings,
     ScheduleResponse,
     ScheduleSummary,
+    SlotOptionOut,
     SlotView,
 )
 from ..utils.dates import WEEKDAY_NAMES, format_day, format_time, format_week_range, today_local
@@ -110,15 +110,29 @@ def booking_detail(
         implementation_summary=booking.implementation_summary,
         deployment_description=booking.deployment_description,
         additional_comments=booking.additional_comments,
+        justification=booking.justification,
+        impacted_region=booking.impacted_region,
         emergency_reason=booking.emergency_reason,
         emergency_approval_reference=booking.emergency_approval_reference,
         emergency_approver=booking.emergency_approver,
         business_justification=booking.business_justification,
         cancelled_at=booking.cancelled_at,
+        cancelled_by_user_id=booking.cancelled_by_user_id,
         attachments=[attachment_out(a) for a in sorted(booking.attachments, key=lambda a: a.id)],
         can_edit=can_edit,
         slot_label=slot_label,
         slot_time=slot_time,
+    )
+
+
+def slot_option_out(option: booking_service.SlotOption) -> SlotOptionOut:
+    return SlotOptionOut(
+        deployment_date=option.deployment_date,
+        weekday=WEEKDAY_NAMES[option.deployment_date.weekday()],
+        date_label=format_day(option.deployment_date),
+        slot_number=option.slot_number,
+        slot_name=option.slot_name,
+        time_label=f"{format_time(option.start_time)} - {format_time(option.end_time)}",
     )
 
 
@@ -263,7 +277,7 @@ def schedule_response(
                 is_today=plan.day == today,
                 is_past=plan.day < today,
                 holiday=HolidayOut.model_validate(plan.holiday) if plan.holiday else None,
-                override=DailyOverrideOut.model_validate(plan.override) if plan.override else None,
+                custom_slot_count=plan.custom_slot_count,
                 regular_slots_total=day_regular_total,
                 regular_slots_used=day_regular_used,
                 slots=slot_views,

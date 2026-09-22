@@ -14,7 +14,7 @@ caller; the API layer never re-implements any of these rules.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -472,8 +472,10 @@ def create_booking(
         verifier_email=str(payload.verifier_email) if payload.verifier_email else "",
         git_repository=payload.git_repository,
         implementation_summary=payload.implementation_summary or "",
-        deployment_description=payload.deployment_description,
+        deployment_description=payload.deployment_description or "",
         additional_comments=payload.additional_comments or None,
+        justification=payload.justification,
+        impacted_region=payload.impacted_region,
         status=BookingStatus.BOOKED.value,
         is_emergency=is_emergency,
         emergency_reason=payload.emergency_reason or None,
@@ -585,8 +587,10 @@ def update_booking(
     booking.verifier_email = str(payload.verifier_email) if payload.verifier_email else ""
     booking.git_repository = payload.git_repository
     booking.implementation_summary = payload.implementation_summary or ""
-    booking.deployment_description = payload.deployment_description
+    booking.deployment_description = payload.deployment_description or ""
     booking.additional_comments = payload.additional_comments or None
+    booking.justification = payload.justification
+    booking.impacted_region = payload.impacted_region
     if booking.is_emergency:
         booking.emergency_reason = payload.emergency_reason or None
         booking.emergency_approval_reference = payload.emergency_approval_reference or None
@@ -649,7 +653,10 @@ def cancel_booking(
     before = audit_service.snapshot(booking)
     booking.status = BookingStatus.CANCELLED.value
     booking.cancelled_at = now_utc()
+    booking.cancelled_by_user_id = actor.user_id
     db.flush()
+    # The slot itself is never deleted: releasing the booking is what frees it,
+    # and the record survives so the cancellation stays auditable.
     audit_service.record(
         db,
         event_type="BOOKING_CANCELLED",
@@ -658,10 +665,247 @@ def cancel_booking(
         requester_email=booking.requester_email,
         admin_username=actor.admin_username,
         override_reason=reason or None,
-        old_values={"status": before["status"]},
-        new_values={"status": booking.status},
+        old_values={
+            "status": before["status"],
+            "deployment_date": before["deployment_date"],
+            "slot_number": before["slot_number"],
+            "tenant_id": before["tenant_id"],
+            "tenant_name": before["tenant_name"],
+            "jira_number": before["jira_number"],
+        },
+        new_values={
+            "status": booking.status,
+            "cancelled_at": booking.cancelled_at,
+            "cancelled_by_user_id": booking.cancelled_by_user_id,
+        },
     )
     db.commit()
+    return booking
+
+
+# --------------------------------------------------------------------------- #
+# Reschedule
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class SlotOption:
+    """One destination the current caller is genuinely allowed to move to."""
+
+    deployment_date: date
+    slot_number: int
+    slot_name: str
+    start_time: time
+    end_time: time
+
+
+def _effective_weekly_limit(tenant: Tenant, app_settings: AppSettings) -> int:
+    return (
+        tenant.weekly_booking_limit
+        if tenant.weekly_booking_limit is not None
+        else app_settings.weekly_booking_limit
+    )
+
+
+#: How far ahead the reschedule search looks for free slots.
+RESCHEDULE_SEARCH_DAYS = 60
+
+
+def next_available_slots(
+    db: Session, booking: DeploymentBooking, actor: Actor, *, limit: int = 12
+) -> list[SlotOption]:
+    """Destinations this caller may actually book, earliest date first.
+
+    Every rule that ``_validate_slot_target`` enforces on submit is applied
+    here too, so the picker never offers a slot that would then be rejected.
+    Normal users additionally have the tenant weekly limit applied per week.
+    """
+    app_settings = get_app_settings(db)
+    if booking.is_emergency or booking.status == BookingStatus.CANCELLED.value:
+        return []
+
+    tenant = db.get(Tenant, booking.tenant_id)
+    weekly_limit = _effective_weekly_limit(tenant, app_settings) if tenant else app_settings.weekly_booking_limit
+    frozen_dates = automatic_frozen_dates(db, app_settings)
+    configs = schedule_service.slot_configurations(db)
+
+    start = today_local() + timedelta(days=1)
+    end = start + timedelta(days=RESCHEDULE_SEARCH_DAYS)
+    holidays = schedule_service.holidays_between(db, start, end)
+    capacities = schedule_service.capacities_between(db, start, end)
+    manual_freezes = slot_freezes_between(db, start, end)
+
+    taken: dict[date, set[int]] = {}
+    for other in schedule_service.active_bookings_between(db, start, end):
+        if other.slot_number is not None and other.id != booking.id:
+            taken.setdefault(other.deployment_date, set()).add(other.slot_number)
+
+    week_has_room: dict[date, bool] = {}
+    options: list[SlotOption] = []
+    cursor = start
+    while cursor <= end and len(options) < limit:
+        day = cursor
+        cursor += timedelta(days=1)
+
+        if day in frozen_dates:
+            # The upcoming-date freeze is immutable for administrators too.
+            continue
+        if not actor.is_admin and not is_deployment_weekday(day):
+            continue
+
+        if not actor.is_admin:
+            sunday = week_start(day)
+            if sunday not in week_has_room:
+                used = weekly_normal_count(db, booking.tenant_id, day, exclude_id=booking.id)
+                week_has_room[sunday] = used < weekly_limit
+            if not week_has_room[sunday]:
+                continue
+
+        plan = schedule_service.resolve_day(
+            db,
+            day,
+            app_settings=app_settings,
+            configs=configs,
+            holiday=holidays.get(day),
+            capacity=capacities.get(day),
+            prefetched=True,
+        )
+        for slot in plan.slots:
+            if len(options) >= limit:
+                break
+            if (day, slot.slot_number) == (booking.deployment_date, booking.slot_number):
+                continue
+            if slot.slot_number in taken.get(day, set()):
+                continue
+            if not actor.is_admin:
+                if not slot.bookable:
+                    continue
+                if (day, slot.slot_number) in manual_freezes:
+                    continue
+            elif not slot.enabled:
+                # Administrators bypass holidays and weekends but a slot that
+                # does not exist on the date is still not a destination.
+                continue
+            options.append(
+                SlotOption(
+                    deployment_date=day,
+                    slot_number=slot.slot_number,
+                    slot_name=slot.name,
+                    start_time=slot.start_time,
+                    end_time=slot.end_time,
+                )
+            )
+    return options
+
+
+def reschedule_booking(
+    db: Session,
+    booking: DeploymentBooking,
+    new_day: date,
+    new_slot_number: int,
+    actor: Actor,
+    override_reason: str | None = None,
+) -> DeploymentBooking:
+    """Move a booking to another date/slot as a single transaction.
+
+    The record keeps its identity, reference, attachments, RM assignment and
+    every other field: only ``deployment_date`` and ``slot_number`` change. The
+    destination is validated first and the partial unique index makes the final
+    write the arbiter, so a slot lost to a concurrent booking leaves the
+    original untouched.
+    """
+    app_settings = get_app_settings(db)
+    assert_booking_not_past(booking)
+    if booking.status == BookingStatus.CANCELLED.value:
+        raise BusinessRuleError("A cancelled booking cannot be rescheduled.")
+    if booking.is_emergency:
+        raise BusinessRuleError(
+            "Emergency changes have no deployment slot and are moved by date from the "
+            "administrator tools.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    if is_date_automatically_frozen(db, booking.deployment_date, app_settings):
+        raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
+
+    reason: str | None = None
+    if not actor.is_admin:
+        lock_reason = owner_lock_reason(db, booking, app_settings)
+        if lock_reason:
+            raise BusinessRuleError(
+                lock_reason + " Contact an administrator for assistance.",
+                status.HTTP_423_LOCKED,
+            )
+    elif is_locked_for_owner(db, booking, app_settings):
+        reason = (override_reason or "").strip() or (
+            "Administrator override: manually frozen deployment slot."
+            if is_slot_manually_frozen(db, booking.deployment_date, booking.slot_number)
+            else "Administrator override: configured upcoming-date freeze window."
+        )
+
+    if (new_day, new_slot_number) == (booking.deployment_date, booking.slot_number):
+        raise BusinessRuleError("This booking is already scheduled in that slot.")
+
+    # Re-validate the destination at submit time: the picker's view of
+    # availability may be seconds out of date.
+    _validate_slot_target(db, new_day, new_slot_number, actor, app_settings)
+    if _slot_taken(db, new_day, new_slot_number, exclude_id=booking.id):
+        raise BusinessRuleError(SLOT_TAKEN_MESSAGE, status.HTTP_409_CONFLICT)
+
+    tenant = resolve_tenant(db, booking.tenant_id)
+    limit_overridden = _validate_weekly_limit(
+        db,
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
+        day=new_day,
+        is_emergency=False,
+        actor=actor,
+        app_settings=app_settings,
+        weekly_limit=_effective_weekly_limit(tenant, app_settings),
+        override=True,
+        exclude_id=booking.id,
+    )
+    if limit_overridden:
+        reason = reason or (override_reason or "").strip() or (
+            "Administrator automatic override: tenant weekly booking limit."
+        )
+
+    previous = {
+        "deployment_date": booking.deployment_date,
+        "slot_number": booking.slot_number,
+        "tenant_id": booking.tenant_id,
+        "tenant_name": booking.tenant_name,
+        "jira_number": booking.jira_number,
+    }
+    booking.deployment_date = new_day
+    booking.slot_number = new_slot_number
+    try:
+        db.flush()
+    except IntegrityError:
+        # Somebody won the destination between validation and write. Rolling
+        # back restores the original date/slot; nothing about the booking is
+        # lost and no partial move is ever visible.
+        db.rollback()
+        raise BusinessRuleError(SLOT_TAKEN_MESSAGE, status.HTTP_409_CONFLICT) from None
+
+    audit_service.record(
+        db,
+        event_type="BOOKING_RESCHEDULED",
+        booking=booking,
+        actor_type=actor.actor_type,
+        requester_email=booking.requester_email,
+        admin_username=actor.admin_username,
+        override_reason=reason or None,
+        old_values=previous,
+        new_values={
+            "deployment_date": booking.deployment_date,
+            "slot_number": booking.slot_number,
+            "tenant_id": booking.tenant_id,
+            "tenant_name": booking.tenant_name,
+            "jira_number": booking.jira_number,
+        },
+    )
+    db.commit()
+    db.refresh(booking)
     return booking
 
 

@@ -46,8 +46,12 @@ class BookingBase(BaseModel):
     verifier_email: EmailStr | None = None
     git_repository: Annotated[str, Field(max_length=500)]
     implementation_summary: Annotated[str | None, Field(default=None, max_length=4000)] = None
-    deployment_description: Annotated[str, Field(min_length=10, max_length=4000)]
+    deployment_description: Annotated[str | None, Field(default=None, max_length=4000)] = None
     additional_comments: Annotated[str | None, Field(default=None, max_length=4000)] = None
+
+    # Mandatory on every change record, normal and emergency alike.
+    justification: Annotated[str, Field(min_length=1, max_length=4000)]
+    impacted_region: Annotated[str, Field(min_length=1, max_length=160)]
 
     # Emergency-only fields (validated against is_emergency in the service layer).
     emergency_reason: Annotated[str | None, Field(default=None, max_length=2000)] = None
@@ -176,11 +180,14 @@ class BookingDetail(BookingSummary):
     implementation_summary: str
     deployment_description: str
     additional_comments: str | None
+    justification: str
+    impacted_region: str
     emergency_reason: str | None
     emergency_approval_reference: str | None
     emergency_approver: str | None
     business_justification: str | None
     cancelled_at: datetime | None
+    cancelled_by_user_id: int | None
     attachments: list[AttachmentOut]
     can_edit: bool
     slot_label: str
@@ -232,14 +239,21 @@ class HolidayOut(BaseModel):
     allow_emergency: bool
 
 
-class DailyOverrideOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class SlotOptionOut(BaseModel):
+    """One destination offered by the reschedule picker."""
 
-    id: int
-    override_date: date
-    regular_slots: int | None
-    emergency_enabled: bool | None
-    note: str | None
+    deployment_date: date
+    weekday: str
+    date_label: str
+    slot_number: int
+    slot_name: str
+    time_label: str
+
+
+class RescheduleRequest(BaseModel):
+    deployment_date: date
+    slot_number: int = Field(ge=1, le=50)
+    override_reason: str | None = Field(default=None, max_length=500)
 
 
 class DayView(BaseModel):
@@ -249,7 +263,8 @@ class DayView(BaseModel):
     is_today: bool
     is_past: bool
     holiday: HolidayOut | None
-    override: DailyOverrideOut | None
+    #: Set only when an administrator added/removed slots on this date.
+    custom_slot_count: int | None
     regular_slots_total: int
     regular_slots_used: int
     slots: list[SlotView]

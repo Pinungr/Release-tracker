@@ -66,6 +66,12 @@ export const Plus = (p: IconProps) => (
   </Base>
 )
 
+export const Minus = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M5 12h14" />
+  </Base>
+)
+
 export const Check = (p: IconProps) => (
   <Base {...p}>
     <path d="m5 13 4 4 10-10" />

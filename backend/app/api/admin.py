@@ -18,7 +18,7 @@ from ..models import (
     ACTIVE_STATUSES,
     BookingAudit,
     BookingStatus,
-    DailySlotOverride,
+    DailySlotCapacity,
     DeploymentBooking,
     DeploymentSlotConfiguration,
     Holiday,
@@ -33,8 +33,7 @@ from ..schemas import (
     BookingCreated,
     BookingDetail,
     BookingSummary,
-    DailyOverrideIn,
-    DailyOverrideOut,
+    DaySlotCapacityOut,
     HolidayIn,
     HolidayOut,
     MoveBookingRequest,
@@ -561,65 +560,146 @@ def delete_holiday(
 
 
 # --------------------------------------------------------------------------- #
-# Per-day slot overrides
+# Per-date normal slot capacity
+#
+# The default count in Booking Rules applies to every deployment date. These
+# routes let an administrator add or remove normal slots on one date without
+# disturbing any other date. Emergency changes are a separate per-date queue
+# and are never affected here.
 # --------------------------------------------------------------------------- #
 
-
-@router.get("/overrides", response_model=list[DailyOverrideOut])
-def list_overrides(
-    db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)
-) -> list[DailyOverrideOut]:
-    rows = db.scalars(select(DailySlotOverride).order_by(DailySlotOverride.override_date)).all()
-    return [DailyOverrideOut.model_validate(r) for r in rows]
+#: Matches the ``regular_slots_per_day`` ceiling in settings_service.LIMITS.
+MAX_SLOTS_PER_DAY = 12
 
 
-@router.put("/overrides", response_model=DailyOverrideOut)
-def upsert_override(
-    payload: DailyOverrideIn,
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> DailyOverrideOut:
-    row = db.scalars(
-        select(DailySlotOverride).where(DailySlotOverride.override_date == payload.override_date)
+def _capacity_row(db: Session, day: date) -> DailySlotCapacity | None:
+    return db.scalars(
+        select(DailySlotCapacity).where(DailySlotCapacity.capacity_date == day)
     ).first()
-    before = DailyOverrideOut.model_validate(row).model_dump(mode="json") if row else None
+
+
+def _day_capacity_out(db: Session, day: date) -> DaySlotCapacityOut:
+    row = _capacity_row(db, day)
+    return DaySlotCapacityOut(
+        capacity_date=day,
+        slot_count=schedule_service.resolve_day(db, day).normal_slot_count,
+        custom_slot_count=row.slot_count if row else None,
+        max_slot_count=MAX_SLOTS_PER_DAY,
+    )
+
+
+def _set_day_capacity(
+    db: Session, day: date, slot_count: int, admin: AdminPrincipal, event_type: str
+) -> DaySlotCapacityOut:
+    row = _capacity_row(db, day)
+    before = row.slot_count if row else None
     if row is None:
-        row = DailySlotOverride(**payload.model_dump())
+        row = DailySlotCapacity(capacity_date=day, slot_count=slot_count)
         db.add(row)
     else:
-        for key, value in payload.model_dump().items():
-            setattr(row, key, value)
+        row.slot_count = slot_count
+    row.updated_by_user_id = admin.user_id
+    # A slot can only be offered on a date once its configuration row exists.
+    ensure_regular_slot_count(db, slot_count)
     db.flush()
     audit_service.record(
         db,
-        event_type="DAILY_OVERRIDE_SET",
+        event_type=event_type,
         actor_type="ADMIN",
         admin_username=admin.username,
-        old_values=before,
-        new_values=DailyOverrideOut.model_validate(row).model_dump(mode="json"),
+        old_values={"capacity_date": day, "slot_count": before},
+        new_values={"capacity_date": day, "slot_count": slot_count},
     )
     db.commit()
-    return DailyOverrideOut.model_validate(row)
+    return _day_capacity_out(db, day)
 
 
-@router.delete("/overrides/{override_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_override(
-    override_id: int,
+@router.get("/day-capacity/{day}", response_model=DaySlotCapacityOut)
+def read_day_capacity(
+    day: date,
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
-) -> None:
-    row = db.get(DailySlotOverride, override_id)
+) -> DaySlotCapacityOut:
+    return _day_capacity_out(db, day)
+
+
+@router.post("/day-capacity/{day}/add-slot", response_model=DaySlotCapacityOut)
+def add_day_slot(
+    day: date,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> DaySlotCapacityOut:
+    booking_service.assert_day_not_past(day)
+    current = schedule_service.resolve_day(db, day).normal_slot_count
+    if current >= MAX_SLOTS_PER_DAY:
+        raise BusinessRuleError(
+            f"A deployment date cannot carry more than {MAX_SLOTS_PER_DAY} normal slots."
+        )
+    return _set_day_capacity(db, day, current + 1, admin, "DAY_SLOT_ADDED")
+
+
+@router.post("/day-capacity/{day}/remove-slot", response_model=DaySlotCapacityOut)
+def remove_day_slot(
+    day: date,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> DaySlotCapacityOut:
+    booking_service.assert_day_not_past(day)
+    current = schedule_service.resolve_day(db, day).normal_slot_count
+    if current <= 0:
+        raise BusinessRuleError("This deployment date has no normal slots left to remove.")
+    highest_booked = db.scalar(
+        select(func.max(DeploymentBooking.slot_number)).where(
+            DeploymentBooking.deployment_date == day,
+            DeploymentBooking.is_emergency.is_(False),
+            DeploymentBooking.status.in_(ACTIVE_STATUSES),
+        )
+    )
+    if highest_booked is not None and current <= highest_booked:
+        raise BusinessRuleError(
+            f"Slot {highest_booked} is booked on this date. Cancel or reschedule that "
+            "booking before removing the slot.",
+            status.HTTP_409_CONFLICT,
+        )
+    return _set_day_capacity(db, day, current - 1, admin, "DAY_SLOT_REMOVED")
+
+
+@router.delete("/day-capacity/{day}", response_model=DaySlotCapacityOut)
+def reset_day_capacity(
+    day: date,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> DaySlotCapacityOut:
+    """Return one date to the configured default slot count."""
+    booking_service.assert_day_not_past(day)
+    row = _capacity_row(db, day)
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Override not found.")
+        return _day_capacity_out(db, day)
+    default_count = get_app_settings(db).regular_slots_per_day
+    highest_booked = db.scalar(
+        select(func.max(DeploymentBooking.slot_number)).where(
+            DeploymentBooking.deployment_date == day,
+            DeploymentBooking.is_emergency.is_(False),
+            DeploymentBooking.status.in_(ACTIVE_STATUSES),
+        )
+    )
+    if highest_booked is not None and default_count < highest_booked:
+        raise BusinessRuleError(
+            f"Slot {highest_booked} is booked on this date and the default is "
+            f"{default_count} slots. Reschedule that booking first.",
+            status.HTTP_409_CONFLICT,
+        )
     audit_service.record(
         db,
-        event_type="DAILY_OVERRIDE_CLEARED",
+        event_type="DAY_SLOT_CAPACITY_RESET",
         actor_type="ADMIN",
         admin_username=admin.username,
-        old_values=DailyOverrideOut.model_validate(row).model_dump(mode="json"),
+        old_values={"capacity_date": day, "slot_count": row.slot_count},
+        new_values={"capacity_date": day, "slot_count": None},
     )
     db.delete(row)
     db.commit()
+    return _day_capacity_out(db, day)
 
 
 # --------------------------------------------------------------------------- #
@@ -693,6 +773,8 @@ def move_booking(
         git_repository=booking.git_repository,
         implementation_summary=booking.implementation_summary,
         deployment_description=booking.deployment_description,
+        justification=booking.justification,
+        impacted_region=booking.impacted_region,
         additional_comments=booking.additional_comments,
         emergency_reason=booking.emergency_reason,
         emergency_approval_reference=booking.emergency_approval_reference,

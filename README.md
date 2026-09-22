@@ -81,7 +81,7 @@ production-deployment-scheduler/
 │   │   ├── database.py          SQLAlchemy engine/session
 │   │   ├── models/              User, Tenant, DeploymentBooking, BookingAttachment,
 │   │   │                        Holiday, DeploymentSlotConfiguration,
-│   │   │                        DailySlotOverride, ApplicationSetting, BookingAudit
+│   │   │                        DailySlotCapacity, ApplicationSetting, BookingAudit
 │   │   ├── schemas/             Pydantic request/response models
 │   │   ├── api/                 auth, schedule, bookings, attachments, tenants, admin
 │   │   ├── services/            business rules (the source of truth)
@@ -141,8 +141,8 @@ promoting, demoting or deactivating an account takes effect immediately.
 
 | Rule | Default | Configurable in |
 | --- | --- | --- |
-| Normal deployment slots per day | 4 | Admin → General / Slots / Daily override |
-| Emergency changes | unlimited per date, admin only | Admin → General / Daily override |
+| Normal deployment slots per day | 4 | Admin → General / Slots; add or remove slots on one date from the board |
+| Emergency changes | unlimited per date, admin only | Admin → General |
 | Normal changes per **tenant** per week | 2 | Admin → General |
 | Booking/edit freeze | Today + next 2 valid deployment dates | Admin → General; manual per-slot freeze also available |
 | Maximum upload size | 20 MB per file | Admin → General |
@@ -381,7 +381,9 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
    confirm password), then sign in. New accounts are always `TENANT_USER`.
 2. Navigate with **Previous week / Next week / Today**.
 3. Click **Book slot** on a free slot. Choose the **tenant** in the drawer —
-   this is per change record, not per account. **Jira No. can be optional or required from Admin → General**; Jira URL is stored separately. Requester email, verifier email and implementation summary are optional.
+   this is per change record, not per account. **Jira No. can be optional or required from Admin → General**; Jira URL is stored separately. **Justification** and **Impacted region** are required on every change record
+   (the separate *Business justification* remains emergency-only). Requester email,
+   verifier email, implementation summary and deployment description are optional.
 4. Before confirming the slot, attach every required deployment document. The booking is created only after the mandatory files are accepted by the backend.
 5. Your own changes are badged **My booking**; the **My changes** card filters
    the board to them.
@@ -400,7 +402,6 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
 4. *General* — slots per day, weekly limit and upload size.
    *Slots* — names and times of the normal slots.
    *Holidays* — full or partial day, emergency allowed or not.
-   *Daily override* — a different grid for one date.
    *Documents* — which categories are mandatory.
    *Bookings* — open, assign one or more RM users, complete or permanently delete.
    Permanent deletion removes the booking/files but **retains its audit history**.
@@ -454,7 +455,7 @@ docker compose exec postgres psql -U scheduler -d scheduler -c "\dt"
 ```
 
 Tables: `users`, `tenants`, `deployment_bookings`, `booking_attachments`,
-`holidays`, `slot_configurations`, `daily_slot_overrides`,
+`holidays`, `slot_configurations`, `daily_slot_capacity`,
 `application_settings`, `booking_audit`.
 
 The schema is created from the SQLAlchemy models on start-up. This POC has no
@@ -515,7 +516,8 @@ cd backend && .venv/Scripts/python -m pytest
 * multiple emergency changes on one date, admin-only, consuming neither slots
   nor quota; tenant users are refused
 * holidays block normal slots and can keep or close the emergency queue;
-  partial holidays stay open; daily overrides resize one date
+  partial holidays stay open; an administrator can add or remove normal slots
+  on a single date without affecting any other
 * document readiness, configurable mandatory set, file-type and size limits,
   filename sanitisation, and owner/admin-only download
 * concurrency: eight simultaneous requests for one slot leave exactly one
@@ -601,7 +603,9 @@ documentation: `/docs`.
 | `POST` | `/bookings` | Create a change with mandatory documents (`multipart/form-data`; emergency requires ADMIN) |
 | `GET` | `/bookings/{id}` | Owner or admin only |
 | `PUT` | `/bookings/{id}` | Edit |
-| `DELETE` | `/bookings/{id}` | Cancel and release the slot |
+| `DELETE` | `/bookings/{id}` | Cancel: releases the slot, keeps the record, records who cancelled it and when |
+| `GET` | `/bookings/{id}/reschedule-options` | Next available slots this caller may move the booking to |
+| `POST` | `/bookings/{id}/reschedule` | Move the booking to another date/slot in one transaction |
 | `GET` | `/bookings/{id}/attachments` | Document metadata |
 | `POST` | `/bookings/{id}/attachments` | Upload one document |
 | `DELETE` | `/bookings/{id}/attachments/{attachment_id}` | Remove a document |
@@ -621,11 +625,14 @@ documentation: `/docs`.
 | `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, file size, mandatory documents |
 | `GET` `PUT` | `/admin/slots` | Normal slot grid |
 | `GET` `POST` `PUT` `DELETE` | `/admin/holidays` | Holiday management |
-| `GET` `PUT` `DELETE` | `/admin/overrides` | Per-date slot overrides |
+| `GET` | `/admin/day-capacity/{day}` | Normal slot capacity for one date |
+| `POST` | `/admin/day-capacity/{day}/add-slot` | Add a normal slot to one date |
+| `POST` | `/admin/day-capacity/{day}/remove-slot` | Remove a normal slot from one date |
+| `DELETE` | `/admin/day-capacity/{day}` | Reset the date to the default slot count |
 | `GET` | `/admin/bookings` | All changes, optionally including cancelled |
 | `POST` | `/admin/bookings/emergency` | Emergency change |
 | `POST` | `/admin/bookings/{id}/assign-users` | Assign one or more active RM users |
-| `POST` | `/admin/bookings/{id}/move` | Move to another date/slot |
+| `POST` | `/admin/bookings/{id}/move` | Move to another date/slot (emergency changes) |
 | `POST` | `/admin/bookings/{id}/reassign` | Change tenant / requester / verifier |
 | `POST` | `/admin/bookings/{id}/status` | Set BOOKED, COMPLETED or CANCELLED |
 | `DELETE` | `/admin/bookings/{id}` | Permanently delete a change and its files while retaining audit history |

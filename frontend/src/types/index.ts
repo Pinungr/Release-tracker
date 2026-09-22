@@ -104,11 +104,14 @@ export interface BookingDetail extends BookingSummary {
   implementation_summary: string
   deployment_description: string
   additional_comments: string | null
+  justification: string
+  impacted_region: string
   emergency_reason: string | null
   emergency_approval_reference: string | null
   emergency_approver: string | null
   business_justification: string | null
   cancelled_at: string | null
+  cancelled_by_user_id: number | null
   attachments: Attachment[]
   can_edit: boolean
   slot_label: string
@@ -143,12 +146,23 @@ export interface Holiday {
   allow_emergency: boolean
 }
 
-export interface DailyOverride {
-  id: number
-  override_date: string
-  regular_slots: number | null
-  emergency_enabled: boolean | null
-  note: string | null
+/** One destination offered by the reschedule picker. */
+export interface SlotOption {
+  deployment_date: string
+  weekday: string
+  date_label: string
+  slot_number: number
+  slot_name: string
+  time_label: string
+}
+
+/** Normal slot capacity for one deployment date. */
+export interface DaySlotCapacity {
+  capacity_date: string
+  slot_count: number
+  /** null when the date follows the configured default. */
+  custom_slot_count: number | null
+  max_slot_count: number
 }
 
 export interface DayView {
@@ -158,7 +172,8 @@ export interface DayView {
   is_today: boolean
   is_past: boolean
   holiday: Holiday | null
-  override: DailyOverride | null
+  /** Set only when an administrator added/removed slots on this date. */
+  custom_slot_count: number | null
   regular_slots_total: number
   regular_slots_used: number
   slots: SlotView[]
@@ -293,6 +308,8 @@ export interface BookingFormValues {
   implementation_summary: string
   deployment_description: string
   additional_comments: string
+  justification: string
+  impacted_region: string
   emergency_reason: string
   emergency_approval_reference: string
   emergency_approver: string

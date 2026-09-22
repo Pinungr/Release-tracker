@@ -3,7 +3,6 @@ import { api, ApiError } from '../services/api'
 import type {
   AdminSettings,
   BookingSummary,
-  DailyOverride,
   DocumentCategory,
   Holiday,
   SlotConfig,
@@ -13,7 +12,7 @@ import { AdminTenantManager } from './AdminTenantManager'
 import { AdminUserManager } from './AdminUserManager'
 import { AuditHistory } from './AuditHistory'
 import { Drawer } from './Drawer'
-import { Alert, Calendar, Check, History, Plus, Settings, Shield, Siren, Spinner, Sun, Trash, User } from './Icons'
+import { Alert, Calendar, Check, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
 import { ConfirmationModal } from './Modal'
 import { BookingStatusBadge, LockBadge } from './StatusBadge'
@@ -25,7 +24,6 @@ type Tab =
   | 'general'
   | 'slots'
   | 'holidays'
-  | 'overrides'
   | 'documents'
   | 'bookings'
   | 'audit'
@@ -36,7 +34,6 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'general', label: 'General', icon: <Settings className="size-4" /> },
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
-  { key: 'overrides', label: 'Daily override', icon: <Siren className="size-4" /> },
   { key: 'documents', label: 'Documents', icon: <Check className="size-4" /> },
   { key: 'bookings', label: 'Bookings', icon: <Alert className="size-4" /> },
   { key: 'audit', label: 'Audit', icon: <History className="size-4" /> },
@@ -95,7 +92,6 @@ export function AdminPanel({ open, onClose, timezone, onChanged, onOpenBooking }
       {tab === 'general' ? <GeneralSettings onChanged={onChanged} /> : null}
       {tab === 'slots' ? <SlotConfiguration onChanged={onChanged} /> : null}
       {tab === 'holidays' ? <HolidayManager onChanged={onChanged} /> : null}
-      {tab === 'overrides' ? <DailyOverrideManager onChanged={onChanged} /> : null}
       {tab === 'documents' ? <DocumentSettings onChanged={onChanged} /> : null}
       {tab === 'bookings' ? (
         <BookingManagement
@@ -182,7 +178,7 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
   return (
     <SectionShell
       title="General settings"
-      description="Applies to every day unless a daily override says otherwise."
+      description="The default number of normal slots for every deployment date. Administrators can still add or remove slots on one date from the board."
       error={error}
       loading={!data}
     >
@@ -592,147 +588,6 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
         cancelLabel="Keep holiday"
         busy={busy}
       />
-    </SectionShell>
-  )
-}
-
-/* --------------------------- Daily overrides ----------------------------- */
-
-function DailyOverrideManager({ onChanged }: { onChanged: () => void }) {
-  const toast = useToast()
-  const { data, error, reload } = useAsyncSection(() => api.getOverrides())
-  const [date, setDate] = useState('')
-  const [regularSlots, setRegularSlots] = useState('')
-  const [emergency, setEmergency] = useState<'inherit' | 'yes' | 'no'>('inherit')
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  async function submit() {
-    if (!date) {
-      toast.error('Choose the date to override.')
-      return
-    }
-    setBusy(true)
-    try {
-      await api.upsertOverride({
-        override_date: date,
-        regular_slots: regularSlots === '' ? null : Number(regularSlots),
-        emergency_enabled: emergency === 'inherit' ? null : emergency === 'yes',
-        note: note.trim() || null,
-      })
-      setDate('')
-      setRegularSlots('')
-      setEmergency('inherit')
-      setNote('')
-      reload()
-      onChanged()
-      toast.success('Daily override saved.')
-    } catch (caught) {
-      toast.error('Could not save the override', caught instanceof ApiError ? caught.message : '')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function clear(override: DailyOverride) {
-    setBusy(true)
-    try {
-      await api.deleteOverride(override.id)
-      reload()
-      onChanged()
-      toast.success('Override cleared.')
-    } catch (caught) {
-      toast.error('Could not clear the override', caught instanceof ApiError ? caught.message : '')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <SectionShell
-      title="Daily slot override"
-      description="Configure one date differently from the default grid — for example a special-date slot configuration."
-      error={error}
-      loading={!data}
-    >
-      <form
-        className="mb-5 grid gap-4 rounded-lg border border-line bg-canvas/50 p-4 sm:grid-cols-2"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void submit()
-        }}
-      >
-        <TextField label="Date" name="override_date" type="date" required value={date} onChange={setDate} />
-        <TextField
-          label="Regular slots on this date"
-          name="override_slots"
-          type="number"
-          min={0}
-          max={12}
-          value={regularSlots}
-          onChange={setRegularSlots}
-          hint="Leave blank to inherit the default."
-        />
-        <SelectField
-          label="Emergency changes"
-          name="override_emergency"
-          value={emergency}
-          onChange={(v) => setEmergency(v as 'inherit' | 'yes' | 'no')}
-          options={[
-            { value: 'inherit', label: 'Inherit the default' },
-            { value: 'yes', label: 'Enabled' },
-            { value: 'no', label: 'Disabled' },
-          ]}
-        />
-        <TextField label="Note" name="override_note" value={note} onChange={setNote} hint="Optional." />
-        <div className="sm:col-span-2">
-          <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? <Spinner className="size-4" /> : <Plus className="size-4" />}
-            Save override
-          </button>
-        </div>
-      </form>
-
-      {data && data.length === 0 ? (
-        <p className="text-sm text-ink-muted">No daily overrides configured.</p>
-      ) : (
-        <ul className="space-y-2">
-          {data?.map((override) => (
-            <li
-              key={override.id}
-              className="flex flex-wrap items-center gap-2 rounded-lg border border-line p-3 text-sm"
-            >
-              <span className="font-semibold tnum text-ink">{formatDate(override.override_date)}</span>
-              <span className="text-ink-muted">
-                Regular slots:{' '}
-                <span className="font-medium text-ink">
-                  {override.regular_slots ?? 'default'}
-                </span>
-              </span>
-              <span className="text-ink-muted">
-                Emergency:{' '}
-                <span className="font-medium text-ink">
-                  {override.emergency_enabled === null
-                    ? 'default'
-                    : override.emergency_enabled
-                      ? 'enabled'
-                      : 'disabled'}
-                </span>
-              </span>
-              {override.note ? <span className="text-xs text-ink-muted">{override.note}</span> : null}
-              <button
-                type="button"
-                className="btn-ghost btn-sm ml-auto text-rose-600"
-                onClick={() => void clear(override)}
-                disabled={busy}
-              >
-                <Trash className="size-3.5" />
-                Clear
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
     </SectionShell>
   )
 }

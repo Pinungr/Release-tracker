@@ -86,7 +86,11 @@ def _add_change(
         tenant_id=tenant.id,
         tenant_name=tenant.name,
         created_by_user_id=owner.id,
-        **fields,
+        **{
+            "justification": "Scheduled release approved by the tenant release board.",
+            "impacted_region": "APAC",
+            **fields,
+        },
     )
     db.add(booking)
     db.flush()
