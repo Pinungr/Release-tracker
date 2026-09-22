@@ -228,6 +228,8 @@ export interface ManagedUser {
   username: string
   email: string
   role: 'TENANT_USER' | 'ADMIN'
+  /** The single protected owner account; never a valid target for admin actions. */
+  is_owner: boolean
   is_active: boolean
   must_change_password: boolean
   created_at: string
@@ -256,6 +258,8 @@ export interface AuthUser {
   username: string
   email: string | null
   role: 'TENANT_USER' | 'ADMIN'
+  /** Only the owner may manage other administrators. */
+  is_owner?: boolean
   must_change_password?: boolean
 }
 

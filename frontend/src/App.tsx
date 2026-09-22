@@ -214,6 +214,11 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
       toast.error('You are not authorized to edit this change record.')
       return
     }
+    // Hand over from the details drawer to the edit drawer rather than
+    // stacking them: both are full-height panels at the same depth, so leaving
+    // details open would cover the edit form.
+    setDetailOpen(false)
+    setDetailBooking(null)
     setCreateTarget(null)
     setEditBooking(booking)
     setBookingDrawerOpen(true)
@@ -339,6 +344,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           open={adminPanelOpen}
           onClose={() => setAdminPanelOpen(false)}
           timezone={timezone}
+          currentUserId={user.id}
+          isOwner={user.is_owner === true}
           onChanged={refreshAll}
           onOpenBooking={(id) => {
             setAdminPanelOpen(false)

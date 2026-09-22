@@ -120,7 +120,7 @@ frontend's copies exist only for immediate feedback.
 
 | | TENANT_USER | ADMIN |
 | --- | --- | --- |
-| Sign up | self-service | promoted by an admin |
+| Sign up | self-service | promoted by the owner |
 | See the weekly board | ✅ | ✅ |
 | Schedule a normal change | ✅ | ✅ |
 | See / edit / cancel a change | own changes; assigned RM users can view and start work | any |
@@ -134,6 +134,29 @@ Everyone uses **one login**. There is no separate administrator sign-in and no
 separate administrator table — `users.role` is the only thing that grants
 administrator access, and it is re-read from the database on every request, so
 promoting, demoting or deactivating an account takes effect immediately.
+
+### The owner account
+
+One administrator is additionally flagged as the **owner** (`users.is_owner`).
+It is the bootstrap administrator, created on first start, and there is no API
+that grants the flag, so the tier cannot be escalated into.
+
+Administrators manage tenant users. Everything that targets an account which is
+*already* an administrator is reserved for the owner:
+
+| Action | ADMIN | OWNER |
+| --- | --- | --- |
+| Reset a **tenant user's** password, activate/deactivate them | ✅ | ✅ |
+| Promote a tenant user to ADMIN | ❌ | ✅ |
+| Demote / deactivate / reset the password of **another ADMIN** | ❌ | ✅ |
+| Act on the **owner** account | ❌ | ❌ (self-service only) |
+| Act on **your own** account via Admin → Users | ❌ | ❌ (self-service only) |
+
+Without this separation a single promotion would be enough to take over the
+installation: the promoted account could reset every other administrator's
+password — including the owner's — and lock everyone else out. The owner can
+always demote a rogue administrator, and the flag guarantees a recovery account
+always exists.
 
 ---
 
@@ -394,9 +417,15 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
 **As an administrator**
 
 1. Sign in with the same form; the header gains **Admin controls**.
-2. *Users* — promote/demote, activate/deactivate, reset a password. You never
-   see an existing password or hash. The last active administrator cannot be
-   demoted or deactivated.
+2. *Users* — activate/deactivate and reset a password for **tenant users**.
+   You never see an existing password or hash.
+   Administrators are deliberately protected from each other: only the owner
+   can promote, demote, deactivate or reset an administrator, nobody (not even
+   the owner) can target the owner account through this screen, and no
+   administrator can act on their own account here — change your own password
+   from your profile. Without this, a single promotion would let anyone reset
+   every other administrator's password and lock the installation. The last
+   active administrator still cannot be demoted or deactivated.
 3. *Tenants* — add, edit, activate, deactivate. Only active tenants appear in
    the scheduling form.
 4. *General* — slots per day, weekly limit and upload size.
@@ -617,9 +646,9 @@ documentation: `/docs`.
 | --- | --- | --- |
 | `GET` | `/admin/me` | Confirm administrator access |
 | `GET` | `/admin/users` | List / search people |
-| `PATCH` | `/admin/users/{id}/role` | Promote or demote |
-| `PATCH` | `/admin/users/{id}/status` | Activate or deactivate |
-| `POST` | `/admin/users/{id}/reset-password` | Set a new password |
+| `PATCH` | `/admin/users/{id}/role` | Promote or demote (owner only) |
+| `PATCH` | `/admin/users/{id}/status` | Activate or deactivate (an ADMIN target is owner-only) |
+| `POST` | `/admin/users/{id}/reset-password` | Set a new password (an ADMIN target is owner-only) |
 | `GET` `POST` | `/admin/tenants` | Tenant master |
 | `PUT` `PATCH` | `/admin/tenants/{id}`, `/admin/tenants/{id}/status` | Edit / activate |
 | `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, file size, mandatory documents |

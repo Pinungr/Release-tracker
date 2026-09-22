@@ -91,8 +91,42 @@ def ensure_bootstrap_admin(db: Session) -> None:
             email=f"{username}@localhost",
             password_hash=hash_secret(settings.bootstrap_admin_password),
             role="ADMIN",
+            is_owner=True,
         )
     )
+    db.commit()
+
+
+def ensure_single_owner(db: Session) -> None:
+    """Guarantee exactly one protected owner account exists.
+
+    The owner is the only account that may manage other administrators, so a
+    database must never be left without one. The bootstrap administrator is
+    preferred; otherwise the earliest active administrator is adopted. This is
+    also what upgrades a database created before the owner tier existed.
+    """
+    owner = db.scalars(select(User).where(User.is_owner.is_(True))).first()
+    if owner is not None:
+        # An owner must remain usable, or nobody can administer administrators.
+        owner.role = "ADMIN"
+        owner.is_active = True
+        db.commit()
+        return
+
+    username = (settings.bootstrap_admin_username or "").strip()
+    candidate = None
+    if username:
+        candidate = db.scalars(
+            select(User).where(User.username == username, User.role == "ADMIN")
+        ).first()
+    if candidate is None:
+        candidate = db.scalars(
+            select(User).where(User.role == "ADMIN").order_by(User.id)
+        ).first()
+    if candidate is None:
+        return
+    candidate.is_owner = True
+    candidate.is_active = True
     db.commit()
 
 
@@ -101,3 +135,4 @@ def initialise() -> None:
     with SessionLocal() as db:
         ensure_slot_configurations(db)
         ensure_bootstrap_admin(db)
+        ensure_single_owner(db)

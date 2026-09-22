@@ -52,11 +52,13 @@ interface AdminPanelProps {
   open: boolean
   onClose: () => void
   timezone: string
+  currentUserId: number
+  isOwner: boolean
   onChanged: () => void
   onOpenBooking: (bookingId: number) => void
 }
 
-export function AdminPanel({ open, onClose, timezone, onChanged, onOpenBooking }: AdminPanelProps) {
+export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, onChanged, onOpenBooking }: AdminPanelProps) {
   const [tab, setTab] = useState<Tab>('users')
 
   return (
@@ -87,7 +89,9 @@ export function AdminPanel({ open, onClose, timezone, onChanged, onOpenBooking }
         ))}
       </nav>
 
-      {tab === 'users' ? <AdminUserManager timezone={timezone} /> : null}
+      {tab === 'users' ? (
+        <AdminUserManager timezone={timezone} currentUserId={currentUserId} isOwner={isOwner} />
+      ) : null}
       {tab === 'tenants' ? <AdminTenantManager onChanged={onChanged} /> : null}
       {tab === 'general' ? <GeneralSettings onChanged={onChanged} /> : null}
       {tab === 'slots' ? <SlotConfiguration onChanged={onChanged} /> : null}

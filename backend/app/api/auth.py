@@ -116,6 +116,7 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
                 "username": user.username,
                 "email": user.email,
                 "role": user.role,
+                "is_owner": user.is_owner,
                 "must_change_password": user.must_change_password,
             },
         }
@@ -172,5 +173,6 @@ def read_me(user=Depends(require_authenticated_user), db: Session = Depends(get_
         "username": account.username,
         "email": account.email,
         "role": account.role,
+        "is_owner": account.is_owner,
         "must_change_password": account.must_change_password,
     }

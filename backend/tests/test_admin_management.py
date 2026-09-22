@@ -51,24 +51,39 @@ def test_invalid_role_is_rejected(admin, user):
     assert response.status_code == 400
 
 
-def test_the_last_active_administrator_cannot_be_demoted_or_deactivated(admin):
+def test_the_bootstrap_administrator_is_the_protected_owner(admin):
+    assert _user_named(admin, "testadmin")["is_owner"] is True
+    assert [u["username"] for u in admin.get("/api/admin/users").json() if u["is_owner"]] == [
+        "testadmin"
+    ]
+
+
+def test_the_owner_account_cannot_be_targeted_by_anyone(admin):
+    """Not even by the owner: their own credentials are self-service only."""
     me = _user_named(admin, "testadmin")
 
     demote = admin.patch(f"/api/admin/users/{me['id']}/role", json={"role": "TENANT_USER"})
-    assert demote.status_code == 409
-    assert "only active administrator" in demote.json()["detail"]
+    assert demote.status_code == 403
+    assert "owner account is protected" in demote.json()["detail"]
 
-    deactivate = admin.patch(f"/api/admin/users/{me['id']}/status", json={"is_active": False})
-    assert deactivate.status_code == 409
+    assert admin.patch(
+        f"/api/admin/users/{me['id']}/status", json={"is_active": False}
+    ).status_code == 403
+    assert admin.post(
+        f"/api/admin/users/{me['id']}/reset-password",
+        json={"new_password": "Hijacked!123", "confirm_new_password": "Hijacked!123"},
+    ).status_code == 403
 
 
-def test_an_administrator_can_step_down_once_another_exists(admin, user):
+def test_the_owner_can_demote_another_administrator(admin, user):
     promoted = _user_named(admin, "pinaki")
-    admin.patch(f"/api/admin/users/{promoted['id']}/role", json={"role": "ADMIN"})
-
-    me = _user_named(admin, "testadmin")
-    response = admin.patch(f"/api/admin/users/{me['id']}/role", json={"role": "TENANT_USER"})
-    assert response.status_code == 200
+    assert admin.patch(
+        f"/api/admin/users/{promoted['id']}/role", json={"role": "ADMIN"}
+    ).status_code == 200
+    assert admin.patch(
+        f"/api/admin/users/{promoted['id']}/role", json={"role": "TENANT_USER"}
+    ).status_code == 200
+    assert _user_named(admin, "pinaki")["role"] == "TENANT_USER"
 
 
 def test_user_management_is_admin_only(anon, user):

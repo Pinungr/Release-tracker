@@ -10,8 +10,21 @@ import { useToast } from './ToastNotification'
  * Administrator view of the one users table. An administrator can change a
  * role, activate/deactivate, and set a new password — but never sees an
  * existing password or its hash, because the API does not return either.
+ *
+ * Administrators manage tenant users. Acting on an account that is already an
+ * ADMIN is reserved for the owner, and the owner account is never a valid
+ * target. Hiding the buttons here is only a convenience: the API enforces the
+ * same rules and is the source of truth.
  */
-export function AdminUserManager({ timezone }: { timezone: string }) {
+export function AdminUserManager({
+  timezone,
+  currentUserId,
+  isOwner,
+}: {
+  timezone: string
+  currentUserId: number
+  isOwner: boolean
+}) {
   const toast = useToast()
   const [users, setUsers] = useState<ManagedUser[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -87,7 +100,12 @@ export function AdminUserManager({ timezone }: { timezone: string }) {
         <p className="text-sm text-ink-muted">No users match that search.</p>
       ) : (
         <ul className="space-y-2">
-          {users.map((user) => (
+          {users.map((user) => {
+            // Mirrors _assert_may_manage on the server.
+            const manageable =
+              !user.is_owner && user.id !== currentUserId && (isOwner || user.role !== 'ADMIN')
+            const canPromote = isOwner
+            return (
             <li key={user.id} className="rounded-lg border border-line p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-semibold text-ink">{user.full_name}</span>
@@ -111,6 +129,18 @@ export function AdminUserManager({ timezone }: { timezone: string }) {
                 >
                   {user.is_active ? 'Active' : 'Inactive'}
                 </span>
+                {user.is_owner ? (
+                  <span className="tooltip-host">
+                    <span className="badge bg-violet-50 text-violet-700 ring-1 ring-violet-200">
+                      <Shield className="size-3" />
+                      Owner
+                    </span>
+                    <span className="tooltip">
+                      The protected owner account. It cannot be demoted, deactivated or reset by
+                      anyone, and only the owner can manage other administrators.
+                    </span>
+                  </span>
+                ) : null}
                 {user.must_change_password ? (
                   <span className="badge bg-amber-50 text-amber-800 ring-1 ring-amber-200">
                     Must change password
@@ -123,40 +153,55 @@ export function AdminUserManager({ timezone }: { timezone: string }) {
                 <span>Created {formatTimestamp(user.created_at, timezone)}</span>
               </p>
 
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  className="btn-secondary btn-sm"
-                  disabled={busyId === user.id}
-                  onClick={() => setConfirmRole(user)}
-                >
-                  {user.role === 'ADMIN' ? 'Demote to tenant user' : 'Promote to admin'}
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  disabled={busyId === user.id}
-                  onClick={() =>
-                    void act(
-                      user,
-                      () => api.setUserActive(user.id, !user.is_active),
-                      user.is_active ? 'User deactivated.' : 'User activated.',
-                    )
-                  }
-                >
-                  {user.is_active ? 'Deactivate' : 'Activate'}
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  disabled={busyId === user.id}
-                  onClick={() => setResetTarget(user)}
-                >
-                  Reset password
-                </button>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {manageable ? (
+                  <>
+                    {user.role === 'ADMIN' || canPromote ? (
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        disabled={busyId === user.id}
+                        onClick={() => setConfirmRole(user)}
+                      >
+                        {user.role === 'ADMIN' ? 'Demote to tenant user' : 'Promote to admin'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm"
+                      disabled={busyId === user.id}
+                      onClick={() =>
+                        void act(
+                          user,
+                          () => api.setUserActive(user.id, !user.is_active),
+                          user.is_active ? 'User deactivated.' : 'User activated.',
+                        )
+                      }
+                    >
+                      {user.is_active ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm"
+                      disabled={busyId === user.id}
+                      onClick={() => setResetTarget(user)}
+                    >
+                      Reset password
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-xs text-ink-muted">
+                    {user.is_owner
+                      ? 'The owner account is protected. Its credentials are managed by the owner alone.'
+                      : user.id === currentUserId
+                        ? 'You cannot manage your own account here. Change your password from your profile.'
+                        : 'Only the owner can manage an administrator account.'}
+                  </p>
+                )}
               </div>
             </li>
-          ))}
+            )
+          })}
         </ul>
       )}
 

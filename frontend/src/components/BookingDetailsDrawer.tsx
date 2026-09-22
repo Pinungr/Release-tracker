@@ -498,7 +498,12 @@ export function BookingDetailsDrawer({
         onClose={() => setRescheduleOpen(false)}
         booking={booking}
         onMoveEmergency={isAdmin ? () => void openMoveDialog() : undefined}
-        onDone={onChanged}
+        onDone={() => {
+          // Return to the board on success, the same way cancelling does, so
+          // the moved booking is visible in its new slot straight away.
+          onChanged()
+          onClose()
+        }}
       />
 
       {booking ? (

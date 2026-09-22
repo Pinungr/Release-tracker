@@ -116,6 +116,14 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     role: Mapped[str] = mapped_column(String(32), default="TENANT_USER", nullable=False)
+    # The single protected owner account. Administrators manage tenant users
+    # only; promoting, demoting, deactivating or resetting the password of an
+    # ADMIN is reserved for the owner, and the owner account itself can never
+    # be targeted through the admin API. There is no endpoint that grants this
+    # flag, so it cannot be escalated into.
+    is_owner: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=False
+    )
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Incremented whenever the password is changed/reset. JWTs carry the
     # version that was current when they were issued, so older tokens remain

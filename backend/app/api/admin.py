@@ -86,6 +86,44 @@ def _tenant_weekly_limit(value: object) -> int | None:
     return parsed
 
 
+def _is_owner(db: Session, admin: AdminPrincipal) -> bool:
+    account = db.get(User, admin.user_id)
+    return account is not None and account.is_owner
+
+
+def _assert_may_manage(db: Session, target: User, admin: AdminPrincipal, action: str) -> None:
+    """Gate every administrator action that targets another account.
+
+    Without this, any administrator could reset a peer administrator's
+    password or demote them, which is a full takeover of the installation by
+    anyone who is promoted once. The rules are:
+
+      * the owner account is never a valid target, for anybody;
+      * an administrator cannot act on their own account here (self-service
+        password change lives on /auth/me/change-password);
+      * only the owner may act on an account whose role is ADMIN.
+
+    Promotion to ADMIN is gated separately in ``update_user_role``, because
+    its target is still a TENANT_USER at the time of the call.
+    """
+    if target.is_owner:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"The owner account is protected and cannot be {action} by anyone. "
+            "The owner manages their own credentials from their profile.",
+        )
+    if target.id == admin.user_id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"You cannot have your own account {action}. Ask the owner.",
+        )
+    if target.role == "ADMIN" and not _is_owner(db, admin):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Only the owner can have an administrator account {action}.",
+        )
+
+
 def _assert_not_last_active_admin(db: Session, target: User, admin: AdminPrincipal) -> None:
     """Refuse a demotion/deactivation that would leave nobody able to administer."""
     if target.role != "ADMIN" or not target.is_active:
@@ -259,6 +297,7 @@ def list_users(
             "username": u.username,
             "email": u.email,
             "role": u.role,
+            "is_owner": u.is_owner,
             "is_active": u.is_active,
             "must_change_password": u.must_change_password,
             "created_at": u.created_at,
@@ -277,6 +316,7 @@ def reset_user_password(
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    _assert_may_manage(db, user, admin, "password reset")
 
     new_password = str(payload.get("new_password", ""))
     confirm_new_password = str(payload.get("confirm_new_password", ""))
@@ -316,6 +356,7 @@ def update_user_status(
     is_active = payload.get("is_active")
     if not isinstance(is_active, bool):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "is_active must be a boolean value.")
+    _assert_may_manage(db, user, admin, "deactivated or reactivated")
     if not is_active:
         _assert_not_last_active_admin(db, user, admin)
     user.is_active = is_active
@@ -345,6 +386,14 @@ def update_user_role(
     role = str(payload.get("role", "")).strip().upper()
     if role not in {"ADMIN", "TENANT_USER"}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "role must be ADMIN or TENANT_USER.")
+    _assert_may_manage(db, user, admin, "promoted or demoted")
+    # Creating a new administrator is an owner-only act. Otherwise any
+    # administrator could mint allies and outvote the rest of the installation.
+    if role == "ADMIN" and not _is_owner(db, admin):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the owner can promote an account to administrator.",
+        )
     if role != "ADMIN":
         _assert_not_last_active_admin(db, user, admin)
     previous = user.role

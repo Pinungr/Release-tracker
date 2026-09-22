@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { lockBodyScroll } from '../utils/scrollLock'
 import { Cross } from './Icons'
 
 interface DrawerProps {
@@ -34,20 +35,25 @@ export function Drawer({
 }: DrawerProps) {
   const panel = useRef<HTMLDivElement>(null)
 
+  // Kept in a ref so the effect below depends only on `open`. Callers pass an
+  // inline arrow, which changes identity on every render; without this the
+  // lock/unlock pair would thrash on each parent re-render.
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') closeRef.current()
     }
     document.addEventListener('keydown', onKey)
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const releaseScroll = lockBodyScroll()
     panel.current?.focus()
     return () => {
       document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previousOverflow
+      releaseScroll()
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 
