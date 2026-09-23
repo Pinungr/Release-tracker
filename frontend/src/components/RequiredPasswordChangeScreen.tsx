@@ -46,7 +46,7 @@ export function RequiredPasswordChangeScreen({
   }
 
   return (
-    <div className="grid min-h-dvh place-items-center bg-canvas px-4 py-10">
+    <div className="grid flex-1 place-items-center bg-canvas px-4 py-10">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center gap-3">
           <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-600 text-white shadow-sm">

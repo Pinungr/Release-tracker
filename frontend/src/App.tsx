@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { AdminPanel } from './components/AdminPanel'
+import { AppFooter } from './components/AppFooter'
 import { AppHeader } from './components/AppHeader'
 import { BookingDetailsDrawer } from './components/BookingDetailsDrawer'
 import { BookingDrawer, type CreateTarget } from './components/BookingDrawer'
@@ -31,35 +32,39 @@ const FALLBACK_SETTINGS: PublicSettings = {
 
 export default function App() {
   const auth = useAuthSession()
+  let content
 
   if (auth.checking) {
-    return (
-      <div className="grid min-h-dvh place-items-center text-sm text-ink-muted">
+    content = (
+      <div className="grid flex-1 place-items-center text-sm text-ink-muted">
         <span className="inline-flex items-center gap-3">
           <Spinner className="size-5" />
           Restoring your session…
         </span>
       </div>
     )
-  }
-
-  if (!auth.isAuthenticated) {
-    return <SignInScreen onSignedIn={auth.signIn} />
-  }
-
-  if (auth.user?.must_change_password) {
-    return (
+  } else if (!auth.isAuthenticated) {
+    content = <SignInScreen onSignedIn={auth.signIn} />
+  } else if (auth.user?.must_change_password) {
+    content = (
       <RequiredPasswordChangeScreen
         user={auth.user}
         onChanged={auth.refreshUser}
         onLogout={() => void auth.signOut()}
       />
     )
+  } else {
+    // Remounting on identity change clears every cached booking and filter from
+    // the previous session.
+    content = <Scheduler key={auth.user!.id} auth={auth} />
   }
 
-  // Remounting on identity change clears every cached booking and filter from
-  // the previous session.
-  return <Scheduler key={auth.user!.id} auth={auth} />
+  return (
+    <div className="flex min-h-dvh flex-col">
+      {content}
+      <AppFooter />
+    </div>
+  )
 }
 
 function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
@@ -237,7 +242,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }, [schedule, query, filter, myBookingIds])
 
   return (
-    <div className="min-h-dvh">
+    <div className="flex flex-1 flex-col">
       <AppHeader
         timezone={timezone}
         username={user.username}
@@ -258,7 +263,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         }
       />
 
-      <main className="mx-auto max-w-[88rem] space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {error ? (
           <div className="card flex flex-wrap items-center gap-3 border-rose-200 bg-rose-50 p-4">
             <Alert className="size-5 text-rose-600" />
