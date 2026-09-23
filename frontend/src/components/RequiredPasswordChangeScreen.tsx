@@ -55,7 +55,7 @@ export function RequiredPasswordChangeScreen({
           <div>
             <h1 className="text-lg leading-tight font-semibold text-ink">Password change required</h1>
             <p className="text-sm text-ink-muted">
-              {user.full_name}, your administrator reset your password. Set a new password before using the scheduler.
+              {user.full_name}, the Owner or a Release Manager reset your password. Set a new password before using the scheduler.
             </p>
           </div>
         </div>

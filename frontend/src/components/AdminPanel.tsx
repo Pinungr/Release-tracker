@@ -61,11 +61,11 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
       open={open}
       onClose={onClose}
       width="xl"
-      title="Admin controls"
-      eyebrow={<span className="badge bg-brand-50 text-brand-700">Administrator</span>}
+      title="Release controls"
+      eyebrow={<span className="badge bg-brand-50 text-brand-700">{isOwner ? 'Owner' : 'Release Manager'}</span>}
       subtitle="Configuration applies immediately to the weekly board."
     >
-      <nav className="-mx-1 mb-5 flex gap-1 overflow-x-auto px-1 pb-1" aria-label="Admin sections">
+      <nav className="-mx-1 mb-5 flex gap-1 overflow-x-auto px-1 pb-1" aria-label="Release control sections">
         {TABS.map((entry) => (
           <button
             key={entry.key}
@@ -170,7 +170,7 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
   return (
     <SectionShell
       title="General settings"
-      description="The default number of normal slots for every deployment date. Administrators can still add or remove slots on one date from the board."
+      description="The default number of normal slots for every deployment date. The Owner and Release Managers can still add or remove slots on one date from the board."
       error={error}
       loading={!data}
     >
@@ -216,7 +216,7 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             max={25}
             value={String(data.booking_freeze_dates)}
             onChange={(v) => setData({ ...data, booking_freeze_dates: Math.max(0, Number(v) || 0) })}
-            hint="Today and the configured upcoming valid deployment dates are frozen for everyone, including Admin. Friday/Saturday and full-day holidays are skipped when counting."
+            hint="Today and the configured upcoming valid deployment dates are frozen for everyone, including the Owner and Release Managers. Friday/Saturday and full-day holidays are skipped when counting."
           />
           <TextField
             label="Maximum file size (MB)"
@@ -428,7 +428,7 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
   return (
     <SectionShell
       title="Holiday management"
-      description="A full-day holiday closes every normal slot. Emergency CRQs remain a separate administrator-only queue subject to date protection."
+      description="A full-day holiday closes every normal slot. Emergency CRQs remain a separate Owner/Release Manager-only queue subject to date protection."
       error={error}
       loading={!data}
     >

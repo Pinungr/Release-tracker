@@ -320,8 +320,11 @@ def test_past_booking_is_read_only_even_for_admin(
     import io
     from app.services import booking_service, presenters
 
+    from conftest import promote_to_release_manager
+
     booking = create_booking(user, tenant, next_monday, 1)
-    rm_user = next(u for u in admin.get("/api/admin/users").json() if u["username"] == "user2")
+    rm_id = promote_to_release_manager(admin, other_user)
+    rm_user = next(u for u in admin.get("/api/admin/users").json() if u["id"] == rm_id)
     assert admin.post(
         f"/api/admin/bookings/{booking['id']}/assign-users",
         json={"user_ids": [rm_user["id"]]},

@@ -5,6 +5,7 @@ interface AppHeaderProps {
   timezone: string
   username: string
   isAdmin: boolean
+  isOwner: boolean
   onProfile: () => void
   onAdminPanel: () => void
   onLogout: () => void
@@ -15,6 +16,7 @@ export function AppHeader({
   timezone,
   username,
   isAdmin,
+  isOwner,
   onProfile,
   onAdminPanel,
   onLogout,
@@ -53,11 +55,11 @@ export function AppHeader({
               <>
                 <span className="hidden items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 sm:inline-flex">
                   <Shield className="size-4" />
-                  ADMIN
+                  {isOwner ? 'OWNER' : 'RELEASE MANAGER'}
                 </span>
                 <button type="button" onClick={onAdminPanel} className="btn-primary">
                   <Settings className="size-4" />
-                  <span className="hidden sm:inline">Admin controls</span>
+                  <span className="hidden sm:inline">Release controls</span>
                 </button>
               </>
             ) : null}

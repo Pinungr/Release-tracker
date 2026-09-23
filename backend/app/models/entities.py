@@ -117,11 +117,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     role: Mapped[str] = mapped_column(String(32), default="TENANT_USER", nullable=False)
-    # The single protected owner account. Administrators manage tenant users
-    # only; promoting, demoting, deactivating or resetting the password of an
-    # ADMIN is reserved for the owner, and the owner account itself can never
-    # be targeted through the admin API. There is no endpoint that grants this
-    # flag, so it cannot be escalated into.
+    # The single protected owner account. The internal ADMIN role is used by
+    # both the Owner and Release Managers. Only the Owner may promote/demote or
+    # otherwise manage another ADMIN account, and the Owner account itself can
+    # never be targeted through the admin API. There is no endpoint that grants
+    # this flag, so it cannot be escalated into.
     is_owner: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False
     )

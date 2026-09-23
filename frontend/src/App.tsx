@@ -133,7 +133,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
 
   function startBooking(day: DayView, slot: SlotView) {
     if (!schedule || day.is_past || day.day <= schedule.today) {
-      toast.locked('Date is read-only', 'Past and current deployment dates cannot be booked or modified by any user, including administrators.')
+      toast.locked('Date is read-only', 'Past and current deployment dates cannot be booked or modified by any user, including the Owner or Release Managers.')
       return
     }
     setEditBooking(null)
@@ -149,7 +149,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         toast.success(`Slot ${slot.slot_number} unfrozen`, 'Normal users can book or edit this slot again.')
       } else {
         await api.freezeSlot(day.day, slot.slot_number)
-        toast.locked(`Slot ${slot.slot_number} frozen`, 'Normal users can no longer book or edit this slot. Admin access remains available.')
+        toast.locked(`Slot ${slot.slot_number} frozen`, 'Tenant users can no longer book or edit this slot. Owner/Release Manager access remains available.')
       }
       refreshAll()
     } catch (caught) {
@@ -185,13 +185,13 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
 
   function startEmergencyBooking(day: DayView) {
     if (!schedule || day.is_past || day.day <= schedule.today) {
-      toast.locked('Date is read-only', 'Past and current deployment dates cannot accept emergency changes, including for administrators.')
+      toast.locked('Date is read-only', 'Past and current deployment dates cannot accept emergency changes, including for the Owner or Release Managers.')
       return
     }
     if (!auth.isAdmin) {
       toast.locked(
-        'Emergency changes are administrator only',
-        'Contact an administrator to raise an emergency change.',
+        'Emergency changes are restricted',
+        'Contact the Owner or a Release Manager to raise an emergency change.',
       )
       return
     }
@@ -205,7 +205,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
       toast.locked(
         'This booking is locked',
         booking.is_past
-          ? 'Past deployment records cannot be edited by any user, including administrators.'
+          ? 'Past deployment records cannot be edited by any user, including the Owner or Release Managers.'
           : 'This booking is inside a protected date or slot freeze window.',
       )
       return
@@ -242,6 +242,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         timezone={timezone}
         username={user.username}
         isAdmin={auth.isAdmin}
+        isOwner={user.is_owner === true}
         onProfile={() => setProfileOpen(true)}
         onAdminPanel={() => setAdminPanelOpen(true)}
         onLogout={() => void auth.signOut()}

@@ -90,7 +90,7 @@ def test_a_promoted_admin_cannot_reset_a_peer_admins_password(anon, admin, promo
         json={"new_password": "Hijacked!123", "confirm_new_password": "Hijacked!123"},
     )
     assert response.status_code == 403
-    assert "Only the owner" in response.json()["detail"]
+    assert "Only the Owner" in response.json()["detail"]
     # The peer's own credential is untouched.
     assert login(anon, "peer")
 
@@ -116,7 +116,7 @@ def test_a_promoted_admin_cannot_mint_new_administrators(anon, admin, promoted_a
         f"/api/admin/users/{ally['id']}/role", json={"role": "ADMIN"}
     )
     assert response.status_code == 403
-    assert "Only the owner can promote" in response.json()["detail"]
+    assert "Only the Owner can grant Release Manager access" in response.json()["detail"]
     assert _user_named(admin, "ally")["role"] == "TENANT_USER"
 
 
@@ -197,3 +197,27 @@ def test_an_owner_is_adopted_when_a_database_has_none(db, admin):
     bootstrap.ensure_single_owner(db)
     owners = [u.username for u in db.scalars(__import__("sqlalchemy").select(User)).all() if u.is_owner]
     assert owners == [ADMIN_USERNAME]
+
+
+def test_release_manager_can_assign_self_but_owner_cannot_be_assigned(admin, user, tenant, next_monday):
+    from conftest import create_booking, promote_to_release_manager
+
+    booking = create_booking(user, tenant, next_monday, 1)
+    rm_id = promote_to_release_manager(admin, user)
+
+    # The promoted Release Manager can assign the CRQ to themselves.
+    self_assignment = user.post(
+        f"/api/admin/bookings/{booking['id']}/assign-users",
+        json={"user_ids": [rm_id]},
+    )
+    assert self_assignment.status_code == 200, self_assignment.text
+    assert [u["user_id"] for u in self_assignment.json()["assigned_users"]] == [rm_id]
+
+    # The protected Owner is never an eligible assignee.
+    owner_id = admin.get("/api/auth/me").json()["id"]
+    owner_assignment = user.post(
+        f"/api/admin/bookings/{booking['id']}/assign-users",
+        json={"user_ids": [owner_id]},
+    )
+    assert owner_assignment.status_code == 422
+    assert "Owner account cannot be assigned" in owner_assignment.text

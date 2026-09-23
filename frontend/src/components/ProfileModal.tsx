@@ -89,7 +89,7 @@ export function ProfileModal({ open, onClose, user }: ProfileModalProps) {
             }`}
           >
             {user.role === 'ADMIN' ? <Shield className="size-3" /> : null}
-            {user.role.replace('_', ' ')}
+            {user.is_owner ? 'Owner' : user.role === 'ADMIN' ? 'Release Manager' : 'Tenant User'}
           </span>
         </dd>
       </dl>

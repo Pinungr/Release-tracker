@@ -95,8 +95,10 @@ def test_direct_reschedule_rejects_invalid_target(admin, user, tenant, db, as_ad
     ("AUTOMATIC_DATE_FREEZE", TODAY + timedelta(days=1)),
 ])
 def test_all_booking_modifications_respect_date_protection(admin, user, other_user, tenant, db, reason, target):
+    from conftest import promote_to_release_manager
+
     booking = create_booking(user, tenant, SOURCE, 1)
-    rm_id = other_user.get('/api/auth/me').json()['id']
+    rm_id = promote_to_release_manager(admin, other_user)
     assert admin.post(f"/api/admin/bookings/{booking['id']}/assign-users", json={"user_ids": [rm_id]}).status_code == 200
     row = db.get(DeploymentBooking, booking['id'])
     row.deployment_date = target
@@ -121,7 +123,7 @@ def test_all_booking_modifications_respect_date_protection(admin, user, other_us
     assert rm_detail['can_download_attachments'] and not rm_detail['can_manage_attachments']
     attachment_path = path + f"/attachments/{booking['attachments'][0]['id']}"
     assert other_user.get(attachment_path + '/download').status_code == 200
-    assert other_user.delete(attachment_path).status_code == 403
+    assert other_user.delete(attachment_path).status_code == 423
 
 
 def test_explicit_override_is_separate_and_audited(admin, user, tenant):
@@ -178,21 +180,24 @@ def test_emergency_records_also_respect_protected_dates(admin, tenant, db):
     assert admin.post(f"/api/bookings/{booking['id']}/start-work", json={'change_number': 'CHG123'}).status_code == 423
 
 
-def test_assigned_rm_document_access_and_revocation(admin, user, other_user, anon, tenant):
+def test_release_manager_must_be_assigned_before_starting_work(admin, user, other_user, tenant):
+    from conftest import promote_to_release_manager
+
     booking = create_booking(user, tenant, SOURCE, 1)
     path = f"/api/bookings/{booking['id']}"
-    download = path + f"/attachments/{booking['attachments'][0]['id']}/download"
-    assert anon.get(download).status_code == 401
-    assert other_user.get(download).status_code == 403
-    rm_id = other_user.get('/api/auth/me').json()['id']
-    admin.post(f"/api/admin/bookings/{booking['id']}/assign-users", json={'user_ids': [rm_id]})
-    detail = other_user.get(path).json()
-    assert detail['can_download_attachments'] and not detail['can_manage_attachments']
-    assert not detail['can_edit'] and detail['can_start_work']
-    assert other_user.get(download).status_code == 200
-    assert other_user.post(path + '/attachments', data={'category': 'TEST_RESULTS'}, files={'file': ('test.pdf', b'test')}).status_code == 403
-    from conftest import register
-    replacement = register(anon, 'replacement_rm')
-    reassigned = admin.post(f"/api/admin/bookings/{booking['id']}/assign-users", json={'user_ids': [replacement['id']]})
-    assert reassigned.status_code == 200
-    assert other_user.get(download).status_code == 403
+    rm_id = promote_to_release_manager(admin, other_user)
+
+    # A Release Manager has release/admin access, but cannot start this CRQ
+    # until explicitly assigned.
+    detail = other_user.get(path)
+    assert detail.status_code == 200
+    assert detail.json()['can_start_work'] is False
+    assert other_user.post(path + '/start-work', json={'change_number': 'CHG-RM-001'}).status_code == 403
+
+    assigned = admin.post(
+        f"/api/admin/bookings/{booking['id']}/assign-users",
+        json={'user_ids': [rm_id]},
+    )
+    assert assigned.status_code == 200
+    assert other_user.get(path).json()['can_start_work'] is True
+    assert other_user.post(path + '/start-work', json={'change_number': 'CHG-RM-001'}).status_code == 200

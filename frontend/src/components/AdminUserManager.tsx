@@ -7,14 +7,10 @@ import { ConfirmationModal, Modal } from './Modal'
 import { useToast } from './ToastNotification'
 
 /**
- * Administrator view of the one users table. An administrator can change a
- * role, activate/deactivate, and set a new password — but never sees an
- * existing password or its hash, because the API does not return either.
- *
- * Administrators manage tenant users. Acting on an account that is already an
- * ADMIN is reserved for the owner, and the owner account is never a valid
- * target. Hiding the buttons here is only a convenience: the API enforces the
- * same rules and is the source of truth.
+ * Owner / Release Manager view of the shared users table. The internal ADMIN
+ * permission role is presented to users as "Release Manager"; the one protected
+ * Owner is displayed separately. Only the Owner may grant or revoke Release
+ * Manager access. The API remains the authorization source of truth.
  */
 export function AdminUserManager({
   timezone,
@@ -63,8 +59,8 @@ export function AdminUserManager({
     <section>
       <h3 className="text-sm font-semibold text-ink">User management</h3>
       <p className="mt-0.5 text-xs text-ink-muted">
-        Everyone signs in through the same login; the role below is what grants administrator
-        access.
+        Everyone signs in through the same login. The Owner can grant Release Manager access;
+        Release Managers can manage deployments and assign work.
       </p>
 
       <form
@@ -118,7 +114,7 @@ export function AdminUserManager({
                   }`}
                 >
                   {user.role === 'ADMIN' ? <Shield className="size-3" /> : <User className="size-3" />}
-                  {user.role.replace('_', ' ')}
+                  {user.is_owner ? 'Owner' : user.role === 'ADMIN' ? 'Release Manager' : 'Tenant User'}
                 </span>
                 <span
                   className={`badge ${
@@ -133,11 +129,11 @@ export function AdminUserManager({
                   <span className="tooltip-host">
                     <span className="badge bg-violet-50 text-violet-700 ring-1 ring-violet-200">
                       <Shield className="size-3" />
-                      Owner
+                      Protected
                     </span>
                     <span className="tooltip">
                       The protected owner account. It cannot be demoted, deactivated or reset by
-                      anyone, and only the owner can manage other administrators.
+                      anyone, and only the Owner can manage Release Managers.
                     </span>
                   </span>
                 ) : null}
@@ -163,7 +159,7 @@ export function AdminUserManager({
                         disabled={busyId === user.id}
                         onClick={() => setConfirmRole(user)}
                       >
-                        {user.role === 'ADMIN' ? 'Demote to tenant user' : 'Promote to admin'}
+                        {user.role === 'ADMIN' ? 'Remove Release Manager access' : 'Make Release Manager'}
                       </button>
                     ) : null}
                     <button
@@ -195,7 +191,7 @@ export function AdminUserManager({
                       ? 'The owner account is protected. Its credentials are managed by the owner alone.'
                       : user.id === currentUserId
                         ? 'You cannot manage your own account here. Change your password from your profile.'
-                        : 'Only the owner can manage an administrator account.'}
+                        : 'Only the Owner can manage a Release Manager account.'}
                   </p>
                 )}
               </div>
@@ -218,22 +214,22 @@ export function AdminUserManager({
             'Role updated.',
           )
         }}
-        title={confirmRole?.role === 'ADMIN' ? 'Demote this administrator?' : 'Promote to administrator?'}
+        title={confirmRole?.role === 'ADMIN' ? 'Remove Release Manager access?' : 'Make this user a Release Manager?'}
         facts={
           confirmRole
             ? [
                 { label: 'User', value: confirmRole.full_name },
                 { label: 'Username', value: confirmRole.username },
-                { label: 'Current role', value: confirmRole.role.replace('_', ' ') },
+                { label: 'Current role', value: confirmRole.is_owner ? 'Owner' : confirmRole.role === 'ADMIN' ? 'Release Manager' : 'Tenant User' },
               ]
             : []
         }
         note={
           confirmRole?.role === 'ADMIN'
-            ? 'They will lose administrator access on their very next request.'
-            : 'They will gain full administrator access immediately, including emergency changes and overrides.'
+            ? 'They will lose Release Manager access on their very next request.'
+            : 'They will gain Release Manager access immediately, including deployment administration, emergency changes and overrides.'
         }
-        confirmLabel={confirmRole?.role === 'ADMIN' ? 'Demote' : 'Promote'}
+        confirmLabel={confirmRole?.role === 'ADMIN' ? 'Remove access' : 'Make Release Manager'}
         cancelLabel="Keep current role"
         destructive={confirmRole?.role === 'ADMIN'}
       />

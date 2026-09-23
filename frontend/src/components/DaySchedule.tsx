@@ -71,7 +71,7 @@ export function DaySchedule({
               {day.custom_slot_count} custom slot{day.custom_slot_count === 1 ? '' : 's'}
             </span>
             <span className="tooltip">
-              An administrator changed the number of normal slots on this date. Every other date
+              The Owner or a Release Manager changed the number of normal slots on this date. Every other date
               still follows the configured default.
             </span>
           </span>
@@ -116,8 +116,8 @@ export function DaySchedule({
           <span className="text-sm text-amber-800">
             {isAdmin
               ? isHistorical
-                ? 'This past/current date is read-only for everyone, including administrators.'
-                : 'Normal deployment slots are unavailable. The separate Admin emergency queue follows date protection.'
+                ? 'This past/current date is read-only for everyone, including the Owner and Release Managers.'
+                : 'Normal deployment slots are unavailable. The separate emergency queue follows date protection.'
               : 'No production deployments available.'}
           </span>
         </div>
@@ -166,7 +166,7 @@ export function DaySchedule({
           <h3 className="text-sm font-bold text-orange-950">Emergency change queue</h3>
           <span className="badge bg-orange-100 text-orange-800">{day.emergency_bookings.length}</span>
           <span className="text-xs font-semibold tracking-wide text-orange-800/80 uppercase">
-            Administrator only
+            Owner / Release Manager only
           </span>
           {isAdmin && !isHistorical ? (
             <button

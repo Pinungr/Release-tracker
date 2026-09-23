@@ -980,9 +980,18 @@ def delete_booking(db: Session, booking: DeploymentBooking, actor: Actor) -> Non
 def assign_users_to_booking(
     db: Session, booking: DeploymentBooking, user_ids: list[int], actor: Actor
 ) -> DeploymentBooking:
-    """Replace the RM assignment list for a booking. Administrator only."""
+    """Replace the Release Manager assignment list for a booking.
+
+    The protected Owner account may assign work but can never be an assignee.
+    Release Managers are active non-owner accounts with the internal ADMIN role;
+    a Release Manager may assign the booking to themselves or to another
+    Release Manager.
+    """
     if not actor.is_admin:
-        raise BusinessRuleError("Only administrators can assign RM users.", status.HTTP_403_FORBIDDEN)
+        raise BusinessRuleError(
+            "Only the Owner or a Release Manager can assign Release Managers.",
+            status.HTTP_403_FORBIDDEN,
+        )
     assert_booking_mutable(db, booking, actor)
     if booking.status == BookingStatus.CANCELLED.value:
         raise BusinessRuleError("A cancelled booking cannot be assigned.")
@@ -993,7 +1002,8 @@ def assign_users_to_booking(
             select(User).where(
                 User.id.in_(unique_ids),
                 User.is_active.is_(True),
-                User.role == "TENANT_USER",
+                User.role == "ADMIN",
+                User.is_owner.is_(False),
             )
         ).all()
     )
@@ -1001,12 +1011,8 @@ def assign_users_to_booking(
     missing = [uid for uid in unique_ids if uid not in found]
     if missing:
         raise BusinessRuleError(
-            "One or more selected RM users are inactive, invalid, or not assignable.",
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    if booking.created_by_user_id in found:
-        raise BusinessRuleError(
-            "The booking owner cannot also be assigned as an RM user.",
+            "One or more selected Release Managers are inactive, invalid, or not assignable. "
+            "The protected Owner account cannot be assigned.",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
@@ -1039,13 +1045,27 @@ def user_is_assigned(booking: DeploymentBooking, user_id: int) -> bool:
 def start_work(
     db: Session, booking: DeploymentBooking, change_number: str, actor: Actor
 ) -> DeploymentBooking:
-    """Assigned RM user supplies the separate Change No. and starts work."""
+    """An assigned Release Manager supplies the separate Change No. and starts work."""
     assert_booking_mutable(db, booking, actor)
     if booking.status == BookingStatus.CANCELLED.value:
         raise BusinessRuleError("A cancelled booking cannot be started.")
-    if not actor.is_admin:
-        if actor.user_id is None or not user_is_assigned(booking, actor.user_id):
-            raise BusinessRuleError("Only an assigned RM user can start work on this booking.", status.HTTP_403_FORBIDDEN)
+
+    account = db.get(User, actor.user_id) if actor.user_id is not None else None
+    is_release_manager = (
+        account is not None
+        and account.is_active
+        and account.role == "ADMIN"
+        and not account.is_owner
+    )
+    if (
+        not is_release_manager
+        or actor.user_id is None
+        or not user_is_assigned(booking, actor.user_id)
+    ):
+        raise BusinessRuleError(
+            "Only an assigned Release Manager can start work on this booking.",
+            status.HTTP_403_FORBIDDEN,
+        )
     before = {
         "change_number": booking.change_number,
         "status": booking.status,

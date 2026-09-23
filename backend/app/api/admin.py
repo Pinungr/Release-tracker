@@ -116,7 +116,7 @@ def _assert_may_manage(db: Session, target: User, admin: AdminPrincipal, action:
     if target.role == "ADMIN" and not _is_owner(db, admin):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            f"Only the owner can have an administrator account {action}.",
+            f"Only the Owner can have a Release Manager account {action}.",
         )
 
 
@@ -379,7 +379,7 @@ def update_user_role(
     if role == "ADMIN" and not _is_owner(db, admin):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Only the owner can promote an account to administrator.",
+            "Only the Owner can grant Release Manager access.",
         )
     if role != "ADMIN":
         _assert_not_last_active_admin(db, user, admin)

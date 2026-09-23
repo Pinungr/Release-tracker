@@ -13,6 +13,7 @@ from ..models import (
     BookingAttachment,
     BookingStatus,
     DeploymentBooking,
+    User,
     DocumentCategory,
     Technology,
 )
@@ -95,6 +96,13 @@ def booking_detail(
     mutable = active and date_mutable and (is_admin or not base["is_locked"])
     owner = user_id is not None and user_id == booking.created_by_user_id
     assigned = user_id is not None and booking_service.user_is_assigned(booking, user_id)
+    account = db.get(User, user_id) if user_id is not None else None
+    is_release_manager = (
+        account is not None
+        and account.is_active
+        and account.role == "ADMIN"
+        and not account.is_owner
+    )
     can_edit = mutable and (is_admin or (owner and not booking.is_emergency))
     return BookingDetail(
         **base,
@@ -119,7 +127,7 @@ def booking_detail(
         can_cancel=can_edit,
         can_reschedule=can_edit,
         can_assign_rm=mutable and is_admin,
-        can_start_work=mutable and (is_admin or assigned),
+        can_start_work=mutable and assigned and is_release_manager,
         can_download_attachments=is_admin or owner or assigned,
         can_manage_attachments=can_edit,
         slot_label=slot_label,

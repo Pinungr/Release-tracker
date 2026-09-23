@@ -44,12 +44,12 @@ describe('authoritative booking permissions', () => {
     ['CURRENT_DATE', 'This booking is locked because deployments scheduled for today are read-only.'],
     ['PAST_DATE', 'This booking is historical and cannot be modified.'],
     ['AUTOMATIC_DATE_FREEZE', 'This deployment date is inside the protected scheduling window.'],
-    ['MANUAL_SLOT_FREEZE', 'This slot was manually frozen by an administrator.'],
+    ['MANUAL_SLOT_FREEZE', 'This slot was manually frozen by the Owner or a Release Manager.'],
   ] as const)('hides modification controls and explains %s for Admin', (reason, message) => {
     show(booking({ lock_reason: reason, is_past: reason === 'PAST_DATE', is_locked: true, can_edit: false, can_cancel: false,
       can_reschedule: false, can_assign_rm: false, can_start_work: false, can_manage_attachments: false }))
     expect(screen.getByText(message)).toBeTruthy()
-    for (const name of [/^Edit$/, /^Reschedule$/, /^Cancel$/, /Save RM assignment/, /^Start work$/, /Upload|Replace|Remove/]) {
+    for (const name of [/^Edit$/, /^Reschedule$/, /^Cancel$/, /Save Release Manager assignment/, /^Start work$/, /Upload|Replace|Remove/]) {
       expect(screen.queryByRole('button', { name })).toBeNull()
     }
     if (reason !== 'MANUAL_SLOT_FREEZE') expect(screen.queryByText(/This slot was manually frozen/)).toBeNull()
@@ -63,14 +63,16 @@ describe('authoritative booking permissions', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
   })
 
-  it('lets assigned RM download while withholding document mutations', async () => {
-    show(booking({ can_edit: false, can_cancel: false, can_reschedule: false,
-      can_assign_rm: false, can_manage_attachments: false }), false, 2)
+  it('shows start-work actions only when the Release Manager is assigned', async () => {
+    show(booking({ can_assign_rm: false, can_start_work: true }), true, 2)
     fireEvent.click(screen.getByRole('button', { name: 'Download evidence.pdf' }))
     await waitFor(() => expect(api.downloadAttachment).toHaveBeenCalledWith(1, 10, 'evidence.pdf'))
-    expect(screen.queryByRole('button', { name: /Upload|Replace|Remove/ })).toBeNull()
-    expect(screen.getByText('Add the Change Number when RM work begins. Jira reference, if provided during booking, remains separate.')).toBeTruthy()
-    expect(screen.getByText('Not provided')).toBeTruthy()
+    expect(screen.getByText('An assigned Release Manager adds the Change Number when work begins. The Jira reference remains separate.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start work' })).toBeTruthy()
+
+    cleanup()
+    show(booking({ can_assign_rm: false, can_start_work: false }), true, 2)
+    expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
   })
 
   it('renders only API-provided normal reschedule destinations', async () => {

@@ -130,6 +130,14 @@ def other_user(anon: TestClient) -> TestClient:
         client.close()
 
 
+def promote_to_release_manager(owner: TestClient, user_client: TestClient) -> int:
+    """Promote an existing tenant user to the non-owner ADMIN role shown as Release Manager."""
+    user_id = user_client.get("/api/auth/me").json()["id"]
+    response = owner.patch(f"/api/admin/users/{user_id}/role", json={"role": "ADMIN"})
+    assert response.status_code == 200, response.text
+    return user_id
+
+
 def create_tenant(admin: TestClient, name: str, code: str | None = None) -> int:
     response = admin.post(
         "/api/admin/tenants",

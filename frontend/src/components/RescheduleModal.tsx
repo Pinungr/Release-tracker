@@ -137,7 +137,7 @@ export function RescheduleModal({
         <p className="text-sm text-ink-muted">
           {onMoveEmergency
             ? 'Pick the new deployment date for this emergency change.'
-            : 'Only an administrator can move an emergency change.'}
+            : 'Only the Owner or a Release Manager can move an emergency change.'}
         </p>
       </Modal>
     )

@@ -67,7 +67,7 @@ export function BookingDetailsDrawer({
     CURRENT_DATE: 'This booking is locked because deployments scheduled for today are read-only.',
     PAST_DATE: 'This booking is historical and cannot be modified.',
     AUTOMATIC_DATE_FREEZE: 'This deployment date is inside the protected scheduling window.',
-    MANUAL_SLOT_FREEZE: 'This slot was manually frozen by an administrator.',
+    MANUAL_SLOT_FREEZE: 'This slot was manually frozen by the Owner or a Release Manager.',
     NONE: '',
   }
   const isAssigned = booking !== null && userId !== null && booking.assigned_users.some((u) => u.user_id === userId)
@@ -77,23 +77,23 @@ export function BookingDetailsDrawer({
     setChangeNumber(booking?.change_number ?? '')
     setWorkError(null)
     if (open && booking?.can_assign_rm) {
-      void api.listUsers().then((users) => setAssignmentUsers(users.filter((u) => u.is_active && u.role === 'TENANT_USER' && u.id !== booking?.created_by_user_id))).catch(() => setAssignmentUsers([]))
+      void api.listUsers().then((users) => setAssignmentUsers(users.filter((u) => u.is_active && u.role === 'ADMIN' && !u.is_owner))).catch(() => setAssignmentUsers([]))
     }
   }, [booking?.id, booking?.change_number, open, isAdmin])
 
   async function saveAssignments() {
     if (!booking || !booking.can_assign_rm) return
     if (!selectedAssignees.length) {
-      toast.error('Select at least one RM user.')
+      toast.error('Select at least one Release Manager.')
       return
     }
     setAssignmentBusy(true)
     try {
       await api.assignBookingUsers(booking.id, selectedAssignees)
-      toast.success('RM users assigned.', booking.booking_reference)
+      toast.success('Release Managers assigned.', booking.booking_reference)
       onChanged()
     } catch (error) {
-      toast.error('Could not assign RM users', error instanceof ApiError ? error.message : 'Please try again.')
+      toast.error('Could not assign Release Managers', error instanceof ApiError ? error.message : 'Please try again.')
     } finally {
       setAssignmentBusy(false)
     }
@@ -222,17 +222,17 @@ export function BookingDetailsDrawer({
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-ink-muted">
                 {hasLockReason && !canAct
-                  ? 'Past, current and protected deployment dates are read-only for everyone, including administrators.'
+                  ? 'Past, current and protected deployment dates are read-only for everyone, including the Owner and Release Managers.'
                   : isAdmin
-                    ? 'Administrator: actions are available only on editable future records.'
+                    ? 'Owner/Release Manager: actions are available only on editable future records.'
                     : ownsBooking
                     ? 'Verified as the booking owner for this session.'
                     : isAssigned
-                      ? 'Assigned RM user: authorized documents are available to download; work actions depend on date protection.'
-                      : 'Only the booking owner or an assigned RM user can access this change record.'}
+                      ? 'Assigned Release Manager: authorized documents are available to download; work actions depend on date protection.'
+                      : 'Only the booking owner or an assigned Release Manager can access this change record.'}
               </p>
-              {/* Owner and administrator get Edit | Reschedule | Cancel.
-                  Assigned RM work and download permissions are separate. */}
+              {/* Owner and Release Managers get Edit | Reschedule | Cancel according to
+                  record/date permissions. Start-work requires an explicit Release Manager assignment. */}
               <div className="flex gap-2">
                 {canAct ? (
                   <>
@@ -320,7 +320,7 @@ export function BookingDetailsDrawer({
                 )}
               </Row>
               <Row label="Change No.">{booking.change_number ?? 'Pending RM update'}</Row>
-              <Row label="Assigned RM users">
+              <Row label="Assigned Release Managers">
                 {booking.assigned_users.length ? booking.assigned_users.map((u) => u.full_name).join(', ') : 'Not assigned'}
               </Row>
               <Row label="Requester">
@@ -372,9 +372,12 @@ export function BookingDetailsDrawer({
 
             {booking.can_assign_rm ? (
               <section className="rounded-xl border border-line bg-canvas/50 p-4">
-                <h3 className="text-sm font-semibold text-ink">Assign RM team users</h3>
-                <p className="mt-1 text-xs text-ink-muted">Assigned users can open this CRQ and provide the separate Change No. when they start work.</p>
+                <h3 className="text-sm font-semibold text-ink">Assign Release Managers</h3>
+                <p className="mt-1 text-xs text-ink-muted">Only assigned Release Managers can start this CRQ and provide the separate Change No. The protected Owner account cannot be assigned.</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {assignmentUsers.length === 0 ? (
+                    <p className="text-xs text-ink-muted sm:col-span-2">No active Release Managers are available. The Owner can promote a tenant user from User management.</p>
+                  ) : null}
                   {assignmentUsers.map((user) => (
                     <label key={user.id} className="flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-sm">
                       <input
@@ -388,15 +391,15 @@ export function BookingDetailsDrawer({
                 </div>
                 <button type="button" className="btn-primary mt-3" disabled={assignmentBusy || !selectedAssignees.length} onClick={() => void saveAssignments()}>
                   {assignmentBusy ? <Spinner className="size-4" /> : null}
-                  Save RM assignment
+                  Save Release Manager assignment
                 </button>
               </section>
             ) : null}
 
             {booking.can_start_work ? (
               <section className="rounded-xl border border-line bg-canvas/50 p-4">
-                <h3 className="text-sm font-semibold text-ink">Start RM work</h3>
-                <p className="mt-1 text-xs text-ink-muted">Add the Change Number when RM work begins. Jira reference, if provided during booking, remains separate.</p>
+                <h3 className="text-sm font-semibold text-ink">Start work</h3>
+                <p className="mt-1 text-xs text-ink-muted">An assigned Release Manager adds the Change Number when work begins. The Jira reference remains separate.</p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <input
                     className="field flex-1"
@@ -436,7 +439,7 @@ export function BookingDetailsDrawer({
           open={moveOpen}
           onClose={() => setMoveOpen(false)}
           title="Move emergency CRQ"
-          description="Move an active CRQ to an unprotected future date. Past, current and protected dates are read-only for administrators too."
+          description="Move an active CRQ to an unprotected future date. Past, current and protected dates are read-only for the Owner and Release Managers too."
           size="md"
           footer={
             <div className="flex justify-end gap-2">

@@ -227,7 +227,7 @@ export interface Schedule {
   settings: PublicSettings
 }
 
-/** A row in the admin user-management table. */
+/** A row in Owner / Release Manager user management. */
 export interface ManagedUser {
   id: number
   full_name: string
@@ -264,7 +264,7 @@ export interface AuthUser {
   username: string
   email: string | null
   role: 'TENANT_USER' | 'ADMIN'
-  /** Only the owner may manage other administrators. */
+  /** Only the Owner may manage other Release Manager accounts. */
   is_owner?: boolean
   must_change_password?: boolean
 }

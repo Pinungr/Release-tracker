@@ -238,7 +238,7 @@ export function BookingDrawer({
         isEmergency ? (
           <span className="badge bg-orange-100 text-orange-800 ring-1 ring-orange-200">
             <Siren className="size-3" />
-            Emergency change · admin only
+            Emergency change · Owner / Release Manager only
           </span>
         ) : (
           <span className="badge bg-brand-50 text-brand-700">Production deployment</span>

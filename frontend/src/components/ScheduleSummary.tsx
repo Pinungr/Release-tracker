@@ -79,7 +79,7 @@ export function ScheduleSummary({ summary, myBookingCount, onShowMine }: Schedul
       <Card
         label="Emergency CRs"
         value={String(summary.emergency_changes)}
-        hint="Admin-only queue"
+        hint="Owner / Release Manager queue"
         icon={<Siren className="size-4 text-orange-600" />}
         tone="bg-orange-50"
       />
