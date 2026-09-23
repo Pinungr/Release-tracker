@@ -122,7 +122,6 @@ def run() -> None:
                     name="Indian Public Holiday",
                     description="No production deployments available.",
                     is_full_day=True,
-                    allow_emergency=True,
                 )
             )
 

@@ -174,9 +174,7 @@ def _slot_state(
 def schedule_response(
     db: Session, any_day: date, *, is_admin: bool = False
 ) -> ScheduleResponse:
-    sunday, plans, app_settings = schedule_service.resolve_week(
-        db, any_day, include_weekend=is_admin
-    )
+    sunday, plans, app_settings = schedule_service.resolve_week(db, any_day)
     end_of_view = plans[-1].day
     bookings = schedule_service.active_bookings_between(db, sunday, end_of_view)
     emergency_bookings = schedule_service.emergency_bookings_between(db, sunday, end_of_view)
@@ -246,8 +244,6 @@ def schedule_response(
                 is_past=plan.day < today,
                 holiday=HolidayOut.model_validate(plan.holiday) if plan.holiday else None,
                 custom_slot_count=plan.custom_slot_count,
-                configured_slots_total=plan.configured_slot_count,
-                regular_slots_available=sum(1 for slot in slot_views if slot.bookable),
                 regular_slots_total=day_regular_total,
                 regular_slots_used=day_regular_used,
                 slots=slot_views,
@@ -314,7 +310,5 @@ def settings_out(db: Session) -> dict:
         "booking_freeze_dates": s.booking_freeze_dates,
         "jira_required_at_booking": s.jira_required_at_booking,
         "max_file_size_mb": s.max_file_size_mb,
-        "emergency_changes_enabled": s.emergency_changes_enabled,
-        "require_admin_override_reason": s.require_admin_override_reason,
         "mandatory_documents": list(s.mandatory_documents),
     }

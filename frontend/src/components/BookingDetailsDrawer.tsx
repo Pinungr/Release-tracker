@@ -118,6 +118,20 @@ export function BookingDetailsDrawer({
     }
   }
 
+  async function markCompleted() {
+    if (!booking || !isAdmin || !booking.can_edit || booking.status !== 'BOOKED') return
+    setBusy(true)
+    try {
+      await api.setBookingStatus(booking.id, 'COMPLETED')
+      toast.success('Booking marked as completed.', booking.booking_reference)
+      onChanged()
+    } catch (error) {
+      toast.error('Could not update the status', error instanceof ApiError ? error.message : 'Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function cancel() {
     if (!booking) return
     setBusy(true)
@@ -234,6 +248,11 @@ export function BookingDetailsDrawer({
                       <Calendar className="size-4" />
                       Reschedule
                     </button> : null}
+                    {isAdmin && booking.status === 'BOOKED' ? (
+                      <button type="button" className="btn-secondary" disabled={busy} onClick={() => void markCompleted()}>
+                        Mark completed
+                      </button>
+                    ) : null}
                     {booking.can_cancel ? <button
                       type="button"
                       className="btn-danger"
@@ -284,7 +303,6 @@ export function BookingDetailsDrawer({
 
             <dl className="grid grid-cols-[9rem_1fr] gap-x-4">
               <Row label="Tenant">{booking.tenant_name}</Row>
-              <Row label="Environment">{booking.environment}</Row>
               <Row label="Technology">{booking.technology}</Row>
               <Row label="Jira No.">
                 {booking.jira_url ? (

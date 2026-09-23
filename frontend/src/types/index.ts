@@ -150,7 +150,6 @@ export interface Holiday {
   name: string
   description: string | null
   is_full_day: boolean
-  allow_emergency: boolean
 }
 
 /** One destination offered by the reschedule picker. */
@@ -181,8 +180,6 @@ export interface DayView {
   holiday: Holiday | null
   /** Set only when an administrator added/removed slots on this date. */
   custom_slot_count: number | null
-  configured_slots_total: number
-  regular_slots_available: number
   regular_slots_total: number
   regular_slots_used: number
   slots: SlotView[]
@@ -210,7 +207,7 @@ export interface DocumentCatalogEntry {
 
 export interface PublicSettings {
   weekly_booking_limit: number
-  /** Number of upcoming valid deployment dates frozen for normal users. Today is always frozen. */
+  /** Number of upcoming valid deployment dates protected for everyone. Today is always protected. */
   booking_freeze_dates: number
   jira_required_at_booking: boolean
   max_file_size_mb: number
@@ -278,8 +275,6 @@ export interface AdminSettings {
   booking_freeze_dates: number
   jira_required_at_booking: boolean
   max_file_size_mb: number
-  emergency_changes_enabled: boolean
-  require_admin_override_reason: boolean
   mandatory_documents: DocumentCategory[]
 }
 
@@ -310,11 +305,7 @@ export interface BookingFormValues {
   tenant_id: string
   jira_number: string
   jira_url: string
-  environment: string
   technology: string
-  requester_name: string
-  requester_email: string
-  requester_phone: string
   verifier_name: string
   verifier_email: string
   git_repository: string
@@ -327,7 +318,6 @@ export interface BookingFormValues {
   emergency_approval_reference: string
   emergency_approver: string
   business_justification: string
-  override_weekly_limit: boolean
   override_reason: string
 }
 
@@ -338,6 +328,5 @@ export type FilterKey =
   | 'MINE'
   | 'EMERGENCY'
   | 'LOCKED'
-  | 'IN_PROGRESS'
   | 'MISSING_DOCS'
   | `TECH:${string}`

@@ -92,9 +92,7 @@ def test_admin_automatically_bypasses_the_weekly_limit(admin, user, tenant, next
 def test_a_tenant_user_cannot_override_the_limit(user, tenant, next_monday):
     create_booking(user, tenant, next_monday, 1)
     create_booking(user, tenant, next_monday, 2)
-    response = post_booking(user, booking_payload(
-            tenant, next_monday, 3, override_weekly_limit=True, override_reason="please"
-        ),)
+    response = post_booking(user, booking_payload(tenant, next_monday, 3))
     assert response.status_code == 409
 
 

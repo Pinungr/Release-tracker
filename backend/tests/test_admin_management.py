@@ -146,7 +146,6 @@ def test_settings_keep_the_poc_defaults(admin):
     assert settings["regular_slots_per_day"] == 4
     assert settings["weekly_booking_limit"] == 2
     assert settings["max_file_size_mb"] == 20
-    assert settings["emergency_changes_enabled"] is True
 
 
 def test_default_slots_use_overnight_window(admin):
@@ -274,22 +273,8 @@ def test_admin_cannot_move_a_change_onto_an_occupied_slot(admin, user, tenant, o
     assert response.status_code == 409
 
 
-def test_admin_can_reassign_a_change_to_another_tenant(admin, user, tenant, other_tenant, next_monday):
-    booking = create_booking(user, tenant, next_monday, 1)
-    response = admin.post(
-        f"/api/admin/bookings/{booking['id']}/reassign",
-        json={"tenant_id": other_tenant, "verifier_name": "Siva Naga Raju"},
-    )
-    assert response.status_code == 200
-    assert response.json()["tenant_id"] == other_tenant
-    assert response.json()["verifier_name"] == "Siva Naga Raju"
 
 
-def test_admin_can_hard_delete_a_change(admin, user, tenant, next_monday):
-    booking = create_booking(user, tenant, next_monday, 1)
-    assert admin.delete(f"/api/admin/bookings/{booking['id']}", params={"confirmation": booking["booking_reference"]}).status_code == 204
-    assert admin.get(f"/api/bookings/{booking['id']}").status_code == 404
-    assert any(e["event_type"] == "BOOKING_DELETED" for e in admin.get("/api/admin/audit").json())
 
 
 def test_derived_and_future_statuses_cannot_be_set(admin, user, tenant, next_monday):
@@ -300,13 +285,6 @@ def test_derived_and_future_statuses_cannot_be_set(admin, user, tenant, next_mon
         )
         assert response.status_code == 400, value
 
-
-def test_admin_booking_list_can_include_cancelled(admin, user, tenant, next_monday):
-    booking = create_booking(user, tenant, next_monday, 1)
-    user.request("DELETE", f"/api/bookings/{booking['id']}", json={})
-
-    assert admin.get("/api/admin/bookings").json() == []
-    assert len(admin.get("/api/admin/bookings?include_cancelled=true").json()) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -353,7 +331,7 @@ def test_past_booking_is_read_only_even_for_admin(
     monkeypatch.setattr(booking_service, "today_local", lambda: historical_today)
     monkeypatch.setattr(presenters, "today_local", lambda: historical_today)
 
-    detail = admin.get(f"/api/admin/bookings/{booking['id']}")
+    detail = admin.get(f"/api/bookings/{booking['id']}")
     assert detail.status_code == 200
     assert detail.json()["is_past"] is True
     assert detail.json()["can_edit"] is False
@@ -386,12 +364,6 @@ def test_past_booking_is_read_only_even_for_admin(
     )
     assert start_work.status_code == 423
 
-    reassign = admin.post(
-        f"/api/admin/bookings/{booking['id']}/reassign",
-        json={"requester_name": "Historical Edit Attempt"},
-    )
-    assert reassign.status_code == 423
-
     status_change = admin.post(
         f"/api/admin/bookings/{booking['id']}/status",
         json={"status": "COMPLETED", "override_reason": "historical test"},
@@ -407,9 +379,3 @@ def test_past_booking_is_read_only_even_for_admin(
         files={"file": ("plan.pdf", io.BytesIO(b"data"), "application/pdf")},
     )
     assert upload.status_code == 423
-
-    hard_delete = admin.delete(f"/api/admin/bookings/{booking['id']}", params={"confirmation": booking["booking_reference"]})
-    assert hard_delete.status_code == 423
-
-    # The record is still retained as historical data.
-    assert admin.get(f"/api/admin/bookings/{booking['id']}").status_code == 200

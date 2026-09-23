@@ -14,7 +14,7 @@ caller; the API layer never re-implements any of these rules.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, time, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -90,10 +90,6 @@ AUTOMATIC_FREEZE_MESSAGE = (
 MANUAL_FREEZE_MESSAGE = "This deployment slot has been manually frozen by an administrator."
 
 
-def is_past_deployment(day: date) -> bool:
-    return day < today_local()
-
-
 def is_current_or_past_deployment(day: date) -> bool:
     return day <= today_local()
 
@@ -162,15 +158,6 @@ def is_slot_manually_frozen(db: Session, day: date, slot_number: int | None) -> 
             SlotFreeze.freeze_date == day, SlotFreeze.slot_number == slot_number
         )
     ) is not None
-
-
-def is_date_frozen_for_owner(db: Session, day: date) -> bool:
-    return is_date_automatically_frozen(db, day)
-
-
-def lock_deadline(db: Session, booking: DeploymentBooking, app_settings: AppSettings | None = None) -> None:
-    """Compatibility shim: locking is date-based, not time-based."""
-    return None
 
 
 def booking_lock_reason(db: Session, booking: DeploymentBooking, app_settings: AppSettings | None = None) -> str:
@@ -379,7 +366,6 @@ def _validate_weekly_limit(
     actor: Actor,
     app_settings: AppSettings,
     weekly_limit: int,
-    override: bool,
     exclude_id: int | None = None,
 ) -> bool:
     """Returns True when an admin override was actually applied."""
@@ -506,13 +492,16 @@ def create_booking(
             if tenant.weekly_booking_limit is not None
             else app_settings.weekly_booking_limit
         ),
-        override=payload.override_weekly_limit,
     )
     override_reason = (payload.override_reason or "").strip() if payload.manual_override else None
     if override_applied:
         override_reason = (payload.override_reason or "").strip() or (
             "Administrator automatic override: tenant weekly booking limit."
         )
+
+    requester = db.get(User, actor.user_id) if actor.user_id is not None else None
+    requester_name = requester.full_name if requester is not None else (actor.admin_username or "System")
+    requester_email = requester.email if requester is not None else (actor.requester_email or "")
 
     booking = DeploymentBooking(
         booking_reference=next_booking_reference(db, payload.deployment_date),
@@ -523,11 +512,11 @@ def create_booking(
         slot_number=None if is_emergency else payload.slot_number,
         jira_number=jira_number,
         jira_url=payload.jira_url,
-        environment=payload.environment or "PROD",
+        environment="PROD",
         technology=payload.technology.value,
-        requester_name=payload.requester_name,
-        requester_email=str(payload.requester_email) if payload.requester_email else "",
-        requester_phone=payload.requester_phone or None,
+        requester_name=requester_name,
+        requester_email=requester_email,
+        requester_phone=None,
         verifier_name=payload.verifier_name,
         verifier_email=str(payload.verifier_email) if payload.verifier_email else "",
         git_repository=payload.git_repository,
@@ -621,8 +610,7 @@ def update_booking(
                 if tenant.weekly_booking_limit is not None
                 else app_settings.weekly_booking_limit
             ),
-            override=payload.override_weekly_limit,
-            exclude_id=booking.id,
+                exclude_id=booking.id,
         )
         if applied:
             override_reason = (payload.override_reason or "").strip() or (
@@ -637,11 +625,7 @@ def update_booking(
     booking.slot_number = None if booking.is_emergency else new_slot_number
     booking.jira_number = jira_number
     booking.jira_url = payload.jira_url
-    booking.environment = payload.environment or "PROD"
     booking.technology = payload.technology.value
-    booking.requester_name = payload.requester_name
-    booking.requester_email = str(payload.requester_email) if payload.requester_email else ""
-    booking.requester_phone = payload.requester_phone or None
     booking.verifier_name = payload.verifier_name
     booking.verifier_email = str(payload.verifier_email) if payload.verifier_email else ""
     booking.git_repository = payload.git_repository
@@ -914,7 +898,6 @@ def reschedule_booking(
         actor=actor,
         app_settings=app_settings,
         weekly_limit=_effective_weekly_limit(tenant, app_settings),
-        override=True,
         exclude_id=booking.id,
     )
     if limit_overridden:

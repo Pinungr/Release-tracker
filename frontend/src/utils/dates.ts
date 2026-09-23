@@ -75,21 +75,3 @@ export function formatTimestamp(utcIso: string | null, timeZone: string): string
 }
 
 /** Human countdown used on the lock tooltip, e.g. `in 2 days` / `6 hours ago`. */
-export function relativeToNow(utcIso: string | null): string {
-  if (!utcIso) return ''
-  const stamp = utcIso.endsWith('Z') ? utcIso : `${utcIso}Z`
-  const diffMs = new Date(stamp).getTime() - Date.now()
-  if (Number.isNaN(diffMs)) return ''
-  const units: [Intl.RelativeTimeFormatUnit, number][] = [
-    ['day', 86_400_000],
-    ['hour', 3_600_000],
-    ['minute', 60_000],
-  ]
-  const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-  for (const [unit, ms] of units) {
-    if (Math.abs(diffMs) >= ms || unit === 'minute') {
-      return formatter.format(Math.round(diffMs / ms), unit)
-    }
-  }
-  return ''
-}

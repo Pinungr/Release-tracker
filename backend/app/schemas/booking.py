@@ -37,11 +37,7 @@ class BookingBase(BaseModel):
     tenant_id: int = Field(ge=1)
     jira_number: Annotated[str | None, Field(default=None, min_length=3, max_length=64)] = None
     jira_url: Annotated[str | None, Field(default=None, max_length=500)] = None
-    environment: Annotated[str, Field(default="PROD", max_length=32)] = "PROD"
     technology: Technology
-    requester_name: ShortText
-    requester_email: EmailStr | None = None
-    requester_phone: Annotated[str | None, Field(default=None, max_length=40)] = None
     verifier_name: ShortText
     verifier_email: EmailStr | None = None
     git_repository: Annotated[str, Field(max_length=500)]
@@ -83,7 +79,6 @@ class BookingCreate(BookingBase):
     is_emergency: bool = False
     #: Administrator-only knobs; rejected for TENANT_USER callers.
     manual_override: bool = False
-    override_weekly_limit: bool = False
     override_reason: str | None = Field(default=None, max_length=500)
 
 class BookingUpdate(BookingBase):
@@ -92,7 +87,6 @@ class BookingUpdate(BookingBase):
     deployment_date: date | None = None
     slot_number: int | None = Field(default=None, ge=1, le=50)
     manual_override: bool = False
-    override_weekly_limit: bool = False
     override_reason: str | None = Field(default=None, max_length=500)
 
 
@@ -245,7 +239,6 @@ class HolidayOut(BaseModel):
     name: str
     description: str | None
     is_full_day: bool
-    allow_emergency: bool
 
 
 class SlotOptionOut(BaseModel):
@@ -274,8 +267,6 @@ class DayView(BaseModel):
     holiday: HolidayOut | None
     #: Set only when an administrator added/removed slots on this date.
     custom_slot_count: int | None
-    configured_slots_total: int
-    regular_slots_available: int
     regular_slots_total: int
     regular_slots_used: int
     slots: list[SlotView]

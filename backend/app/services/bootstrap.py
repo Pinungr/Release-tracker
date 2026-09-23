@@ -18,10 +18,6 @@ DEFAULT_SLOT_END = time(5, 0)
 DEFAULT_SLOT_COUNT = 4
 _SLOT_WINDOW_MARKER = "slot_default_window_21_05_applied"
 
-DEFAULT_SLOTS = [
-    (number, f"Slot {number}", DEFAULT_SLOT_START, DEFAULT_SLOT_END)
-    for number in range(1, DEFAULT_SLOT_COUNT + 1)
-]
 
 
 def ensure_regular_slot_count(db: Session, required_count: int) -> None:

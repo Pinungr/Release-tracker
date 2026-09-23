@@ -15,8 +15,6 @@ DEFAULTS: dict[str, object] = {
     "booking_freeze_dates": 2,
     "jira_required_at_booking": False,
     "max_file_size_mb": 20,
-    "emergency_changes_enabled": True,
-    "require_admin_override_reason": True,
     "mandatory_documents": [
         DocumentCategory.TEST_RESULTS.value,
         DocumentCategory.INVENTORY.value,
@@ -27,7 +25,7 @@ DEFAULTS: dict[str, object] = {
 }
 
 INT_KEYS = {"regular_slots_per_day", "weekly_booking_limit", "booking_freeze_dates", "max_file_size_mb"}
-BOOL_KEYS = {"emergency_changes_enabled", "require_admin_override_reason", "jira_required_at_booking"}
+BOOL_KEYS = {"jira_required_at_booking"}
 LIST_KEYS = {"mandatory_documents"}
 
 LIMITS = {
@@ -45,8 +43,6 @@ class AppSettings:
     booking_freeze_dates: int
     jira_required_at_booking: bool
     max_file_size_mb: int
-    emergency_changes_enabled: bool
-    require_admin_override_reason: bool
     mandatory_documents: list[str]
 
     @property

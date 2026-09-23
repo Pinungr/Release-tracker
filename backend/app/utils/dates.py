@@ -5,7 +5,7 @@ Sunday through Thursday. Friday and Saturday are non-deployment days.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from ..config import settings
@@ -33,25 +33,9 @@ def week_start(any_day: date) -> date:
     return any_day - timedelta(days=days_since_sunday)
 
 
-def working_week(sunday: date, *, include_weekend: bool = False) -> list[date]:
-    """The five normal deployment dates: Sunday through Thursday.
-
-    ``include_weekend`` is retained for API compatibility; Friday/Saturday are
-    never normal deployment rows.
-    """
+def working_week(sunday: date) -> list[date]:
+    """The five normal deployment dates: Sunday through Thursday."""
     return [sunday + timedelta(days=i) for i in range(5)]
-
-
-def local_datetime(day: date, at: time) -> datetime:
-    return datetime.combine(day, at, tzinfo=LOCAL_TZ)
-
-
-def to_utc_naive(aware: datetime) -> datetime:
-    return aware.astimezone(timezone.utc).replace(tzinfo=None)
-
-
-def slot_start_utc(day: date, start: time) -> datetime:
-    return to_utc_naive(local_datetime(day, start))
 
 
 def format_day(day: date) -> str:
@@ -62,7 +46,7 @@ def format_time(at: time) -> str:
     return at.strftime("%I:%M %p")
 
 
-def format_week_range(sunday: date, *, include_weekend: bool = False) -> str:
+def format_week_range(sunday: date) -> str:
     end = sunday + timedelta(days=4)
     if sunday.month == end.month:
         return f"{sunday.day:02d} - {end.day:02d} {end.strftime('%b')} {end.year}"

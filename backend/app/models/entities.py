@@ -189,7 +189,6 @@ class DeploymentBooking(Base):
     # The API/UI expose it as ``jira_number`` so it cannot be confused with
     # the separate Change No. that RM users add after assignment.
     jira_number: Mapped[str | None] = mapped_column("jira_change", String(64), nullable=True)
-    jira_task: Mapped[str | None] = mapped_column(String(64), nullable=True)  # legacy, no longer exposed
     jira_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     change_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     work_started_by_user_id: Mapped[int | None] = mapped_column(
@@ -296,6 +295,7 @@ class Holiday(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_full_day: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Legacy storage column retained for schema compatibility; emergency policy no longer reads it.
     allow_emergency: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

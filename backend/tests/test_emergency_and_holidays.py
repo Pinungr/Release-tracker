@@ -116,13 +116,6 @@ def test_emergency_changes_are_never_reported_as_locked(admin, tenant, next_mond
     assert created["booking"]["is_locked"] is False
 
 
-def test_admin_emergency_bypasses_a_closed_date(admin, tenant, next_monday):
-    admin.put("/api/admin/settings", json={"emergency_changes_enabled": False})
-    board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
-    assert _day(board)["emergency_open"] is True
-
-    response = post_booking(admin, emergency_payload(tenant, next_monday))
-    assert response.status_code == 201, response.text
 
 
 def test_admin_can_schedule_emergency_on_a_weekend(admin, tenant, next_monday):
@@ -132,8 +125,10 @@ def test_admin_can_schedule_emergency_on_a_weekend(admin, tenant, next_monday):
 
     board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
     assert len(board["days"]) == 5  # normal board is Sunday-Thursday only
-    records = admin.get("/api/admin/bookings?include_cancelled=true").json()
-    assert any(item["deployment_date"] == saturday.isoformat() and item["is_emergency"] for item in records)
+    created = response.json()["booking"]
+    detail = admin.get(f"/api/bookings/{created['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["deployment_date"] == saturday.isoformat()
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +144,6 @@ def test_full_day_holiday_blocks_normal_changes(admin, user, tenant, next_monday
             "name": "Indian Public Holiday",
             "description": "No production deployments available.",
             "is_full_day": True,
-            "allow_emergency": True,
         },
     )
     assert created.status_code == 201, created.text
@@ -176,24 +170,13 @@ def test_admin_can_book_a_normal_slot_on_a_full_day_holiday(admin, tenant, next_
     assert response.status_code == 201, response.text
 
 
-def test_holiday_can_keep_the_emergency_queue_open(admin, tenant, next_monday):
+def test_holiday_does_not_close_the_admin_emergency_queue(admin, tenant, next_monday):
     admin.post(
         "/api/admin/holidays",
-        json={"holiday_date": next_monday.isoformat(), "name": "Festival", "allow_emergency": True},
+        json={"holiday_date": next_monday.isoformat(), "name": "Festival"},
     )
     board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
     assert _day(board)["emergency_open"] is True
-    assert post_booking(admin, emergency_payload(tenant, next_monday)).status_code == 201
-
-
-def test_admin_emergency_bypasses_holiday_emergency_closure(admin, tenant, next_monday):
-    admin.post(
-        "/api/admin/holidays",
-        json={"holiday_date": next_monday.isoformat(), "name": "Festival", "allow_emergency": False},
-    )
-    board = admin.get(f"/api/schedule?week={next_monday.isoformat()}").json()
-    assert _day(board)["emergency_open"] is True
-
     response = post_booking(admin, emergency_payload(tenant, next_monday))
     assert response.status_code == 201, response.text
 
@@ -298,15 +281,6 @@ def test_a_slot_holding_a_booking_cannot_be_removed(admin, user, tenant, next_mo
     assert "Slot 4 is booked" in response.json()["detail"]
 
 
-def test_day_capacity_can_be_reset_to_the_default(admin, user, next_monday):
-    tuesday = next_monday + timedelta(days=1)
-    admin.post(f"/api/admin/day-capacity/{tuesday.isoformat()}/remove-slot")
-    reset = admin.delete(f"/api/admin/day-capacity/{tuesday.isoformat()}")
-    assert reset.status_code == 200, reset.text
-    assert reset.json()["custom_slot_count"] is None
-
-    board = user.get(f"/api/schedule?week={next_monday.isoformat()}").json()
-    assert _day(board, 1)["regular_slots_total"] == 4
 
 
 def test_only_an_administrator_can_change_day_capacity(anon, user, next_monday):

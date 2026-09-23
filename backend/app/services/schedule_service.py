@@ -108,10 +108,6 @@ def resolve_day(
         custom_slot_count if custom_slot_count is not None else app_settings.regular_slots_per_day
     )
 
-    # Emergency changes are a separate per-date admin queue, never a slot, so
-    # per-date normal capacity has no bearing on whether they are open.
-    emergency_enabled = app_settings.emergency_changes_enabled
-
     full_day_holiday = holiday is not None and holiday.is_full_day
     outside_deployment_week = not is_deployment_weekday(day)
 
@@ -140,14 +136,10 @@ def resolve_day(
             )
         )
 
-    # Emergency changes are governed by the date, not by a slot.
+    # Emergency changes are an administrator-only queue. They are not governed
+    # by normal slot capacity or holiday settings; date protection is enforced
+    # by booking_service before any write.
     emergency_closed: str | None = None
-    if not emergency_enabled:
-        emergency_closed = "Emergency changes are disabled for this date."
-    elif outside_deployment_week:
-        emergency_closed = "Outside the Sunday-Thursday deployment week."
-    elif full_day_holiday and not holiday.allow_emergency:  # type: ignore[union-attr]
-        emergency_closed = "Emergency deployments are not permitted on this holiday."
 
     return DayPlan(
         day=day,
@@ -161,11 +153,9 @@ def resolve_day(
     )
 
 
-def resolve_week(
-    db: Session, any_day: date, *, include_weekend: bool = False
-) -> tuple[date, list[DayPlan], AppSettings]:
+def resolve_week(db: Session, any_day: date) -> tuple[date, list[DayPlan], AppSettings]:
     sunday = week_start(any_day)
-    days = working_week(sunday, include_weekend=include_weekend)
+    days = working_week(sunday)
     app_settings = get_app_settings(db)
     configs = slot_configurations(db)
     holidays = holidays_between(db, days[0], days[-1])

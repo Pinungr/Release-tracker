@@ -118,12 +118,7 @@ export function DaySchedule({
               ? isHistorical
                 ? 'This past/current date is read-only for everyone, including administrators.'
                 : 'Normal deployment slots are unavailable. The separate Admin emergency queue follows date protection.'
-              : <>
-                  No production deployments available.
-                  {day.holiday.allow_emergency
-                    ? ' Emergency changes remain open to administrators.'
-                    : ' Emergency changes are also closed.'}
-                </>}
+              : 'No production deployments available.'}
           </span>
         </div>
       ) : null}
@@ -165,6 +160,7 @@ export function DaySchedule({
         )}
       </div>
 
+      {(isAdmin || day.emergency_bookings.length > 0) ? (
       <section className="border-t border-orange-200 bg-orange-50/50 p-4" aria-label="Emergency change queue">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-bold text-orange-950">Emergency change queue</h3>
@@ -194,6 +190,8 @@ export function DaySchedule({
           </div>
         ) : <p className="mt-2 text-sm text-orange-900/70">No emergency changes scheduled for this date.</p>}
       </section>
+      ) : null}
+
     </section>
   )
 }

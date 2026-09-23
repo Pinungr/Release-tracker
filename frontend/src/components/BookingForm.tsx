@@ -10,11 +10,7 @@ export const EMPTY_BOOKING_VALUES: BookingFormValues = {
   tenant_id: '',
   jira_number: '',
   jira_url: '',
-  environment: 'PROD',
   technology: 'Databricks',
-  requester_name: '',
-  requester_email: '',
-  requester_phone: '',
   verifier_name: '',
   verifier_email: '',
   git_repository: '',
@@ -27,7 +23,6 @@ export const EMPTY_BOOKING_VALUES: BookingFormValues = {
   emergency_approval_reference: '',
   emergency_approver: '',
   business_justification: '',
-  override_weekly_limit: false,
   override_reason: '',
 }
 
@@ -37,11 +32,7 @@ export function valuesFromBooking(booking: BookingDetail): BookingFormValues {
     tenant_id: String(booking.tenant_id),
     jira_number: booking.jira_number ?? '',
     jira_url: booking.jira_url ?? '',
-    environment: booking.environment,
     technology: booking.technology,
-    requester_name: booking.requester_name,
-    requester_email: booking.requester_email,
-    requester_phone: booking.requester_phone ?? '',
     verifier_name: booking.verifier_name,
     verifier_email: booking.verifier_email,
     git_repository: booking.git_repository,
@@ -75,8 +66,6 @@ export function validateBookingForm(
   const required: (keyof BookingFormValues)[] = [
     'tenant_id',
     'technology',
-    'environment',
-    'requester_name',
     'verifier_name',
     'git_repository',
     'justification',
@@ -87,9 +76,6 @@ export function validateBookingForm(
     if (!String(values[field] ?? '').trim()) errors[field] = 'This field is required.'
   }
 
-  if (values.requester_email && !EMAIL.test(values.requester_email)) {
-    errors.requester_email = 'Enter a valid email address.'
-  }
   if (values.verifier_email && !EMAIL.test(values.verifier_email)) {
     errors.verifier_email = 'Enter a valid email address.'
   }
@@ -123,11 +109,7 @@ export function toBookingPayload(
     tenant_id: values.tenant_id ? Number(values.tenant_id) : null,
     jira_number: optional(values.jira_number),
     jira_url: optional(values.jira_url),
-    environment: values.environment.trim() || 'PROD',
     technology: values.technology,
-    requester_name: values.requester_name.trim(),
-    requester_email: optional(values.requester_email),
-    requester_phone: optional(values.requester_phone),
     verifier_name: values.verifier_name.trim(),
     verifier_email: optional(values.verifier_email),
     git_repository: values.git_repository.trim(),
@@ -231,15 +213,6 @@ export function BookingForm({
           className="sm:col-span-2"
         />
         <TextField
-          label="Deployment environment"
-          name="environment"
-          required
-          value={values.environment}
-          onChange={(v) => onChange('environment', v)}
-          error={errors.environment}
-          maxLength={32}
-        />
-        <TextField
           label="Git repository URL"
           name="git_repository"
           required
@@ -250,36 +223,7 @@ export function BookingForm({
         />
       </FormSection>
 
-      <FormSection title="People" description="Who is requesting the change and who verifies it.">
-        <TextField
-          label="Requester name"
-          name="requester_name"
-          required
-          value={values.requester_name}
-          onChange={(v) => onChange('requester_name', v)}
-          error={errors.requester_name}
-          autoComplete="name"
-        />
-        <TextField
-          label="Requester email"
-          name="requester_email"
-          type="email"
-          value={values.requester_email}
-          onChange={(v) => onChange('requester_email', v)}
-          error={errors.requester_email}
-          hint="Optional."
-          autoComplete="email"
-        />
-        <TextField
-          label="Requester phone"
-          name="requester_phone"
-          type="tel"
-          value={values.requester_phone}
-          onChange={(v) => onChange('requester_phone', v)}
-          error={errors.requester_phone}
-          hint="Optional."
-          autoComplete="tel"
-        />
+      <FormSection title="Verification" description="The requester is taken automatically from the signed-in account.">
         <TextField
           label="Verifier name"
           name="verifier_name"

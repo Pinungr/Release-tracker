@@ -215,9 +215,6 @@ export const api = {
   removeDaySlot: (day: string) =>
     request<DaySlotCapacity>(`/admin/day-capacity/${day}/remove-slot`, { method: 'POST' }),
 
-  resetDayCapacity: (day: string) =>
-    request<DaySlotCapacity>(`/admin/day-capacity/${day}`, { method: 'DELETE' }),
-
   freezeSlot: (freeze_date: string, slot_number: number, note?: string) =>
     request<{ id: number; freeze_date: string; slot_number: number; note: string | null }>(
       '/admin/slot-freezes',
@@ -227,17 +224,8 @@ export const api = {
   unfreezeSlot: (freeze_date: string, slot_number: number) =>
     request<void>(`/admin/slot-freezes/${freeze_date}/${slot_number}`, { method: 'DELETE' }),
 
-  listBookings: (includeCancelled = false) =>
-    request<BookingSummary[]>(`/admin/bookings?include_cancelled=${includeCancelled}`),
-
   moveBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingDetail>(`/admin/bookings/${id}/move`, { method: 'POST', body: json(payload) }),
-
-  reassignBooking: (id: number, payload: Record<string, unknown>) =>
-    request<BookingDetail>(`/admin/bookings/${id}/reassign`, {
-      method: 'POST',
-      body: json(payload),
-    }),
 
   assignBookingUsers: (id: number, user_ids: number[]) =>
     request<BookingDetail>(`/admin/bookings/${id}/assign-users`, {
@@ -250,8 +238,6 @@ export const api = {
       method: 'POST',
       body: json({ status, override_reason: overrideReason ?? null }),
     }),
-
-  deleteBooking: (id: number) => request<void>(`/admin/bookings/${id}`, { method: 'DELETE' }),
 
   getAudit: (bookingId?: number) =>
     request<AuditEvent[]>(`/admin/audit${bookingId ? `?booking_id=${bookingId}` : ''}`),

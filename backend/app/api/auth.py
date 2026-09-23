@@ -11,7 +11,6 @@ from ..models import User
 from ..security import (
     hash_secret,
     require_authenticated_user,
-    require_user,
     revoke_token,
     verify_secret,
 )

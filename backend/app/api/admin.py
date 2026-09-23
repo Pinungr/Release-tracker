@@ -13,7 +13,6 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..config import settings as runtime_settings
 from ..database import get_db
 from ..models import (
     ACTIVE_STATUSES,
@@ -30,15 +29,11 @@ from ..models import (
 from ..schemas import (
     AssignUsersRequest,
     AuditEventOut,
-    BookingCreate,
-    BookingCreated,
     BookingDetail,
-    BookingSummary,
     DaySlotCapacityOut,
     HolidayIn,
     HolidayOut,
     MoveBookingRequest,
-    ReassignBookingRequest,
     SettingsOut,
     SettingsUpdate,
     SlotConfigOut,
@@ -52,7 +47,7 @@ from ..security import (
     hash_secret,
     require_admin,
 )
-from ..services import attachment_service, audit_service, booking_service, presenters, schedule_service
+from ..services import audit_service, booking_service, presenters, schedule_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
 from ..services.bootstrap import ensure_regular_slot_count
@@ -141,15 +136,6 @@ def _assert_not_last_active_admin(db: Session, target: User, admin: AdminPrincip
             status.HTTP_409_CONFLICT,
             "This is the only active administrator. Promote another account first.",
         )
-
-
-# --------------------------------------------------------------------------- #
-# Authentication
-# --------------------------------------------------------------------------- #
-
-@router.get("/me", response_model=dict)
-def me(admin: AdminPrincipal = Depends(require_admin)) -> dict:
-    return {"username": admin.username, "role": "admin"}
 
 
 @router.get("/tenants", response_model=list[dict])
@@ -664,13 +650,6 @@ def _set_day_capacity(
     return _day_capacity_out(db, day)
 
 
-@router.get("/day-capacity/{day}", response_model=DaySlotCapacityOut)
-def read_day_capacity(
-    day: date,
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> DaySlotCapacityOut:
-    return _day_capacity_out(db, day)
 
 
 @router.post("/day-capacity/{day}/add-slot", response_model=DaySlotCapacityOut)
@@ -714,42 +693,6 @@ def remove_day_slot(
     return _set_day_capacity(db, day, current - 1, admin, "DAY_SLOT_REMOVED")
 
 
-@router.delete("/day-capacity/{day}", response_model=DaySlotCapacityOut)
-def reset_day_capacity(
-    day: date,
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> DaySlotCapacityOut:
-    """Return one date to the configured default slot count."""
-    booking_service.assert_day_not_past(day)
-    row = _capacity_row(db, day)
-    if row is None:
-        return _day_capacity_out(db, day)
-    default_count = get_app_settings(db).regular_slots_per_day
-    highest_booked = db.scalar(
-        select(func.max(DeploymentBooking.slot_number)).where(
-            DeploymentBooking.deployment_date == day,
-            DeploymentBooking.is_emergency.is_(False),
-            DeploymentBooking.status.in_(ACTIVE_STATUSES),
-        )
-    )
-    if highest_booked is not None and default_count < highest_booked:
-        raise BusinessRuleError(
-            f"Slot {highest_booked} is booked on this date and the default is "
-            f"{default_count} slots. Reschedule that booking first.",
-            status.HTTP_409_CONFLICT,
-        )
-    audit_service.record(
-        db,
-        event_type="DAY_SLOT_CAPACITY_RESET",
-        actor_type="ADMIN",
-        admin_username=admin.username,
-        old_values={"capacity_date": day, "slot_count": row.slot_count},
-        new_values={"capacity_date": day, "slot_count": None},
-    )
-    db.delete(row)
-    db.commit()
-    return _day_capacity_out(db, day)
 
 
 # --------------------------------------------------------------------------- #
@@ -757,32 +700,8 @@ def reset_day_capacity(
 # --------------------------------------------------------------------------- #
 
 
-@router.post("/bookings/emergency", response_model=BookingCreated, status_code=status.HTTP_201_CREATED)
-def create_emergency_booking(
-    payload: BookingCreate,
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> BookingCreated:
-    """Convenience alias for the emergency form; the generic POST /bookings
-    works identically for an authenticated admin."""
-    booking = booking_service.create_booking(
-        db,
-        payload.model_copy(update={"is_emergency": True, "slot_number": None}),
-        _actor(admin),
-    )
-    return BookingCreated(
-        booking=presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True),
-        message=booking_service.success_message(db, booking),
-    )
 
 
-@router.get("/bookings/{booking_id}", response_model=BookingDetail)
-def read_booking(
-    booking: DeploymentBooking = Depends(get_booking),
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> BookingDetail:
-    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
 
 
 @router.post("/bookings/{booking_id}/assign-users", response_model=BookingDetail)
@@ -833,45 +752,12 @@ def move_booking(
         deployment_date=payload.deployment_date,
         slot_number=payload.slot_number,
         manual_override=payload.manual_override,
-        override_weekly_limit=True,
         override_reason=payload.override_reason,
     )
     booking = booking_service.update_booking(db, booking, update, _actor(admin))
     return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
 
 
-@router.post("/bookings/{booking_id}/reassign", response_model=BookingDetail)
-def reassign_booking(
-    payload: ReassignBookingRequest,
-    booking: DeploymentBooking = Depends(get_booking),
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> BookingDetail:
-    booking_service.assert_booking_mutable(db, booking, _actor(admin))
-    before = audit_service.snapshot(booking)
-    if payload.tenant_id is not None:
-        tenant = booking_service.resolve_tenant(db, payload.tenant_id)
-        booking.tenant_id = tenant.id
-        booking.tenant_name = tenant.name
-    for field in ("requester_name", "requester_email", "verifier_name", "verifier_email"):
-        value = getattr(payload, field)
-        if value:
-            setattr(booking, field, value)
-    db.flush()
-    old, new = audit_service.diff(before, audit_service.snapshot(booking))
-    if old:
-        audit_service.record(
-            db,
-            event_type="BOOKING_REASSIGNED",
-            booking=booking,
-            actor_type="ADMIN",
-            admin_username=admin.username,
-            override_reason=payload.override_reason,
-            old_values=old,
-            new_values=new,
-        )
-    db.commit()
-    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
 
 
 @router.post("/bookings/{booking_id}/status", response_model=BookingDetail)
@@ -920,47 +806,6 @@ def set_status(
     return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
 
 
-@router.delete("/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
-def hard_delete_booking(
-    confirmation: str = Query(default=""),
-    booking: DeploymentBooking = Depends(get_booking),
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> None:
-    if runtime_settings.environment.lower() != "development":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Permanent deletion is restricted to development cleanup. Cancel the booking to retain its documents.")
-    booking_service.assert_booking_date_mutable(db, booking)
-    if confirmation != booking.booking_reference:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Confirm permanent deletion with the exact booking reference. The record and documents will be removed; audit history is retained.")
-    booking_id = booking.id
-    booking_service.delete_booking(db, booking, _actor(admin))
-    attachment_service.remove_booking_directory(booking_id)
-
-
-@router.get("/bookings", response_model=list[BookingSummary])
-def list_bookings(
-    start: date | None = None,
-    end: date | None = None,
-    include_cancelled: bool = False,
-    db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
-) -> list[BookingSummary]:
-    stmt = select(DeploymentBooking).order_by(
-        DeploymentBooking.deployment_date.desc(), DeploymentBooking.slot_number
-    )
-    if start:
-        stmt = stmt.where(DeploymentBooking.deployment_date >= start)
-    if end:
-        stmt = stmt.where(DeploymentBooking.deployment_date <= end)
-    if not include_cancelled:
-        stmt = stmt.where(DeploymentBooking.status.in_(ACTIVE_STATUSES))
-    app_settings = get_app_settings(db)
-    return [presenters.booking_summary(db, b, app_settings) for b in db.scalars(stmt.limit(500)).all()]
-
-
-# --------------------------------------------------------------------------- #
-# Manual slot freeze
-# --------------------------------------------------------------------------- #
 
 
 def _booking_in_slot(db: Session, day: date, slot_number: int) -> DeploymentBooking | None:

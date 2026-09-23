@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '../services/api'
 import type {
   AdminSettings,
-  BookingSummary,
   DocumentCategory,
   Holiday,
   SlotConfig,
@@ -12,10 +11,9 @@ import { AdminTenantManager } from './AdminTenantManager'
 import { AdminUserManager } from './AdminUserManager'
 import { AuditHistory } from './AuditHistory'
 import { Drawer } from './Drawer'
-import { Alert, Calendar, Check, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
+import { Calendar, Check, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
 import { ConfirmationModal } from './Modal'
-import { BookingStatusBadge, LockBadge } from './StatusBadge'
 import { useToast } from './ToastNotification'
 
 type Tab =
@@ -25,7 +23,6 @@ type Tab =
   | 'slots'
   | 'holidays'
   | 'documents'
-  | 'bookings'
   | 'audit'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
@@ -35,7 +32,6 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
   { key: 'documents', label: 'Documents', icon: <Check className="size-4" /> },
-  { key: 'bookings', label: 'Bookings', icon: <Alert className="size-4" /> },
   { key: 'audit', label: 'Audit', icon: <History className="size-4" /> },
 ]
 
@@ -55,10 +51,9 @@ interface AdminPanelProps {
   currentUserId: number
   isOwner: boolean
   onChanged: () => void
-  onOpenBooking: (bookingId: number) => void
 }
 
-export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, onChanged, onOpenBooking }: AdminPanelProps) {
+export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, onChanged }: AdminPanelProps) {
   const [tab, setTab] = useState<Tab>('users')
 
   return (
@@ -97,13 +92,6 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
       {tab === 'slots' ? <SlotConfiguration onChanged={onChanged} /> : null}
       {tab === 'holidays' ? <HolidayManager onChanged={onChanged} /> : null}
       {tab === 'documents' ? <DocumentSettings onChanged={onChanged} /> : null}
-      {tab === 'bookings' ? (
-        <BookingManagement
-          timezone={timezone}
-          onChanged={onChanged}
-          onOpenBooking={onOpenBooking}
-        />
-      ) : null}
       {tab === 'audit' ? <AuditHistory timezone={timezone} /> : null}
     </Drawer>
   )
@@ -197,7 +185,6 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
               booking_freeze_dates: data.booking_freeze_dates,
               jira_required_at_booking: data.jira_required_at_booking,
               max_file_size_mb: data.max_file_size_mb,
-              emergency_changes_enabled: data.emergency_changes_enabled,
             })
           }}
         >
@@ -247,13 +234,6 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
               checked={data.jira_required_at_booking}
               onChange={(v) => setData({ ...data, jira_required_at_booking: v })}
               hint="When off, Jira No. can be added later."
-            />
-            <CheckboxField
-              label="Emergency changes enabled"
-              name="emergency_changes_enabled"
-              checked={data.emergency_changes_enabled}
-              onChange={(v) => setData({ ...data, emergency_changes_enabled: v })}
-              hint="When off, no emergency change can be queued on any date."
             />
           </div>
           <div className="sm:col-span-2">
@@ -399,7 +379,6 @@ const EMPTY_HOLIDAY: Omit<Holiday, 'id'> = {
   name: '',
   description: '',
   is_full_day: true,
-  allow_emergency: true,
 }
 
 function HolidayManager({ onChanged }: { onChanged: () => void }) {
@@ -449,7 +428,7 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
   return (
     <SectionShell
       title="Holiday management"
-      description="A full-day holiday closes every normal slot. The emergency queue can stay open to administrators."
+      description="A full-day holiday closes every normal slot. Emergency CRQs remain a separate administrator-only queue subject to date protection."
       error={error}
       loading={!data}
     >
@@ -494,16 +473,6 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
             { value: 'partial', label: 'Partial day — regular slots stay open' },
           ]}
         />
-        <SelectField
-          label="Allow emergency deployment"
-          name="holiday_allow_emergency"
-          value={draft.allow_emergency ? 'yes' : 'no'}
-          onChange={(v) => setDraft({ ...draft, allow_emergency: v === 'yes' })}
-          options={[
-            { value: 'yes', label: 'Yes' },
-            { value: 'no', label: 'No' },
-          ]}
-        />
         <div className="flex gap-2 sm:col-span-2">
           <button type="submit" className="btn-primary" disabled={busy}>
             {busy ? <Spinner className="size-4" /> : <Plus className="size-4" />}
@@ -541,9 +510,6 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
               <span className="badge bg-canvas text-ink-muted ring-1 ring-line">
                 {holiday.is_full_day ? 'Full day' : 'Partial'}
               </span>
-              <span className="badge bg-canvas text-ink-muted ring-1 ring-line">
-                Emergency {holiday.allow_emergency ? 'allowed' : 'closed'}
-              </span>
               <span className="ml-auto flex gap-1.5">
                 <button
                   type="button"
@@ -555,7 +521,6 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
                       name: holiday.name,
                       description: holiday.description ?? '',
                       is_full_day: holiday.is_full_day,
-                      allow_emergency: holiday.allow_emergency,
                     })
                   }}
                 >
@@ -656,167 +621,6 @@ function DocumentSettings({ onChanged }: { onChanged: () => void }) {
           </button>
         </div>
       ) : null}
-    </SectionShell>
-  )
-}
-
-/* --------------------------- Booking management --------------------------- */
-
-function BookingManagement({
-  timezone,
-  onChanged,
-  onOpenBooking,
-}: {
-  timezone: string
-  onChanged: () => void
-  onOpenBooking: (bookingId: number) => void
-}) {
-  const toast = useToast()
-  const [bookings, setBookings] = useState<BookingSummary[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [pendingCancel, setPendingCancel] = useState<BookingSummary | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const loadBookings = useCallback(() => {
-    setError(null)
-    api
-      .listBookings(true)
-      .then(setBookings)
-      .catch((caught) => {
-        setBookings([])
-        setError(caught instanceof ApiError ? caught.message : 'Could not load bookings.')
-      })
-  }, [])
-
-  useEffect(loadBookings, [loadBookings])
-
-  async function cancelBooking(booking: BookingSummary) {
-    setBusy(true)
-    try {
-      await api.cancelBooking(booking.id, { override_reason: null })
-      setPendingCancel(null)
-      loadBookings()
-      onChanged()
-      toast.success('Booking cancelled.', `${booking.booking_reference}: record, documents and audit history retained.`)
-    } catch (caught) {
-      toast.error('Could not cancel the booking', caught instanceof ApiError ? caught.message : '')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function complete(booking: BookingSummary) {
-    try {
-      await api.setBookingStatus(booking.id, 'COMPLETED')
-      loadBookings()
-      onChanged()
-      toast.success('Booking marked as completed.')
-    } catch (caught) {
-      toast.error('Could not update the status', caught instanceof ApiError ? caught.message : '')
-    }
-  }
-
-  return (
-    <SectionShell
-      title="Booking management"
-      description="Editable future bookings can be managed here. Past, current and protected dates are read-only for administrators too. Cancel a booking to retain its record, documents and audit history."
-      error={error}
-      loading={!bookings}
-    >
-      {bookings && bookings.length === 0 ? (
-        <p className="text-sm text-ink-muted">No bookings recorded yet.</p>
-      ) : (
-        <>
-          <button type="button" className="btn-secondary btn-sm mb-3" onClick={loadBookings}>
-            Refresh
-          </button>
-          <ul className="space-y-2">
-            {bookings?.map((booking) => (
-              <li key={booking.id} className="rounded-lg border border-line p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-ink">{booking.tenant_name}</span>
-                  <span className="text-xs tnum text-ink-muted">{booking.booking_reference}</span>
-                  <BookingStatusBadge status={booking.status} />
-                  {booking.is_locked && booking.status !== 'CANCELLED' ? <LockBadge /> : null}
-                  {booking.is_emergency ? (
-                    <span className="badge bg-orange-100 text-orange-800">Emergency</span>
-                  ) : null}
-                  {!booking.documents.complete ? (
-                    <span className="badge bg-amber-50 text-amber-800 ring-1 ring-amber-200">
-                      Docs {booking.documents.provided_required}/{booking.documents.total_required}
-                    </span>
-                  ) : null}
-                </div>
-                <p className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-ink-muted">
-                  <span className="tnum">{formatDate(booking.deployment_date)}</span>
-                  <span>Slot {booking.slot_number}</span>
-                  <span>{booking.jira_number ?? 'Jira pending'}</span>
-                  <span>{booking.technology}</span>
-                  <span>Verifier: {booking.verifier_name}</span>
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    className="btn-secondary btn-sm"
-                    onClick={() => onOpenBooking(booking.id)}
-                  >
-                    Open
-                  </button>
-                  {!booking.is_locked && booking.status === 'BOOKED' ? (
-                    <button
-                      type="button"
-                      className="btn-ghost btn-sm"
-                      onClick={() => void complete(booking)}
-                    >
-                      <Check className="size-3.5" />
-                      Mark completed
-                    </button>
-                  ) : null}
-                  {!booking.is_locked && booking.status !== 'CANCELLED' ? (
-                    <button
-                      type="button"
-                      className="btn-ghost btn-sm text-rose-600"
-                      onClick={() => setPendingCancel(booking)}
-                    >
-                      <Trash className="size-3.5" />
-                      Cancel booking
-                    </button>
-                  ) : (
-                    <span className="badge bg-slate-100 text-slate-600 ring-1 ring-slate-200">
-                      Read-only
-                    </span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-
-      <div className="mt-6 border-t border-line pt-4">
-        <h4 className="mb-3 text-sm font-semibold text-ink">Recent activity</h4>
-        <AuditHistory timezone={timezone} />
-      </div>
-
-      <ConfirmationModal
-        open={pendingCancel !== null}
-        onClose={() => setPendingCancel(null)}
-        onConfirm={() => pendingCancel && void cancelBooking(pendingCancel)}
-        title="Cancel this booking?"
-        facts={
-          pendingCancel
-            ? [
-                { label: 'Reference', value: pendingCancel.booking_reference },
-                { label: 'Tenant', value: pendingCancel.tenant_name },
-                { label: 'Date', value: formatDate(pendingCancel.deployment_date) },
-              ]
-            : []
-        }
-        note="The slot is released. The booking, all uploaded documents and audit history are retained."
-        confirmLabel="Cancel booking"
-        cancelLabel="Keep record"
-        busy={busy}
-      />
     </SectionShell>
   )
 }

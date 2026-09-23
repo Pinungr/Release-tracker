@@ -196,7 +196,6 @@ export function BookingDrawer({
           deployment_date: createTarget.day.day,
           slot_number: createTarget.slot?.slot_number ?? null,
           is_emergency: isEmergency,
-          override_weekly_limit: isAdmin,
           override_reason: null,
         })
         const result = await api.createBooking(payload, documents)
@@ -210,7 +209,6 @@ export function BookingDrawer({
         const payload = toBookingPayload(values, {
           deployment_date: editBooking.deployment_date,
           slot_number: editBooking.slot_number,
-          override_weekly_limit: isAdmin,
           override_reason: null,
         })
         await api.updateBooking(editBooking.id, payload)

@@ -9,7 +9,6 @@ from fastapi.exceptions import RequestValidationError
 from ..database import get_db
 from ..models import DeploymentBooking, DocumentCategory
 from ..schemas import (
-    AttachmentOut,
     BookingCancel,
     BookingCreate,
     BookingCreated,
@@ -229,11 +228,3 @@ def start_work(
     return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
-@router.get("/{booking_id}/attachments", response_model=list[AttachmentOut])
-def list_attachments(
-    booking: DeploymentBooking = Depends(get_booking),
-    admin: AdminPrincipal | None = Depends(current_admin),
-    user: UserPrincipal | None = Depends(current_user),
-) -> list[AttachmentOut]:
-    _assert_can_view(booking, admin, user)
-    return [presenters.attachment_out(a) for a in sorted(booking.attachments, key=lambda a: a.id)]

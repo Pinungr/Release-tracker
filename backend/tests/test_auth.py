@@ -186,9 +186,9 @@ def test_scheduler_requires_authentication(anon, user):
 
 
 def test_logout_invalidates_the_token(admin):
-    assert admin.get("/api/admin/me").status_code == 200
+    assert admin.get("/api/auth/me").status_code == 200
     assert admin.post("/api/auth/logout").status_code == 204
-    assert admin.get("/api/admin/me").status_code == 401
+    assert admin.get("/api/auth/me").status_code == 401
 
 
 def test_promotion_and_demotion_take_effect_on_the_next_request(anon, admin, user):

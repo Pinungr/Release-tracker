@@ -300,11 +300,6 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onAdjustCapacity={(day, delta) => void adjustDayCapacity(day, delta)}
         />
 
-        <footer className="pt-2 pb-6 text-center text-xs text-ink-muted">
-          All times shown in {timezone.replace('_', ' ')}. Authentication, ownership and tenant-specific
-          weekly limits are enforced by the server. Today and all past deployment dates are permanently
-          read-only; upcoming freeze dates come from Booking Rules. Normal deployment days are Sunday through Thursday.
-        </footer>
       </main>
 
       <BookingDrawer
@@ -347,10 +342,6 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           currentUserId={user.id}
           isOwner={user.is_owner === true}
           onChanged={refreshAll}
-          onOpenBooking={(id) => {
-            setAdminPanelOpen(false)
-            void openBooking(id)
-          }}
         />
       ) : null}
     </div>

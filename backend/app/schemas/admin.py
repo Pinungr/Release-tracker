@@ -9,29 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..models import DocumentCategory
 
 
-class AdminLoginRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    username: Annotated[str, Field(min_length=1, max_length=64)]
-    password: Annotated[str, Field(min_length=1, max_length=256)]
-
-
-class AdminSession(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-    username: str
-    display_name: str
-
-
 class SettingsOut(BaseModel):
     regular_slots_per_day: int
     weekly_booking_limit: int
     booking_freeze_dates: int
     jira_required_at_booking: bool
     max_file_size_mb: int
-    emergency_changes_enabled: bool
-    require_admin_override_reason: bool
     mandatory_documents: list[str]
 
 
@@ -41,8 +24,6 @@ class SettingsUpdate(BaseModel):
     booking_freeze_dates: int | None = Field(default=None, ge=0, le=25)
     jira_required_at_booking: bool | None = None
     max_file_size_mb: int | None = Field(default=None, ge=1, le=200)
-    emergency_changes_enabled: bool | None = None
-    require_admin_override_reason: bool | None = None
     mandatory_documents: list[DocumentCategory] | None = None
 
 
@@ -88,7 +69,6 @@ class HolidayIn(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=160)]
     description: Annotated[str | None, Field(default=None, max_length=1000)] = None
     is_full_day: bool = True
-    allow_emergency: bool = True
 
 
 class DaySlotCapacityOut(BaseModel):
@@ -109,16 +89,6 @@ class MoveBookingRequest(BaseModel):
     slot_number: int | None = Field(default=None, ge=1, le=50)
     override_reason: Annotated[str | None, Field(default=None, max_length=500)] = None
 
-
-class ReassignBookingRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    tenant_id: int | None = Field(default=None, ge=1)
-    requester_name: Annotated[str | None, Field(default=None, max_length=120)] = None
-    requester_email: Annotated[str | None, Field(default=None, max_length=180)] = None
-    verifier_name: Annotated[str | None, Field(default=None, max_length=120)] = None
-    verifier_email: Annotated[str | None, Field(default=None, max_length=180)] = None
-    override_reason: Annotated[str | None, Field(default=None, max_length=500)] = None
 
 
 class AssignUsersRequest(BaseModel):

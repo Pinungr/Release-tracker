@@ -195,8 +195,7 @@ remain audited.
 booking creation/update or `/admin/bookings/{id}/move` requires
 `manual_override: true` and a non-empty `override_reason` to bypass weekends,
 holidays, manual freezes or disabled capacity. Normal rescheduling never uses
-this override. Missing and occupied slots cannot be overridden. The separate
-Admin emergency queue remains available on weekends and holidays. All booking
+this override. Missing and occupied slots cannot be overridden. The separate Admin emergency queue remains available on holidays and can be used through the explicit Admin emergency workflow; the normal weekly board remains Sunday through Thursday. All booking
 operations, including emergency operations, RM assignment/work, status changes
 and attachments, respect past/current/automatic date protection.
 
@@ -207,11 +206,7 @@ assigned RM starts work. All normal slots default to **9:00 PM to 5:00 AM the
 following morning**, using the configured timezone. Slot times remain editable
 in Admin settings.
 
-Capacity responses separate `configured_slots_total` (the configured date limit, independent of disabled
-or missing slot rows) from `regular_slots_available` (currently free and
-bookable). `regular_slots_total` counts booked rows plus currently bookable free
-rows, including retained bookings on closed dates. Tenant quotas are enforced
-when choosing a booking destination; board counters describe slot capacity.
+`regular_slots_total` counts normal capacity represented on the board, while the weekly summary reports currently available capacity. Tenant quotas are enforced when choosing a booking destination.
 
 ```
 DAY
@@ -354,16 +349,9 @@ docker compose down
 `docker compose down` keeps the `postgres-data` and `app-storage` volumes.
 Use `docker compose down -v` only when you intend to destroy all data.
 
-### Audit retention and exceptional cleanup
+### Audit retention
 
-Use cancellation for normal removal: the booking, documents, assignments and
-audit history remain. Rescheduling retains the same booking identity and all
-history. The Admin UI offers cancellation instead of permanent deletion.
-`DELETE /api/admin/bookings/{id}?confirmation=<exact-booking-reference>` is
-restricted to `ENVIRONMENT=development` and unprotected future records. It
-irreversibly deletes the record and document files but retains detached audit
-events by booking reference, plus a deletion snapshot. The exact reference is
-required as explicit confirmation. Production rejects this cleanup endpoint.
+Use cancellation for normal removal: the booking, documents, assignments and audit history remain. Rescheduling retains the same booking identity and all history. Destructive booking deletion is not exposed by the application.
 
 ### Health checks
 
@@ -455,8 +443,7 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
 2. Navigate with **Previous week / Next week / Today**.
 3. Click **Book slot** on a free slot. Choose the **tenant** in the drawer —
    this is per change record, not per account. **Jira No. can be optional or required from Admin → General**; Jira URL is stored separately. **Justification** and **Impacted region** are required on every change record
-   (the separate *Business justification* remains emergency-only). Requester email,
-   verifier email, implementation summary and deployment description are optional.
+   (the separate *Business justification* remains emergency-only). The requester is taken automatically from the signed-in account and the deployment environment is fixed to `PROD`. Verifier email, implementation summary and deployment description are optional.
 4. Before confirming the slot, attach every required deployment document. The booking is created only after the mandatory files are accepted by the backend.
 5. Your own changes are badged **My booking**; the **My changes** card filters
    the board to them.
@@ -478,13 +465,12 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
    active administrator still cannot be demoted or deactivated.
 3. *Tenants* — add, edit, activate, deactivate. Only active tenants appear in
    the scheduling form.
-4. *General* — slots per day, weekly limit and upload size.
+4. *General* — slots per day, weekly limit, date protection and upload size.
    *Slots* — names and times of the normal slots.
-   *Holidays* — full or partial day, emergency allowed or not.
+   *Holidays* — full or partial day for normal deployment slots.
    *Documents* — which categories are mandatory.
-   *Bookings* - open, assign one or more RM users, complete or cancel while editable.
-   Permanent deletion removes the booking/files but **retains its audit history**.
-   *Audit* — every create, edit, assignment, work start, move, cancel, document change, override and hard delete.
+   *Audit* — booking and configuration activity.
+   Booking actions such as assign RM, complete, reschedule and cancel are handled directly from the booking details drawer on the weekly board.
 5. **Add emergency CR** on any day's emergency queue. The form additionally
    requires an emergency reason and business justification.
 6. Administrator policy bypasses are recorded in the audit trail. The generated PDS reference identifies the booking; Jira No. is optional by default and the separate Change No. is supplied later by an assigned RM user when work starts.
@@ -708,7 +694,6 @@ documentation: `/docs`.
 | `DELETE` | `/bookings/{id}` | Cancel: releases the slot, keeps the record, records who cancelled it and when |
 | `GET` | `/bookings/{id}/reschedule-options` | Next available slots this caller may move the booking to |
 | `POST` | `/bookings/{id}/reschedule` | Move the booking to another date/slot in one transaction |
-| `GET` | `/bookings/{id}/attachments` | Document metadata |
 | `POST` | `/bookings/{id}/attachments` | Upload one document |
 | `DELETE` | `/bookings/{id}/attachments/{attachment_id}` | Remove a document |
 | `GET` | `/bookings/{id}/attachments/{attachment_id}/download` | Download |
@@ -717,27 +702,20 @@ documentation: `/docs`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/admin/me` | Confirm administrator access |
 | `GET` | `/admin/users` | List / search people |
 | `PATCH` | `/admin/users/{id}/role` | Promote or demote (owner only) |
 | `PATCH` | `/admin/users/{id}/status` | Activate or deactivate (an ADMIN target is owner-only) |
 | `POST` | `/admin/users/{id}/reset-password` | Set a new password (an ADMIN target is owner-only) |
 | `GET` `POST` | `/admin/tenants` | Tenant master |
 | `PUT` `PATCH` | `/admin/tenants/{id}`, `/admin/tenants/{id}/status` | Edit / activate |
-| `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, file size, mandatory documents |
+| `GET` `PUT` | `/admin/settings` | Slots per day, weekly limit, date protection, Jira rule, file size and mandatory documents |
 | `GET` `PUT` | `/admin/slots` | Normal slot grid |
 | `GET` `POST` `PUT` `DELETE` | `/admin/holidays` | Holiday management |
-| `GET` | `/admin/day-capacity/{day}` | Normal slot capacity for one date |
 | `POST` | `/admin/day-capacity/{day}/add-slot` | Add a normal slot to one date |
 | `POST` | `/admin/day-capacity/{day}/remove-slot` | Remove a normal slot from one date |
-| `DELETE` | `/admin/day-capacity/{day}` | Reset the date to the default slot count |
-| `GET` | `/admin/bookings` | All changes, optionally including cancelled |
-| `POST` | `/admin/bookings/emergency` | Emergency change |
 | `POST` | `/admin/bookings/{id}/assign-users` | Assign one or more active RM users |
 | `POST` | `/admin/bookings/{id}/move` | Move to another date/slot (emergency changes) |
-| `POST` | `/admin/bookings/{id}/reassign` | Change tenant / requester / verifier |
 | `POST` | `/admin/bookings/{id}/status` | Set BOOKED, COMPLETED or CANCELLED |
-| `DELETE` | `/admin/bookings/{id}` | Development cleanup only; exact booking-reference confirmation required; audit retained |
 | `GET` | `/admin/audit` | Audit history |
 
 Assigned RM users use `POST /bookings/{id}/start-work` with a required `change_number`. Jira No. remains unchanged and separate.

@@ -64,7 +64,7 @@ def run():
             source = today - timedelta(days=(today.weekday() + 1) % 7) + timedelta(days=21)
             payload = {
                 'tenant_id': tenant, 'deployment_date': str(source), 'slot_number': 1,
-                'technology': 'Databricks', 'requester_name': 'Smoke requester',
+                'technology': 'Databricks',
                 'verifier_name': 'Smoke verifier', 'git_repository': 'https://example.com/repo',
                 'justification': 'Integration validation', 'impacted_region': 'APAC',
             }
@@ -93,7 +93,6 @@ def run():
             assert retained['status'] == 'CANCELLED' and len(retained['attachments']) == 5
             events = client.get(f"/api/admin/audit?booking_id={booking['id']}").json()
             assert {'BOOKING_CREATED', 'BOOKING_RESCHEDULED', 'BOOKING_CANCELLED'} <= {e['event_type'] for e in events}
-            assert client.delete(f"/api/admin/bookings/{booking['id']}", params={'confirmation': booking['booking_reference']}).status_code == 403
             print('PASS: production Docker startup, PostgreSQL readiness, SPA, auth, optional Jira, overnight timing, normal availability, invalid API destinations, reschedule, cancellation and audit retention.')
     finally:
         # Exact unique test container names only; never touch existing app volumes.
