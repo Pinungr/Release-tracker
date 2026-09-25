@@ -4,14 +4,15 @@ import type { BookingDetail, ManagedUser, PublicSettings } from '../types'
 import { formatDate, formatTimestamp } from '../utils/dates'
 import { DocumentReadinessPanel } from './DocumentReadiness'
 import { DocumentUploader } from './DocumentUploader'
-import { Drawer } from './Drawer'
+import { ChangePageShell } from './ChangePageShell'
+import { ChangeActivity } from './ChangeActivity'
 import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Spinner, Trash, User } from './Icons'
 import { ConfirmationModal, Modal } from './Modal'
 import { RescheduleModal } from './RescheduleModal'
 import { BookingStatusBadge, EmergencyBadge, LockBadge } from './StatusBadge'
 import { useToast } from './ToastNotification'
 
-interface BookingDetailsDrawerProps {
+interface ChangeDetailsPageProps {
   open: boolean
   onClose: () => void
   booking: BookingDetail | null
@@ -21,6 +22,7 @@ interface BookingDetailsDrawerProps {
   timezone: string
   userId: number | null
   onEdit: (booking: BookingDetail) => void
+  onClone?: (booking: BookingDetail) => void
   onChanged: () => void
 }
 
@@ -33,7 +35,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
-export function BookingDetailsDrawer({
+export function ChangeDetailsPage({
   open,
   onClose,
   booking,
@@ -44,7 +46,8 @@ export function BookingDetailsDrawer({
   userId,
   onEdit,
   onChanged,
-}: BookingDetailsDrawerProps) {
+  onClone,
+}: ChangeDetailsPageProps) {
   const toast = useToast()
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [rescheduleOpen, setRescheduleOpen] = useState(false)
@@ -79,17 +82,17 @@ export function BookingDetailsDrawer({
     if (open && booking?.can_assign_rm) {
       void api.listUsers().then((users) => setAssignmentUsers(users.filter((u) => u.is_active && u.role === 'ADMIN' && !u.is_owner))).catch(() => setAssignmentUsers([]))
     }
-  }, [booking?.id, booking?.change_number, open, isAdmin])
+  }, [booking, open, isAdmin])
 
-  async function saveAssignments() {
+  async function saveAssignments(ids = selectedAssignees) {
     if (!booking || !booking.can_assign_rm) return
-    if (!selectedAssignees.length) {
+    if (!ids.length) {
       toast.error('Select at least one Release Manager.')
       return
     }
     setAssignmentBusy(true)
     try {
-      await api.assignBookingUsers(booking.id, selectedAssignees)
+      await api.assignBookingUsers(booking.id, ids)
       toast.success('Release Managers assigned.', booking.booking_reference)
       onChanged()
     } catch (error) {
@@ -119,7 +122,7 @@ export function BookingDetailsDrawer({
   }
 
   async function markCompleted() {
-    if (!booking || !isAdmin || !booking.can_edit || booking.status !== 'BOOKED') return
+    if (!booking || !isAdmin || !booking.can_edit || (booking.status !== 'IN_PROGRESS' || !booking.work_started_at || !booking.change_number?.trim())) return
     setBusy(true)
     try {
       await api.setBookingStatus(booking.id, 'COMPLETED')
@@ -186,16 +189,16 @@ export function BookingDetailsDrawer({
 
   return (
     <>
-      <Drawer
+      <ChangePageShell
         open={open}
         onClose={onClose}
         width="lg"
-        title={booking ? booking.tenant_name : 'Deployment'}
+        title={booking ? `${booking.tenant_name} · ${booking.change_number ?? booking.booking_reference}` : 'Deployment'}
         eyebrow={
           booking ? (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="badge bg-canvas tnum text-ink-muted ring-1 ring-line">
-                {booking.booking_reference}
+                Schedule No. {booking.booking_reference}
               </span>
               <BookingStatusBadge status={booking.status} />
               {booking.is_emergency ? <EmergencyBadge /> : null}
@@ -229,11 +232,16 @@ export function BookingDetailsDrawer({
                     ? 'Verified as the booking owner for this session.'
                     : isAssigned
                       ? 'Assigned Release Manager: authorized documents are available to download; work actions depend on date protection.'
-                      : 'Only the booking owner or an assigned Release Manager can access this change record.'}
+                      : 'Read-only: you can view, clone and comment on this schedule. Only the booking owner or a Release Manager can change it.'}
               </p>
               {/* Owner and Release Managers get Edit | Reschedule | Cancel according to
                   record/date permissions. Start-work requires an explicit Release Manager assignment. */}
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                {onClone && <button type="button" className="btn-secondary" onClick={() => onClone(booking)}>Clone schedule</button>}
+                <button type="button" className="btn-secondary" onClick={() => {
+                  if (!navigator.clipboard) { toast.error('Copy unavailable', 'Select and copy the Schedule No. shown above.'); return }
+                  void navigator.clipboard.writeText(booking.booking_reference).then(() => toast.success('Schedule No. copied')).catch(() => toast.error('Could not copy', 'Select and copy the Schedule No. shown above.'))
+                }}>Copy Schedule No.</button>
                 {canAct ? (
                   <>
                     <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
@@ -248,9 +256,9 @@ export function BookingDetailsDrawer({
                       <Calendar className="size-4" />
                       Reschedule
                     </button> : null}
-                    {isAdmin && booking.status === 'BOOKED' ? (
+                    {isAdmin && booking.status === 'IN_PROGRESS' && booking.work_started_at && booking.change_number?.trim() ? (
                       <button type="button" className="btn-secondary" disabled={busy} onClick={() => void markCompleted()}>
-                        Mark completed
+                        Complete / Close
                       </button>
                     ) : null}
                     {booking.can_cancel ? <button
@@ -276,9 +284,9 @@ export function BookingDetailsDrawer({
             Loading booking…
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(18rem,1fr)]">
             {hasLockReason && booking.status !== 'CANCELLED' ? (
-              <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="lg:col-span-2 flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <Lock className="mt-0.5 size-5 shrink-0 text-slate-500" />
                 <div>
                   <p className="text-sm font-semibold text-ink">Booking locked</p>
@@ -290,7 +298,7 @@ export function BookingDetailsDrawer({
             ) : null}
 
             {booking.status === 'CANCELLED' ? (
-              <div className="flex items-start gap-3 rounded-xl border border-line bg-canvas p-4">
+              <div className="lg:col-span-2 flex items-start gap-3 rounded-xl border border-line bg-canvas p-4">
                 <Alert className="mt-0.5 size-5 shrink-0 text-ink-muted" />
                 <div>
                   <p className="text-sm font-semibold text-ink">This booking was cancelled</p>
@@ -301,7 +309,8 @@ export function BookingDetailsDrawer({
               </div>
             ) : null}
 
-            <dl className="grid grid-cols-[9rem_1fr] gap-x-4">
+            <dl className="card grid grid-cols-[8rem_1fr] gap-x-4 p-5">
+              {booking.cloned_from_reference && <Row label="Cloned from"><a className="text-brand-600 underline" href={`#change/${booking.cloned_from_id}`}>{booking.cloned_from_reference}</a></Row>}
               <Row label="Tenant">{booking.tenant_name}</Row>
               <Row label="Technology">{booking.technology}</Row>
               <Row label="Jira No.">
@@ -370,6 +379,14 @@ export function BookingDetailsDrawer({
               <Row label="Last modified">{formatTimestamp(booking.updated_at, timezone)}</Row>
             </dl>
 
+            <aside className="space-y-5">
+              <section className="card space-y-3 p-5">
+                <h2 className="text-sm font-bold text-ink">Workflow</h2>
+                <p className="text-sm text-ink-muted">Assign Release Manager → Start work with Change No. → Complete / Close</p>
+                <BookingStatusBadge status={booking.status} />
+                <p className="text-sm"><strong>Assigned to:</strong> {booking.assigned_users.map(u => u.full_name).join(', ') || 'Not assigned'}</p>
+                <p className="text-xs text-ink-muted">Started: {booking.work_started_at ? formatTimestamp(booking.work_started_at, timezone) : 'Not started'}</p>
+              </section>
             {booking.can_assign_rm ? (
               <section className="rounded-xl border border-line bg-canvas/50 p-4">
                 <h3 className="text-sm font-semibold text-ink">Assign Release Managers</h3>
@@ -393,6 +410,9 @@ export function BookingDetailsDrawer({
                   {assignmentBusy ? <Spinner className="size-4" /> : null}
                   Save Release Manager assignment
                 </button>
+                {userId !== null && !isAssigned && assignmentUsers.some(u => u.id === userId) ? (
+                  <button className="btn-secondary mt-3 ml-2" disabled={assignmentBusy} onClick={() => void saveAssignments([...booking.assigned_users.map(u => u.user_id), userId])}>Assign to me</button>
+                ) : null}
               </section>
             ) : null}
 
@@ -417,9 +437,10 @@ export function BookingDetailsDrawer({
               </section>
             ) : null}
 
-            <DocumentReadinessPanel readiness={booking.documents} />
+            </aside>
+            <div className="lg:col-span-2"><DocumentReadinessPanel readiness={booking.documents} /></div>
 
-            <section>
+            <section className="card p-5 lg:col-span-2">
               <h3 className="mb-3 text-sm font-semibold text-ink">Attachments</h3>
               <DocumentUploader
                 booking={booking}
@@ -430,9 +451,10 @@ export function BookingDetailsDrawer({
                 onUpdated={() => onChanged()}
               />
             </section>
+            <div className="lg:col-span-2"><ChangeActivity key={booking.id} bookingId={booking.id} isAdmin={isAdmin} timezone={timezone} revision={JSON.stringify([booking.updated_at, booking.status, booking.assigned_users])} /></div>
           </div>
         )}
-      </Drawer>
+      </ChangePageShell>
 
       {booking ? (
         <Modal

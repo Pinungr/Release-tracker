@@ -23,6 +23,7 @@ export function WeekNavigator({
         type="button"
         onClick={onPrevious}
         className="btn-secondary px-2.5"
+        disabled={loading}
         aria-label="Previous week"
       >
         <ChevronLeft className="size-4" />
@@ -38,7 +39,7 @@ export function WeekNavigator({
         </span>
       </div>
 
-      <button type="button" onClick={onNext} className="btn-secondary px-2.5" aria-label="Next week">
+      <button type="button" onClick={onNext} className="btn-secondary px-2.5" disabled={loading} aria-label="Next week">
         <span className="hidden lg:inline">Next week</span>
         <ChevronRight className="size-4" />
       </button>
@@ -47,7 +48,7 @@ export function WeekNavigator({
         type="button"
         onClick={onToday}
         className="btn-ghost"
-        disabled={isCurrentWeek}
+        disabled={loading || isCurrentWeek}
         title={isCurrentWeek ? 'Already showing this week' : 'Jump to the current week'}
       >
         Today

@@ -8,6 +8,7 @@ import { History, Shield, Spinner, User } from './Icons'
 interface AuditHistoryProps {
   timezone: string
   bookingId?: number
+  scoped?: boolean
 }
 
 function ValueList({ label, values }: { label: string; values: Record<string, unknown> }) {
@@ -34,22 +35,24 @@ function ValueList({ label, values }: { label: string; values: Record<string, un
   )
 }
 
-export function AuditHistory({ timezone, bookingId }: AuditHistoryProps) {
+export function AuditHistory({ timezone, bookingId, scoped = false }: AuditHistoryProps) {
   const [events, setEvents] = useState<AuditEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const [more, setMore] = useState(false)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let active = true
     setEvents(null)
     setError(null)
-    api
-      .getAudit(bookingId)
-      .then((result) => active && setEvents(result))
+    ;(scoped && bookingId ? api.getBookingAudit(bookingId) : api.getAudit(bookingId))
+      .then((result) => { if (active) { setEvents(result); setMore(scoped && result.length === 50) } })
       .catch((caught) => active && setError(caught instanceof ApiError ? caught.message : 'Failed.'))
     return () => {
       active = false
     }
-  }, [bookingId])
+  }, [bookingId, scoped])
 
   if (error) return <p className="text-sm text-rose-600">{error}</p>
 
@@ -72,7 +75,7 @@ export function AuditHistory({ timezone, bookingId }: AuditHistoryProps) {
   }
 
   return (
-    <ol className="space-y-2">
+    <><ol className="space-y-2">
       {events.map((event) => (
         <li key={event.id} className="rounded-lg border border-line p-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -95,7 +98,7 @@ export function AuditHistory({ timezone, bookingId }: AuditHistoryProps) {
             )}
             <span className="font-medium text-ink">
               {event.admin_username
-                ? `Administrator ${event.admin_username}`
+                ? `RM / Owner ${event.admin_username}`
                 : (event.requester_email ?? 'System')}
             </span>
             <span>({event.actor_type.toLowerCase()})</span>
@@ -112,5 +115,14 @@ export function AuditHistory({ timezone, bookingId }: AuditHistoryProps) {
         </li>
       ))}
     </ol>
+    {more && <button className="btn-secondary mt-3" disabled={busy} onClick={async () => {
+      if (!bookingId) return
+      setBusy(true)
+      try {
+        const rows = await api.getBookingAudit(bookingId, events[events.length - 1]?.id)
+        setEvents([...events, ...rows]); setMore(rows.length === 50)
+      } catch { setError('Could not load older history. Reopen the audit tab to retry.') }
+      finally { setBusy(false) }
+    }}>Load older history</button>}</>
   )
 }

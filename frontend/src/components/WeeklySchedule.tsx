@@ -100,6 +100,13 @@ export function WeeklySchedule({
 
   return (
     <div className={`space-y-4 transition-opacity ${loading ? 'opacity-60' : ''}`}>
+      <div aria-label="Slot colour legend" className="flex flex-wrap gap-2 text-xs">
+        <span className="rounded border border-emerald-300 bg-emerald-50 px-3 py-2">Green: Available</span>
+        <span className="rounded border border-blue-300 bg-blue-50 px-3 py-2">Blue: Booked, not frozen</span>
+        <span className="rounded border border-slate-300 bg-slate-100 px-3 py-2">Grey: Frozen / unavailable</span>
+        <span className="rounded border border-amber-300 bg-amber-50 px-3 py-2">Amber: Holiday / RM team unavailable</span>
+        <span className="rounded border border-violet-300 bg-violet-50 px-3 py-2">Purple: Completed / closed</span>
+      </div>
       {schedule.days.map((day) => (
         <DaySchedule
           key={day.day}

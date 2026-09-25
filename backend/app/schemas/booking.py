@@ -74,6 +74,7 @@ class BookingBase(BaseModel):
 
 
 class BookingCreate(BookingBase):
+    clone_source_id: int | None = Field(default=None, ge=1)
     deployment_date: date
     slot_number: int | None = Field(default=None, ge=1, le=50)
     is_emergency: bool = False
@@ -169,6 +170,8 @@ class BookingSummary(BaseModel):
 class BookingDetail(BookingSummary):
     """Full record. Only ever returned to its owner or an administrator."""
 
+    cloned_from_id: int | None = None
+    cloned_from_reference: str | None = None
     requester_name: str
     requester_email: str
     requester_phone: str | None
@@ -285,7 +288,24 @@ class ScheduleSummary(BaseModel):
     emergency_changes: int
 
 
+class NextAvailableSlot(BaseModel):
+    """The earliest free normal slot, so a tenant can jump straight to it."""
+
+    deployment_date: date
+    #: Sunday of the week holding the slot, for board navigation.
+    week_start: date
+    weekday: str
+    date_label: str
+    slot_number: int
+    slot_name: str
+    time_label: str
+
+
 class ScheduleResponse(BaseModel):
+    landing_message: str | None = None
+    #: Set on a tenant's landing view. It may sit in a later week than the one
+    #: shown, because the landing week is the nearest one, not the first free.
+    next_available: NextAvailableSlot | None = None
     week_start: date
     week_end: date
     week_label: str

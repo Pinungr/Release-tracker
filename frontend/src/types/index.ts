@@ -97,6 +97,8 @@ export interface Tenant {
 }
 
 export interface BookingDetail extends BookingSummary {
+  cloned_from_id?: number | null
+  cloned_from_reference?: string | null
   requester_name: string
   requester_email: string
   requester_phone: string | null
@@ -216,7 +218,25 @@ export interface PublicSettings {
   technologies: string[]
 }
 
+/** The earliest free normal slot, so a tenant can jump straight to it. */
+export interface NextAvailableSlot {
+  deployment_date: string
+  /** Sunday of the week holding the slot, for board navigation. */
+  week_start: string
+  weekday: string
+  date_label: string
+  slot_number: number
+  slot_name: string
+  time_label: string
+}
+
 export interface Schedule {
+  landing_message?: string | null
+  /**
+   * Only on a tenant's landing view. May sit in a later week than the one
+   * shown: tenants land on the nearest week so they can see RM workload.
+   */
+  next_available?: NextAvailableSlot | null
   week_start: string
   week_end: string
   week_label: string
@@ -330,3 +350,33 @@ export type FilterKey =
   | 'LOCKED'
   | 'MISSING_DOCS'
   | `TECH:${string}`
+
+export interface BookingComment {
+  images?: CommentImage[]
+  attachments?: { id: string; original_filename: string; size_bytes: number }[]
+  id: number
+  body: string
+  internal: boolean
+  author_name: string
+  author_id: number
+  created_at: string
+}
+
+export interface ScheduleSearchResult {
+  id: number
+  booking_reference: string
+  tenant_name: string
+  deployment_date: string
+  status: BookingStatus
+  change_number: string | null
+}
+
+export interface CommentImageRef {
+  kind: 'document' | 'comment'
+  attachment_id: string
+  comment_id?: number | null
+}
+export interface CommentImage extends CommentImageRef {
+  original_filename: string
+  internal: boolean
+}

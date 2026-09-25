@@ -14,7 +14,7 @@ def test_authenticated_user_can_schedule_a_change(user, tenant, next_monday):
     response = post_booking(user, booking_payload(tenant, next_monday, 1))
     assert response.status_code == 201, response.text
     booking = response.json()["booking"]
-    assert booking["booking_reference"].startswith("PDS-")
+    assert booking["booking_reference"].startswith("pds-")
     assert booking["status"] == "BOOKED"
     assert booking["is_emergency"] is False
     assert booking["tenant_id"] == tenant
@@ -86,10 +86,25 @@ def test_owner_can_read_and_edit_their_change(user, tenant, next_monday):
     assert updated.json()["jira_number"] == "CHG0999999"
 
 
-def test_another_user_cannot_read_edit_or_cancel(user, other_user, tenant, next_monday):
+def test_another_user_can_read_but_not_edit_or_cancel(user, other_user, tenant, next_monday):
+    """Any signed-in user may read any change record; only the owner may change it."""
     booking = create_booking(user, tenant, next_monday, 1)
 
-    assert other_user.get(f"/api/bookings/{booking['id']}").status_code == 403
+    read = other_user.get(f"/api/bookings/{booking['id']}")
+    assert read.status_code == 200
+    detail = read.json()
+    # The response tells the reader they cannot change it.
+    assert detail["can_edit"] is False
+    assert detail["can_cancel"] is False
+    assert detail["can_reschedule"] is False
+    assert detail["can_manage_attachments"] is False
+    assert detail["can_download_attachments"] is True
+
+    assert other_user.get(f"/api/bookings/{booking['id']}/reschedule-options").status_code == 403
+    assert other_user.post(
+        f"/api/bookings/{booking['id']}/reschedule",
+        json={"deployment_date": next_monday.isoformat(), "slot_number": 2},
+    ).status_code == 403
     assert (
         other_user.put(
             f"/api/bookings/{booking['id']}", json=booking_payload(tenant, next_monday, 1)
@@ -146,9 +161,8 @@ def test_normal_slot_cannot_be_double_booked(user, other_user, tenant, other_ten
 def test_booking_reference_is_sequential_and_unique(user, tenant, other_tenant, next_monday):
     first = create_booking(user, tenant, next_monday, 1)
     second = create_booking(user, other_tenant, next_monday, 2)
-    day = next_monday.strftime("%Y%m%d")
-    assert first["booking_reference"] == f"PDS-{day}-001"
-    assert second["booking_reference"] == f"PDS-{day}-002"
+    assert first["booking_reference"] == "pds-001"
+    assert second["booking_reference"] == "pds-002"
 
 
 def test_past_dates_and_weekends_are_rejected(user, tenant, next_monday):

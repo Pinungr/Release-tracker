@@ -779,10 +779,18 @@ def set_status(
         raise BusinessRuleError(
             "Only BOOKED, COMPLETED and CANCELLED can be set from the admin panel."
         )
+    if booking.status == BookingStatus.COMPLETED.value:
+        raise BusinessRuleError("A completed/closed task cannot be reopened or cancelled.")
+    if new_status is BookingStatus.BOOKED and booking.status != BookingStatus.BOOKED.value:
+        raise BusinessRuleError("A started task cannot be reset to booked.")
     if new_status is BookingStatus.CANCELLED:
         booking_service.cancel_booking(db, booking, _actor(admin), payload.override_reason)
         return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
     if new_status is BookingStatus.COMPLETED:
+        if (booking.status != BookingStatus.IN_PROGRESS.value
+                or booking.work_started_at is None
+                or not (booking.change_number or "").strip()):
+            raise BusinessRuleError("Start the task and provide a Change No. before completing/closing it.")
         # A deployment cannot be signed off with required paperwork missing,
         # unless an administrator records a reason for the exception.
         if not (payload.override_reason or "").strip():

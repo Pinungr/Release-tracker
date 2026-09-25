@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { BookingDetail, PublicSettings } from '../types'
 import { api } from '../services/api'
-import { BookingDetailsDrawer } from './BookingDetailsDrawer'
+import { ChangeDetailsPage } from './ChangeDetailsPage'
 import { RescheduleModal } from './RescheduleModal'
 import { ToastProvider } from './ToastNotification'
 
 vi.mock('../services/api', () => ({
-  api: { listUsers: vi.fn().mockResolvedValue([]), downloadAttachment: vi.fn().mockResolvedValue(undefined), getRescheduleOptions: vi.fn() },
+  api: { listUsers: vi.fn().mockResolvedValue([]), downloadAttachment: vi.fn().mockResolvedValue(undefined), getRescheduleOptions: vi.fn(), getBookingComments: vi.fn().mockResolvedValue([]), getBookingAudit: vi.fn().mockResolvedValue([]) },
   ApiError: class extends Error {},
 }))
 
@@ -34,7 +34,7 @@ function booking(overrides: Partial<BookingDetail> = {}): BookingDetail {
 }
 
 function show(detail: BookingDetail, isAdmin = true, userId = 1) {
-  return render(<ToastProvider><BookingDetailsDrawer open onClose={vi.fn()} booking={detail}
+  return render(<ToastProvider><ChangeDetailsPage open onClose={vi.fn()} booking={detail}
     loading={false} settings={settings} isAdmin={isAdmin} timezone="Asia/Kolkata" userId={userId}
     onEdit={vi.fn()} onChanged={vi.fn()} /></ToastProvider>)
 }
@@ -85,4 +85,16 @@ describe('authoritative booking permissions', () => {
     expect(screen.queryByText(/Saturday|Friday/)).toBeNull()
     expect(screen.queryByDisplayValue('2026-09-26')).toBeNull()
   })
+})
+
+it('requires started work and a change number before showing completion', () => {
+  show(booking())
+  expect(screen.queryByRole('button', { name: 'Complete / Close' })).toBeNull()
+  cleanup()
+  show(booking({ status: 'IN_PROGRESS', work_started_at: '2026-10-01T09:00:00Z', change_number: 'CHG-123' }))
+  expect(screen.getByRole('button', { name: 'Complete / Close' })).toBeTruthy()
+  cleanup()
+  show(booking({ status: 'COMPLETED', can_reschedule: false, can_start_work: false, can_cancel: false }))
+  expect(screen.queryByRole('button', { name: 'Reschedule' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Complete / Close' })).toBeNull()
 })

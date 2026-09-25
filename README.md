@@ -734,7 +734,155 @@ Assigned RM users use `POST /bookings/{id}/start-work` with a required `change_n
 | Weekly limit per tenant | 2 normal changes |
 | Freeze | Next 2 valid deployment dates (date-only) |
 | Max upload | 20 MB per file |
-| Booking reference | `PDS-YYYYMMDD-NNN` |
+| Booking reference | `pds-001`, `pds-002`, … |
 | Timezone | Asia/Kolkata (timestamps stored in UTC) |
 | Session | 8 hours |
 | POC administrator | `admin` / `admin2024` |
+
+### Task completion and calendar availability (24 September 2026)
+
+- An assigned Release Manager must start work with a nonblank Change No. before an Owner or Release Manager can use **Complete / Close**. Completion requires an in-progress task and a recorded work start; a document override cannot bypass these prerequisites.
+- Completed/closed tasks cannot be rescheduled through the picker, admin move action, or booking edit endpoint, and cannot be reopened by changing their status or starting work again.
+- Slot colours: **green** = available; **blue** = booked and not frozen; **grey** = frozen/unavailable; **amber** = holiday/RM team unavailable; **purple** = completed/closed. Ownership remains a separate “My booking” badge. Holiday colouring takes precedence on a holiday; the booking's status badge still shows its lifecycle status.
+- Tenant login opens the earliest week containing a bookable normal slot within the next **60 days**, using the server's local date and existing availability rules. If none is found, a clear message asks the tenant to contact a Release Manager or browse later weeks. The tenant is selected when booking, so its weekly cap is checked during booking. Manual navigation remains available; refresh stays on the displayed week. Owner/Release Manager login keeps the current week.
+- Existing date protection, weekly limits and emergency permissions still apply. No database migration or new runtime dependency is needed for this update.
+
+### Dedicated Change Details page
+
+Click a scheduled change or its Details button to open its own page. The URL uses
+`/#change/<booking-id>` and supports refresh, bookmarks and browser back/forward.
+Authentication and existing per-booking access checks still apply to direct links.
+Use **Back to calendar** to return to the selected calendar week.
+
+The page includes change information, documents, RM assignment, **Assign to me**,
+start-work and completion actions, plus **Comments** and **Audit history** tabs.
+The protected Owner may assign work but cannot be assigned. Completed changes
+cannot be reassigned, restarted or rescheduled. Existing date freeze rules still
+apply to assignments and workflow actions.
+
+Booking owners can post public comments on their own changes; Owner/Release
+Managers can post public comments or **internal RM notes**. Internal notes are
+filtered on the server and never returned by tenant comment/history endpoints.
+Comments remain available on frozen, historical, completed and cancelled records,
+without changing the protected booking fields. Comments are plain text, limited
+to 5,000 characters, append-only and cannot be edited or deleted. Comments and
+history load 50 entries at a time with an option to load older entries.
+
+Discussion uses COMMENT_ADDED / INTERNAL_NOTE_ADDED events in the existing
+booking_audit table, with server-recorded author and timestamp. No new database
+migration, table or runtime dependency is introduced. Existing audit retention on
+permanent deletion also retains these discussion events. The change history tab
+shows workflow events; discussion is displayed separately in the Comments tab.
+
+Update from the existing POC project directory, preserving `.env` and volumes:
+
+```bash
+git pull --ff-only origin main
+docker compose up -d --build --no-deps app
+docker compose logs --tail=50 app
+```
+
+Proceed with rebuilding only if the pull succeeds. Startup still performs the
+existing migration/bootstrap checks, so older pending revisions can run; this
+feature itself adds no schema changes.
+
+### Schedule Numbers, cloning, global search and comment attachments (25 September 2026)
+
+**Schedule No.** is the existing unique booking reference, for example
+`pds-001`. Every normal and emergency schedule receives one when created.
+It stays unchanged on rescheduling and is separate from Change No. and Jira No.
+Numbers remain reserved through retained audit records after permanent deletion.
+Existing schedules keep their references; no renumbering is required. New compact
+numbers increase across all deployment dates (not per day), with at least three
+digits: `pds-001`, `pds-002`, …, `pds-999`, `pds-1000`. Clones receive a new
+number. Search accepts either uppercase or lowercase. No schema change is needed.
+
+Use **Search Schedule No. across all dates** above the calendar or details page.
+Enter the full number or at least two characters, then select **Find schedule**.
+Results include historical, completed and cancelled records, limited to schedules
+the signed-in account may view. Search is independent of the visible calendar
+week. Results load 25 at a time with **Load more results**. Use **Copy Schedule
+No.** on a details page to copy its number (or select it manually if the browser
+restricts clipboard access on an HTTP server).
+
+To clone a schedule:
+
+1. Open an accessible change and select **Clone schedule**. Completed and
+   historical changes can be used as a source.
+2. The calendar displays a cloning banner and the Available filter. Choose an
+   available slot; navigate weeks if needed. **Cancel clone** discards this draft.
+3. Review the prefilled tenant, technology, verifier, repository, implementation,
+   description, justification and impacted region. Select an active tenant if the
+   original tenant has since been disabled. Emergency bookings still require RM
+   permissions and fresh emergency details.
+4. Upload every currently required deployment document again, then submit.
+   A source attachment or comment attachment cannot satisfy this requirement.
+5. The new booking has its own Schedule No., the current requester, BOOKED status,
+   and a **Cloned from** reference in its details and audit trail.
+
+Cloning never copies Jira references, Change No., work start details, assignments,
+comments, comment attachments, deployment documents or emergency approval data.
+All normal availability, freeze, weekly quota and document rules are checked
+again at submission. The original schedule remains unchanged. Owners/RMs can
+clone other users' schedules they can view; tenant users cannot bypass existing
+access restrictions by guessing a source ID or searching its number. Cloning
+across unrelated private tenant schedules is not enabled.
+
+**Comment attachments:** use the paperclip inside the comment box to select files and describe them in
+the comment. Up to 10 files per comment, each at most **20 MB (20 × 1024 × 1024
+bytes)**. Accepted formats: PDF, DOC/DOCX, XLS/XLSX, CSV, TXT, ZIP, SQL, PNG,
+JPG/JPEG. Empty files and unsupported extensions are rejected. Both frontend and
+backend enforce limits; a failed upload rolls back the comment and removes any
+files written by that request. Failed posts retain the local draft for correction.
+
+Attachments are displayed with filename, size and an authenticated Download
+button. Public-comment files follow booking access; internal-note files are
+Owner/RM-only, including direct download URLs. Downloads are served as attachments
+with content sniffing disabled. Comment files remain separate from mandatory
+booking documents and are not copied when cloning. Uploading a comment does not
+modify frozen booking fields or workflow state.
+
+Comment file metadata and clone lineage use the existing append-only audit
+storage; files use the existing persistent app-storage volume. This update adds
+no database schema migration or runtime dependency. Keep the existing `.env` and
+volumes when rebuilding only the app service. The existing startup migration
+check still runs, so earlier pending migrations are unaffected.
+
+Validation: production frontend build, 16 frontend tests and 17 focused backend
+regression tests passed. Checks include clone document requirements, source
+access, all-date search, internal-file privacy, exact/over-limit uploads, rollback
+cleanup, and existing workflow protections. Browser visual verification was not
+performed for this update.
+
+
+### Compact comment composer
+
+The paperclip and send-arrow controls sit inside the comment box. Click the
+paperclip to select files; repeated selections add files to the draft. Selected
+filenames appear as removable chips. The separate upload panel and explanatory
+paragraphs have been removed. Upload limits still apply (20 MB per file, up to
+10 files), with validation messages shown only when needed. The paperclip's
+hover text shows the size limit. RM users retain the Internal RM note control;
+its privacy and attachment download permissions are unchanged.
+
+
+### Emoji and existing images in comments
+
+The compact comment toolbar includes an emoji picker and an uploaded-image
+picker. Emojis insert at the text cursor. Choose an existing PNG or JPEG from
+this schedule's documents or comment attachments to include its preview with
+your comment. Add a text message and select up to 10 existing images; image
+references reuse the original file without uploading or duplicating it.
+New attachments still use the paperclip and the 20 MB per-file limit.
+
+Public comments can only reference public images. Internal RM notes can also
+reference internal images; switching a draft to public removes private images.
+The server enforces these restrictions for both JSON and multipart comments.
+Image previews require authenticated schedule access and validate PNG/JPEG
+signatures. Deleted or unavailable originals show an unavailable-image message.
+Older comment images can be loaded from the picker. References are stored in
+the existing audit JSON, so this update requires no database schema change.
+
+Validation for this update: production frontend build, 19 frontend tests and
+17 focused backend tests, covering emoji insertion, image selection, reference
+reuse, private-image protection, cross-schedule access, pagination and previews.

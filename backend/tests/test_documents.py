@@ -182,7 +182,9 @@ def test_admin_can_upload_to_any_change(admin, user, tenant, next_monday):
     assert _upload(admin, booking["id"], "DBA_SCRIPT", "script.sql").status_code == 200
 
 
-def test_download_requires_ownership_or_admin(anon, admin, user, other_user, tenant, next_monday):
+def test_any_user_can_download_but_only_the_owner_can_change_documents(
+    anon, admin, user, other_user, tenant, next_monday
+):
     booking = create_booking(user, tenant, next_monday, 1)
     attachment_id = _upload(user, booking["id"], "TEST_RESULTS", "results.pdf").json()["attachments"][0][
         "id"
@@ -190,7 +192,14 @@ def test_download_requires_ownership_or_admin(anon, admin, user, other_user, ten
     path = f"/api/bookings/{booking['id']}/attachments/{attachment_id}/download"
 
     assert anon.get(path).status_code == 401
-    assert other_user.get(path).status_code == 403
+    # Reading a schedule includes its documents...
+    assert other_user.get(path).status_code == 200
+    # ...but only the owner (or an administrator) may add or remove them.
+    assert _upload(other_user, booking["id"], "SUPPORTING_DOCUMENTS", "mine.pdf").status_code == 403
+    assert other_user.delete(
+        f"/api/bookings/{booking['id']}/attachments/{attachment_id}"
+    ).status_code == 403
+    assert attachment_id in [a["id"] for a in user.get(f"/api/bookings/{booking['id']}").json()["attachments"]]
 
     owner = user.get(path)
     assert owner.status_code == 200
@@ -241,13 +250,18 @@ def test_mandatory_document_set_is_configurable(admin, user, tenant, next_monday
     assert booking["documents"]["complete"] is True
 
 
-def test_completing_a_change_requires_the_mandatory_documents(admin, user, tenant, next_monday):
+def test_completing_a_change_requires_the_mandatory_documents(admin, user, other_user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
     implementation = next(
         a for a in booking["attachments"] if a["category"] == "IMPLEMENTATION_PLAN"
     )
     removed = user.delete(f"/api/bookings/{booking['id']}/attachments/{implementation['id']}")
     assert removed.status_code == 200
+
+    from conftest import promote_to_release_manager
+    rm_id = promote_to_release_manager(admin, other_user)
+    assert admin.post(f"/api/admin/bookings/{booking['id']}/assign-users", json={"user_ids": [rm_id]}).status_code == 200
+    assert other_user.post(f"/api/bookings/{booking['id']}/start-work", json={"change_number": "CHG-123"}).status_code == 200
 
     blocked = admin.post(f"/api/admin/bookings/{booking['id']}/status", json={"status": "COMPLETED"})
     assert blocked.status_code == 400

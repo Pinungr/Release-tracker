@@ -104,7 +104,16 @@ def booking_detail(
         and not account.is_owner
     )
     can_edit = mutable and (is_admin or (owner and not booking.is_emergency))
+    from ..models import BookingAudit
+    from sqlalchemy import select
+    import json
+    clone_event = db.scalars(select(BookingAudit).where(
+        BookingAudit.booking_id == booking.id, BookingAudit.event_type == "BOOKING_CLONED"
+    ).order_by(BookingAudit.id).limit(1)).first()
+    clone = json.loads(clone_event.new_values or "{}") if clone_event else {}
     return BookingDetail(
+        cloned_from_id=clone.get("source_id"),
+        cloned_from_reference=clone.get("source_reference"),
         **base,
         requester_name=booking.requester_name,
         requester_email=booking.requester_email,
@@ -124,11 +133,12 @@ def booking_detail(
         cancelled_by_user_id=booking.cancelled_by_user_id,
         attachments=[attachment_out(a) for a in sorted(booking.attachments, key=lambda a: a.id)],
         can_edit=can_edit,
-        can_cancel=can_edit,
-        can_reschedule=can_edit,
-        can_assign_rm=mutable and is_admin,
-        can_start_work=mutable and assigned and is_release_manager,
-        can_download_attachments=is_admin or owner or assigned,
+        can_cancel=can_edit and booking.status != BookingStatus.COMPLETED.value,
+        can_reschedule=can_edit and booking.status != BookingStatus.COMPLETED.value,
+        can_assign_rm=mutable and is_admin and booking.status != BookingStatus.COMPLETED.value,
+        can_start_work=mutable and assigned and is_release_manager and booking.status in {BookingStatus.BOOKED.value, BookingStatus.IN_PROGRESS.value},
+        # Every signed-in user can read any change record, documents included.
+        can_download_attachments=True,
         can_manage_attachments=can_edit,
         slot_label=slot_label,
         slot_time=slot_time,
@@ -300,7 +310,7 @@ def audit_event_out(event: BookingAudit) -> AuditEventOut:
         id=event.id,
         booking_reference=event.booking_reference,
         event_type=event.event_type,
-        actor_type=event.actor_type,  # type: ignore[arg-type]
+        actor_type="USER" if event.actor_type == "TENANT_USER" else event.actor_type,  # type: ignore[arg-type]
         requester_email=event.requester_email,
         admin_username=event.admin_username,
         override_reason=event.override_reason,

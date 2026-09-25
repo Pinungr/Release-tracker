@@ -93,8 +93,11 @@ def test_only_admins_can_edit_or_cancel_an_emergency_change(admin, user, tenant,
     created = post_booking(admin, emergency_payload(tenant, next_monday)).json()
     booking_id = created["booking"]["id"]
 
-    # A tenant user is not the owner and is refused before any rule runs.
-    assert user.get(f"/api/bookings/{booking_id}").status_code == 403
+    # A tenant user can read it like any schedule, but is not told they can change it...
+    read = user.get(f"/api/bookings/{booking_id}")
+    assert read.status_code == 200
+    assert read.json()["can_edit"] is False and read.json()["can_cancel"] is False
+    # ...and is refused if they try anyway.
     assert (
         user.put(f"/api/bookings/{booking_id}", json=emergency_payload(tenant, next_monday)).status_code
         == 403

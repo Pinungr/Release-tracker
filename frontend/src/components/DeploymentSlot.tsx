@@ -25,23 +25,14 @@ interface DeploymentSlotProps {
   onToggleFreeze: (day: DayView, slot: SlotView) => void
 }
 
-function edgeFor(slot: SlotView, isMine: boolean): string {
-  if (slot.manually_frozen) return 'border-slate-300 bg-slate-50/70 ring-1 ring-slate-200'
-  if (slot.booking) {
-    if (isMine) return 'border-teal-300 bg-teal-50/40 ring-1 ring-teal-200'
-    if (slot.booking.is_emergency) return 'border-orange-300 bg-orange-50/50'
-    if (slot.booking.status === 'CANCELLED') return 'border-line bg-canvas'
-    if (slot.booking.status === 'COMPLETED') return 'border-emerald-200 bg-emerald-50/40'
-    return 'border-brand-100 bg-brand-50/40'
+export function edgeFor(slot: SlotView, holiday: boolean, isHistorical: boolean): string {
+  if (holiday || slot.state === 'HOLIDAY') return 'border-amber-300 bg-amber-50'
+  if (slot.booking?.status === 'COMPLETED') return 'border-violet-300 bg-violet-50'
+  if (isHistorical || slot.manually_frozen || slot.booking?.is_locked || (!slot.booking && !slot.bookable)) {
+    return 'border-slate-300 bg-slate-100'
   }
-  switch (slot.state) {
-    case 'AVAILABLE':
-      return 'border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50'
-    case 'HOLIDAY':
-      return 'border-amber-200 bg-amber-50/50'
-    default:
-      return 'border-line bg-canvas'
-  }
+  if (slot.booking) return 'border-blue-300 bg-blue-50'
+  return 'border-emerald-300 bg-emerald-50 hover:bg-emerald-100'
 }
 
 function Cell({
@@ -77,7 +68,7 @@ export function DeploymentSlot({
 
   return (
     <div
-      className={`rounded-lg border px-3 py-3 transition-colors ${SLOT_GRID} ${edgeFor(slot, isMine)}`}
+      className={`rounded-lg border px-3 py-3 transition-colors ${SLOT_GRID} ${edgeFor(slot, day.holiday?.is_full_day === true, isHistorical)}`}
     >
       {/* Slot number */}
       <div className="flex items-center justify-between gap-2 lg:block">
@@ -120,7 +111,7 @@ export function DeploymentSlot({
                   {booking.tenant_name}
                 </span>
                 <span className="block truncate text-xs tnum text-ink-muted">
-                  {booking.booking_reference}
+                  Schedule No. {booking.booking_reference}
                 </span>
               </span>
             </button>

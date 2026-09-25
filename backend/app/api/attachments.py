@@ -74,13 +74,11 @@ def download_attachment(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> FileResponse:
-    if admin is None:
-        if user is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-        if booking.created_by_user_id != user.user_id and not booking_service.user_is_assigned(booking, user.user_id):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "You are not authorized to download this document."
-            )
+    # Reading a change record includes its documents, and every change record
+    # is readable by any signed-in user. Uploading and removing documents stay
+    # restricted to the owner and administrators.
+    if admin is None and user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
     attachment = booking_service.attachment_of(booking, attachment_id)
     if attachment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Attachment not found.")

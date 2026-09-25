@@ -15,6 +15,7 @@ import {
   toBookingPayload,
   validateBookingForm,
   valuesFromBooking,
+  valuesForClone,
   type BookingDocumentErrors,
   type BookingDocumentFiles,
   type BookingFormErrors,
@@ -44,6 +45,7 @@ interface BookingDrawerProps {
   createTarget: CreateTarget | null
   /** Present when editing an existing booking. */
   editBooking: BookingDetail | null
+  cloneSource?: BookingDetail | null
   onSaved: () => void
 }
 
@@ -54,6 +56,7 @@ export function BookingDrawer({
   isAdmin,
   createTarget,
   editBooking,
+  cloneSource = null,
   onSaved,
 }: BookingDrawerProps) {
   const toast = useToast()
@@ -85,9 +88,9 @@ export function BookingDrawer({
     setValues(
       editBooking
         ? valuesFromBooking(editBooking)
-        : { ...EMPTY_BOOKING_VALUES, technology: technologyRef.current },
+        : cloneSource ? valuesForClone(cloneSource) : { ...EMPTY_BOOKING_VALUES, technology: technologyRef.current },
     )
-  }, [open, editBooking])
+  }, [open, editBooking, cloneSource])
 
   useEffect(() => {
     if (!open) return
@@ -108,14 +111,14 @@ export function BookingDrawer({
         }
       })
       .catch(() => setTenants([]))
-  }, [open, editBooking])
+  }, [open, editBooking, cloneSource])
 
   const heading = useMemo(() => {
     if (created) return isEmergency ? 'Emergency change queued' : 'Deployment slot booked'
     if (editBooking) return `Edit ${editBooking.booking_reference}`
     if (isEmergency) return 'Book emergency change'
-    return 'Book production deployment'
-  }, [created, editBooking, isEmergency])
+    return cloneSource ? `Clone ${cloneSource.booking_reference}` : 'Book production deployment'
+  }, [created, editBooking, isEmergency, cloneSource])
 
   const slotContext = createTarget
     ? {
@@ -196,6 +199,7 @@ export function BookingDrawer({
           deployment_date: createTarget.day.day,
           slot_number: createTarget.slot?.slot_number ?? null,
           is_emergency: isEmergency,
+          clone_source_id: cloneSource?.id ?? null,
           override_reason: null,
         })
         const result = await api.createBooking(payload, documents)
@@ -203,7 +207,7 @@ export function BookingDrawer({
         onSaved()
         toast.success(
           isEmergency ? 'Emergency change queued.' : 'Deployment slot booked successfully.',
-          `Reference ${result.booking.booking_reference}`,
+          `Schedule No. ${result.booking.booking_reference}`,
         )
       } else if (editBooking) {
         const payload = toBookingPayload(values, {
@@ -290,7 +294,7 @@ export function BookingDrawer({
               {isEmergency ? 'Emergency change queued successfully.' : 'Deployment slot booked successfully.'}
             </p>
             <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-              <dt className="text-emerald-900/70">Booking reference</dt>
+              <dt className="text-emerald-900/70">Schedule No.</dt>
               <dd className="font-semibold tnum text-emerald-950">
                 {created.booking.booking_reference}
               </dd>
@@ -329,6 +333,8 @@ export function BookingDrawer({
           <DocumentReadinessPanel readiness={created.booking.documents} />
         </div>
       ) : (
+        <>
+        {cloneSource && <p className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">Cloning {cloneSource.booking_reference}. Review the details and upload fresh required documents. The new schedule receives its own number; no comments, files or assignments are copied.</p>}
         <BookingForm
           formId={formId}
           values={values}
@@ -343,6 +349,7 @@ export function BookingDrawer({
           onChange={update}
           onSubmit={submit}
         />
+        </>
       )}
     </Drawer>
   )

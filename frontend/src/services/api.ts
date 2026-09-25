@@ -7,6 +7,10 @@ import type {
   AdminSettings,
   AdminTenant,
   AuditEvent,
+  BookingComment,
+  CommentImage,
+  CommentImageRef,
+  ScheduleSearchResult,
   BookingCreated,
   BookingDetail,
   BookingSummary,
@@ -108,7 +112,7 @@ async function download(path: string, filename: string): Promise<void> {
 
 export const api = {
   // ---- public -------------------------------------------------------------
-  getSchedule: (weekAnchor: string) => request<Schedule>(`/schedule?week=${weekAnchor}`),
+  getSchedule: (weekAnchor: string, firstAvailable = false) => request<Schedule>(`/schedule?week=${weekAnchor}&first_available=${firstAvailable}`),
 
   login: (username_or_email: string, password: string) =>
     request<AuthSession>('/auth/login', { method: 'POST', body: json({ username_or_email, password }) }),
@@ -239,6 +243,34 @@ export const api = {
       body: json({ status, override_reason: overrideReason ?? null }),
     }),
 
+  searchSchedules: (q: string, beforeId?: number) => request<ScheduleSearchResult[]>(`/bookings/search?q=${encodeURIComponent(q)}${beforeId ? `&before_id=${beforeId}` : ''}`),
+  downloadCommentAttachment: (bookingId: number, commentId: number, attachmentId: string, filename: string) =>
+    download(`/bookings/${bookingId}/comments/${commentId}/attachments/${encodeURIComponent(attachmentId)}`, filename),
+  uploadComment: (id: number, body: string, internal: boolean, files: File[], imageRefs: CommentImageRef[] = []) => {
+    const form = new FormData()
+    form.append('body', body)
+    form.append('internal', String(internal))
+    form.append('image_refs', JSON.stringify(imageRefs))
+    files.forEach(file => form.append('files', file))
+    return request<BookingComment>(`/bookings/${id}/comments/upload`, { method: 'POST', body: form })
+  },
+  listCommentImages: (id: number, internal: boolean, beforeId?: number) =>
+    request<{images: CommentImage[]; next_before_id: number | null}>(`/bookings/${id}/comment-images?internal=${internal}${beforeId ? `&before_id=${beforeId}` : ''}`),
+  getCommentImage: async (id: number, image: CommentImageRef, signal?: AbortSignal): Promise<Blob> => {
+    const params = new URLSearchParams({kind: image.kind, attachment_id: image.attachment_id})
+    if (image.comment_id) params.set('comment_id', String(image.comment_id))
+    const response = await fetch(`${BASE}/bookings/${id}/comment-images/preview?${params}`, {headers: authHeaders(), signal})
+    if (!response.ok) throw new ApiError(await readError(response), response.status)
+    const blob = await response.blob()
+    if (!['image/png', 'image/jpeg'].includes(blob.type)) throw new ApiError('Image preview unavailable.', 415)
+    return blob
+  },
+  getBookingComments: (id: number, beforeId?: number) =>
+    request<BookingComment[]>(`/bookings/${id}/comments${beforeId ? `?before_id=${beforeId}` : ''}`),
+  addBookingComment: (id: number, body: string, internal: boolean, imageRefs: CommentImageRef[] = []) =>
+    request<BookingComment>(`/bookings/${id}/comments`, { method: 'POST', body: JSON.stringify({ body, internal, image_refs: imageRefs }) }),
+  getBookingAudit: (id: number, beforeId?: number) =>
+    request<AuditEvent[]>(`/bookings/${id}/audit${beforeId ? `?before_id=${beforeId}` : ''}`),
   getAudit: (bookingId?: number) =>
     request<AuditEvent[]>(`/admin/audit${bookingId ? `?booking_id=${bookingId}` : ''}`),
 

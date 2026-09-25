@@ -118,7 +118,7 @@ export function DaySchedule({
               ? isHistorical
                 ? 'This past/current date is read-only for everyone, including the Owner and Release Managers.'
                 : 'Normal deployment slots are unavailable. The separate emergency queue follows date protection.'
-              : 'No production deployments available.'}
+              : 'Holiday — RM team unavailable for normal deployments.'}
           </span>
         </div>
       ) : null}

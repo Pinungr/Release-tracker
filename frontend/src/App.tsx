@@ -1,12 +1,14 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AdminPanel } from './components/AdminPanel'
 import { AppFooter } from './components/AppFooter'
 import { AppHeader } from './components/AppHeader'
-import { BookingDetailsDrawer } from './components/BookingDetailsDrawer'
+import { ChangeDetailsPage } from './components/ChangeDetailsPage'
 import { BookingDrawer, type CreateTarget } from './components/BookingDrawer'
 import { Alert, Spinner } from './components/Icons'
+import { LandingBanner } from './components/LandingBanner'
 import { ProfileModal } from './components/ProfileModal'
 import { RequiredPasswordChangeScreen } from './components/RequiredPasswordChangeScreen'
+import { ScheduleSearch } from './components/ScheduleSearch'
 import { ScheduleFilters } from './components/ScheduleFilters'
 import { ScheduleSummary } from './components/ScheduleSummary'
 import { SignInScreen } from './components/SignInScreen'
@@ -14,6 +16,7 @@ import { useToast } from './components/ToastNotification'
 import { WeekNavigator } from './components/WeekNavigator'
 import { matchesFilter, matchesSearch, WeeklySchedule } from './components/WeeklySchedule'
 import { useAuthSession } from './hooks/useAuthSession'
+import { useCloneMode } from './hooks/useCloneMode'
 import { useSchedule } from './hooks/useSchedule'
 import { api, ApiError } from './services/api'
 import type { BookingDetail, DayView, FilterKey, PublicSettings, SlotView } from './types'
@@ -71,7 +74,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const toast = useToast()
   const user = auth.user!
 
-  const [anchor, setAnchor] = useState(() => weekStart(toIsoDate(new Date())))
+  const [anchor, setAnchor] = useState(() => auth.isAdmin ? weekStart(toIsoDate(new Date())) : '')
   const { schedule, loading, error, refresh } = useSchedule(anchor)
   const settings = schedule?.settings ?? FALLBACK_SETTINGS
   const timezone = schedule?.timezone ?? 'Asia/Kolkata'
@@ -80,6 +83,11 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const [filter, setFilter] = useState<FilterKey>('ALL')
 
   const [createTarget, setCreateTarget] = useState<CreateTarget | null>(null)
+  const setBoardView = useCallback((next: { filter: FilterKey; query: string }) => {
+    setFilter(next.filter)
+    setQuery(next.query)
+  }, [])
+  const { cloneSource, startClone, endClone } = useCloneMode({ filter, query }, setBoardView)
   const [editBooking, setEditBooking] = useState<BookingDetail | null>(null)
   const [bookingDrawerOpen, setBookingDrawerOpen] = useState(false)
 
@@ -108,22 +116,32 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
     return mine
   }, [schedule, user.id])
 
-  const openBooking = useCallback(
-    async (id: number) => {
-      setDetailOpen(true)
-      setDetailLoading(true)
-      try {
-        setDetailBooking(await api.getBooking(id))
-      } catch (caught) {
-        const message = caught instanceof ApiError ? caught.message : ''
-        toast.error('Could not open the change record', message)
-        setDetailOpen(false)
-      } finally {
-        setDetailLoading(false)
+  const [route, setRoute] = useState(() => window.location.hash)
+  const closeDetails = useCallback(() => { window.location.hash = '' }, [])
+  const openBooking = useCallback((id: number) => { window.location.hash = `change/${id}` }, [])
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash)
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  useEffect(() => {
+    const match = /^#change\/(\d+)$/.exec(route)
+    setDetailBooking(null)
+    setDetailOpen(Boolean(match))
+    if (!match) return
+    window.scrollTo(0, 0)
+    let active = true
+    setDetailLoading(true)
+    api.getBooking(Number(match[1])).then(booking => {
+      if (active) setDetailBooking(booking)
+    }).catch(caught => {
+      if (active) {
+        toast.error('Could not open the change record', caught instanceof ApiError ? caught.message : 'Please try again.')
+        closeDetails()
       }
-    },
-    [toast],
-  )
+    }).finally(() => { if (active) setDetailLoading(false) })
+    return () => { active = false }
+  }, [route, closeDetails, toast])
 
   /** After any mutation, refresh both the board and the open detail drawer. */
   const refreshAll = useCallback(() => {
@@ -131,7 +149,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
     if (detailBooking) {
       void api
         .getBooking(detailBooking.id)
-        .then(setDetailBooking)
+        .then(updated => setDetailBooking(current => current?.id === updated.id ? updated : current))
         .catch(() => undefined)
     }
   }, [refresh, detailBooking])
@@ -222,8 +240,6 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
     // Hand over from the details drawer to the edit drawer rather than
     // stacking them: both are full-height panels at the same depth, so leaving
     // details open would cover the edit form.
-    setDetailOpen(false)
-    setDetailBooking(null)
     setCreateTarget(null)
     setEditBooking(booking)
     setBookingDrawerOpen(true)
@@ -251,19 +267,24 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         onProfile={() => setProfileOpen(true)}
         onAdminPanel={() => setAdminPanelOpen(true)}
         onLogout={() => void auth.signOut()}
-        weekNavigator={
+        weekNavigator={detailOpen ? null : (
           <WeekNavigator
             label={schedule?.week_label ?? '—'}
             loading={loading}
-            isCurrentWeek={anchor === weekStart(toIsoDate(new Date()))}
-            onPrevious={() => setAnchor((current) => addDays(current, -7))}
-            onNext={() => setAnchor((current) => addDays(current, 7))}
+            isCurrentWeek={(schedule?.week_start ?? anchor) === weekStart(toIsoDate(new Date()))}
+            onPrevious={() => setAnchor(addDays(schedule?.week_start || anchor, -7))}
+            onNext={() => setAnchor(addDays(schedule?.week_start || anchor, 7))}
             onToday={() => setAnchor(weekStart(toIsoDate(new Date())))}
           />
-        }
+        )}
       />
 
-      <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      <ScheduleSearch onOpen={openBooking} />
+      {!detailOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+        {cloneSource && <div className="card flex flex-wrap items-center gap-3 border-blue-200 bg-blue-50 p-4">
+          <p className="flex-1 text-sm text-blue-900">Cloning <strong>{cloneSource.booking_reference}</strong>. Choose an available slot, review the details, and upload fresh required documents.</p>
+          <button className="btn-secondary" onClick={endClone}>Cancel clone</button>
+        </div>}
         {error ? (
           <div className="card flex flex-wrap items-center gap-3 border-rose-200 bg-rose-50 p-4">
             <Alert className="size-5 text-rose-600" />
@@ -273,6 +294,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
             </button>
           </div>
         ) : null}
+
+        {schedule ? <LandingBanner schedule={schedule} onGoToWeek={setAnchor} /> : null}
 
         {schedule ? (
           <ScheduleSummary
@@ -306,7 +329,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onAdjustCapacity={(day, delta) => void adjustDayCapacity(day, delta)}
         />
 
-      </main>
+      </main>}
 
       <BookingDrawer
         open={bookingDrawerOpen}
@@ -314,26 +337,29 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           setBookingDrawerOpen(false)
           setCreateTarget(null)
           setEditBooking(null)
+          endClone()
         }}
         settings={settings}
         isAdmin={auth.isAdmin}
         createTarget={createTarget}
         editBooking={editBooking}
+        cloneSource={editBooking ? null : cloneSource}
         onSaved={refreshAll}
       />
 
-      <BookingDetailsDrawer
+      <ChangeDetailsPage
         open={detailOpen}
-        onClose={() => {
-          setDetailOpen(false)
-          setDetailBooking(null)
-        }}
+        onClose={closeDetails}
         booking={detailBooking}
         loading={detailLoading}
         settings={settings}
         isAdmin={auth.isAdmin}
         userId={user.id}
         timezone={timezone}
+        onClone={(source) => {
+          startClone(source)
+          closeDetails()
+        }}
         onEdit={startEdit}
         onChanged={refreshAll}
       />

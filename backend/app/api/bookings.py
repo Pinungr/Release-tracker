@@ -1,13 +1,19 @@
 """Authenticated booking endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from datetime import date, datetime
+import json
+from sqlalchemy import select
+from pydantic import BaseModel, Field, field_validator
+from ..schemas.booking import AuditEventOut
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 from pydantic import ValidationError as PydanticValidationError
 from fastapi.exceptions import RequestValidationError
 
 from ..database import get_db
-from ..models import DeploymentBooking, DocumentCategory
+from ..models import DeploymentBooking, DocumentCategory, BookingAudit, User
 from ..schemas import (
     BookingCancel,
     BookingCreate,
@@ -21,9 +27,10 @@ from ..schemas import (
 )
 from ..security import AdminPrincipal, UserPrincipal
 from ..security.ratelimit import enforce
-from ..services import attachment_service, booking_service, presenters
+from ..services import attachment_service, booking_service, presenters, audit_service
 from ..services.booking_service import Actor
 from ..services.settings_service import get_app_settings
+from ..services.comment_images import ImageReference, ReferencedImage, validated_images, resolve_image, is_image
 from .deps import current_admin, current_user, get_booking
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
@@ -34,15 +41,16 @@ def _assert_can_view(
     admin: AdminPrincipal | None,
     user: UserPrincipal | None,
 ) -> None:
-    """Authenticate first, then authorize: 401 before 403."""
-    if admin is not None:
-        return
-    if user is None:
+    """Any signed-in user may read any change record.
+
+    Tenants need to see the whole board's workload, so viewing, reading,
+    cloning and commenting are open to every authenticated account. Changing a
+    record is not: that goes through ``_owner_actor``. Internal RM notes stay
+    hidden from tenants, but that is decided by role in the comment routes, not
+    here.
+    """
+    if admin is None and user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-    if booking.created_by_user_id != user.user_id and not booking_service.user_is_assigned(booking, user.user_id):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "You are not authorized to view this change record."
-        )
 
 
 def _owner_actor(
@@ -87,6 +95,13 @@ async def create_booking(
     except PydanticValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
 
+    clone_source = None
+    if booking_payload.clone_source_id is not None:
+        clone_source = db.get(DeploymentBooking, booking_payload.clone_source_id)
+        if clone_source is None:
+            raise HTTPException(404, "The source schedule no longer exists.")
+        _assert_can_view(clone_source, admin, user)
+
     form = await request.form()
     app_settings = get_app_settings(db)
     uploads: dict[DocumentCategory, list[object]] = {}
@@ -117,6 +132,11 @@ async def create_booking(
                 attachment_service.save_upload(
                     db, booking, category, upload, actor, commit=False  # type: ignore[arg-type]
                 )
+        if clone_source is not None:
+            audit_service.record(db, booking=booking, event_type="BOOKING_CLONED",
+                actor_type=actor.actor_type, requester_email=booking.requester_email,
+                admin_username=actor.admin_username,
+                new_values={"source_id": clone_source.id, "source_reference": clone_source.booking_reference})
         db.commit()
         db.refresh(booking)
     except Exception:
@@ -127,6 +147,38 @@ async def create_booking(
 
     detail = presenters.booking_detail(db, booking, app_settings, is_admin=actor.is_admin, user_id=actor.user_id)
     return BookingCreated(booking=detail, message=booking_service.success_message(db, booking))
+
+
+class ScheduleSearchResult(BaseModel):
+    id: int
+    booking_reference: str
+    tenant_name: str
+    deployment_date: date
+    status: str
+    change_number: str | None
+
+
+@router.get("/search", response_model=list[ScheduleSearchResult])
+def search_schedules(
+    q: str = Query(min_length=2, max_length=100),
+    before_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+):
+    if admin is None and user is None:
+        raise HTTPException(401, "Authentication required.")
+    query = q.strip().upper()
+    if len(query) < 2:
+        raise HTTPException(422, "Enter at least two characters of the Schedule No.")
+    # Every change record is readable by any signed-in user, so search covers
+    # them all rather than only the caller's own.
+    stmt = select(DeploymentBooking).where(DeploymentBooking.booking_reference.icontains(query, autoescape=True))
+    if before_id is not None:
+        stmt = stmt.where(DeploymentBooking.id < before_id)
+    return [ScheduleSearchResult(id=b.id, booking_reference=b.booking_reference, tenant_name=b.tenant_name,
+        deployment_date=b.deployment_date, status=b.status, change_number=b.change_number)
+        for b in db.scalars(stmt.order_by(DeploymentBooking.id.desc()).limit(25)).all()]
 
 
 @router.get("/{booking_id}", response_model=BookingDetail)
@@ -228,3 +280,256 @@ def start_work(
     return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
+
+
+# Discussion is append-only and deliberately independent of scheduling freezes.
+# Existing booking audit storage preserves comments without a schema migration.
+
+
+class CommentCreate(BaseModel):
+    image_refs: list[ImageReference] = Field(default_factory=list, max_length=10)
+    body: str = Field(min_length=1, max_length=5000)
+    internal: bool = False
+
+    @field_validator("body")
+    @classmethod
+    def meaningful_body(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Enter a comment.")
+        return value
+
+
+class CommentAttachmentOut(BaseModel):
+    id: str
+    original_filename: str
+    size_bytes: int
+
+
+class CommentOut(BaseModel):
+    images: list[ReferencedImage] = Field(default_factory=list)
+    attachments: list[CommentAttachmentOut] = Field(default_factory=list)
+    id: int
+    body: str
+    internal: bool
+    author_name: str
+    author_id: int
+    created_at: datetime
+
+
+def comment_out(event: BookingAudit) -> CommentOut:
+    values = json.loads(event.new_values or "{}")
+    return CommentOut(images=values.get("images", []), attachments=values.get("attachments", []), id=event.id, body=values["body"],
+                      internal=event.event_type == "INTERNAL_NOTE_ADDED",
+                      author_name=values["author_name"], author_id=values["author_id"],
+                      created_at=event.created_at)
+
+
+@router.get("/{booking_id}/comments", response_model=list[CommentOut])
+def list_comments(
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+    before_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    _assert_can_view(booking, admin, user)
+    kinds = ["COMMENT_ADDED", "INTERNAL_NOTE_ADDED"] if admin else ["COMMENT_ADDED"]
+    stmt = select(BookingAudit).where(BookingAudit.booking_id == booking.id, BookingAudit.event_type.in_(kinds))
+    if before_id is not None:
+        stmt = stmt.where(BookingAudit.id < before_id)
+    return [comment_out(e) for e in db.scalars(stmt.order_by(BookingAudit.id.desc()).limit(limit)).all()]
+
+
+@router.post("/{booking_id}/comments", response_model=CommentOut, status_code=201)
+def add_comment(
+    payload: CommentCreate,
+    request: Request,
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+):
+    _assert_can_view(booking, admin, user)
+    if payload.internal and admin is None:
+        raise HTTPException(403, "Internal notes are restricted to the RM team.")
+    enforce(request, "booking-comment", limit=30, window_seconds=300)
+    principal = admin or user
+    account = db.get(User, principal.user_id)
+    images = validated_images(db, booking, payload.image_refs, allow_internal=admin is not None and payload.internal)
+    event = audit_service.record(
+        db, booking=booking,
+        event_type="INTERNAL_NOTE_ADDED" if payload.internal else "COMMENT_ADDED",
+        actor_type="ADMIN" if admin else "USER",
+        admin_username=admin.username if admin else None,
+        requester_email=principal.email,
+        new_values={"body": payload.body, "author_id": principal.user_id, "author_name": account.full_name, "images": images},
+    )
+    db.commit()
+    db.refresh(event)
+    return comment_out(event)
+
+
+@router.get("/{booking_id}/audit", response_model=list[AuditEventOut])
+def booking_audit(
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+    before_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    _assert_can_view(booking, admin, user)
+    # Discussion has its own tab; internal note contents never enter tenant history.
+    stmt = select(BookingAudit).where(
+        BookingAudit.booking_id == booking.id,
+        BookingAudit.event_type.not_in(["COMMENT_ADDED", "INTERNAL_NOTE_ADDED"]),
+    )
+    if before_id is not None:
+        stmt = stmt.where(BookingAudit.id < before_id)
+    return [presenters.audit_event_out(e) for e in db.scalars(stmt.order_by(BookingAudit.id.desc()).limit(limit)).all()]
+
+
+@router.post("/{booking_id}/comments/upload", response_model=CommentOut, status_code=201)
+def add_comment_with_files(
+    request: Request,
+    body: str = Form(min_length=1, max_length=5000),
+    internal: bool = Form(default=False),
+    files: list[UploadFile] = File(default=[]),
+    image_refs: str = Form(default="[]", max_length=5000),
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+):
+    from ..services.comment_attachment_service import save_files
+    _assert_can_view(booking, admin, user)
+    if internal and admin is None:
+        raise HTTPException(403, "Internal notes are restricted to the RM team.")
+    if not body.strip():
+        raise HTTPException(422, "Enter a comment to describe the attachments.")
+    if not files or len(files) > 10:
+        raise HTTPException(422, "Attach between 1 and 10 files per comment.")
+    enforce(request, "booking-comment", limit=30, window_seconds=300)
+    principal = admin or user
+    account = db.get(User, principal.user_id)
+    try:
+        refs = CommentCreate(body=body, internal=internal, image_refs=json.loads(image_refs)).image_refs
+    except (ValueError, PydanticValidationError):
+        raise HTTPException(422, "Invalid image selection.") from None
+    images = validated_images(db, booking, refs, allow_internal=admin is not None and internal)
+    paths = []
+    try:
+        event = audit_service.record(db, booking=booking,
+            event_type="INTERNAL_NOTE_ADDED" if internal else "COMMENT_ADDED",
+            actor_type="ADMIN" if admin else "USER",
+            admin_username=admin.username if admin else None, requester_email=principal.email)
+        db.flush()
+        attachments = save_files(booking.id, event.id, files, paths)
+        event.new_values = json.dumps({"body": body.strip(), "author_id": principal.user_id,
+            "author_name": account.full_name, "attachments": attachments, "images": images})
+        db.commit()
+        db.refresh(event)
+        return comment_out(event)
+    except Exception:
+        db.rollback()
+        for path in paths:
+            path.unlink(missing_ok=True)
+        raise
+    finally:
+        for upload in files:
+            upload.file.close()
+
+
+@router.get("/{booking_id}/comments/{comment_id}/attachments/{attachment_id}")
+def download_comment_attachment(
+    comment_id: int,
+    attachment_id: str,
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+):
+    from fastapi.responses import FileResponse
+    from ..services.comment_attachment_service import attachment_path
+    _assert_can_view(booking, admin, user)
+    event = db.get(BookingAudit, comment_id)
+    if (event is None or event.booking_id != booking.id
+            or event.event_type not in {"COMMENT_ADDED", "INTERNAL_NOTE_ADDED"}
+            or (event.event_type == "INTERNAL_NOTE_ADDED" and admin is None)):
+        raise HTTPException(404, "Comment attachment not found.")
+    attachments = json.loads(event.new_values or "{}").get("attachments", [])
+    attachment = next((a for a in attachments if a["id"] == attachment_id), None)
+    if attachment is None:
+        raise HTTPException(404, "Comment attachment not found.")
+    path = attachment_path(booking.id, event.id, attachment["id"])
+    if not path.is_file():
+        raise HTTPException(404, "Comment attachment file is unavailable.")
+    return FileResponse(path, media_type="application/octet-stream", filename=attachment["original_filename"],
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
+
+class ImagePickerPage(BaseModel):
+    images: list[ReferencedImage]
+    next_before_id: int | None = None
+
+
+@router.get("/{booking_id}/comment-images", response_model=ImagePickerPage)
+def list_comment_images(
+    internal: bool = False,
+    before_id: int | None = Query(default=None, ge=1),
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+):
+    _assert_can_view(booking, admin, user)
+    if internal and admin is None:
+        raise HTTPException(403, "Internal images are restricted to the RM team.")
+    images = []
+    if before_id is None:
+        for attachment in booking.attachments:
+            if is_image(attachment.original_filename):
+                images.append(ReferencedImage(kind="document", attachment_id=str(attachment.id), original_filename=attachment.original_filename))
+    kinds = ["COMMENT_ADDED", "INTERNAL_NOTE_ADDED"] if internal and admin else ["COMMENT_ADDED"]
+    stmt = select(BookingAudit).where(BookingAudit.booking_id == booking.id, BookingAudit.event_type.in_(kinds))
+    if before_id is not None:
+        stmt = stmt.where(BookingAudit.id < before_id)
+    events = list(db.scalars(stmt.order_by(BookingAudit.id.desc()).limit(51)).all())
+    for event in events[:50]:
+        for attachment in json.loads(event.new_values or "{}").get("attachments", []):
+            if is_image(attachment["original_filename"]):
+                images.append(ReferencedImage(kind="comment", attachment_id=attachment["id"], comment_id=event.id,
+                    original_filename=attachment["original_filename"], internal=event.event_type == "INTERNAL_NOTE_ADDED"))
+    return ImagePickerPage(images=images, next_before_id=events[49].id if len(events) > 50 else None)
+
+
+@router.get("/{booking_id}/comment-images/preview")
+def preview_comment_image(
+    kind: str,
+    attachment_id: str,
+    comment_id: int | None = None,
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+):
+    from fastapi.responses import FileResponse
+    _assert_can_view(booking, admin, user)
+    try:
+        ref = ImageReference(kind=kind, attachment_id=attachment_id, comment_id=comment_id)
+    except PydanticValidationError:
+        raise HTTPException(422, "Invalid image reference.") from None
+    image, path = resolve_image(db, booking, ref, allow_internal=admin is not None)
+    # Never preview HTML/SVG or trust an upload's declared content type.
+    with path.open("rb") as source:
+        signature = source.read(8)
+    if signature == b"\x89PNG\r\n\x1a\n":
+        mime = "image/png"
+    elif signature.startswith(b"\xff\xd8\xff"):
+        mime = "image/jpeg"
+    else:
+        raise HTTPException(415, "This file cannot be previewed as a PNG or JPEG image.")
+    return FileResponse(path, media_type=mime, filename=image.original_filename,
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})

@@ -48,6 +48,22 @@ export function valuesFromBooking(booking: BookingDetail): BookingFormValues {
   }
 }
 
+/** Clone only reusable fields; each submission is a fresh booking. */
+export function valuesForClone(source: BookingDetail): BookingFormValues {
+  return {
+    ...EMPTY_BOOKING_VALUES,
+    tenant_id: String(source.tenant_id),
+    technology: source.technology,
+    verifier_name: source.verifier_name,
+    verifier_email: source.verifier_email,
+    git_repository: source.git_repository,
+    implementation_summary: source.implementation_summary,
+    deployment_description: source.deployment_description,
+    justification: source.justification,
+    impacted_region: source.impacted_region,
+  }
+}
+
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 const HTTP_URL = /^https?:\/\/[^\s/$.?#].[^\s]*$/i
 const GIT_URL = /^(git|ssh):\/\/\S+$|^[\w.-]+@[\w.-]+:[\w./~-]+$/i

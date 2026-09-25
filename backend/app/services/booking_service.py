@@ -63,15 +63,20 @@ def resolve_tenant(db: Session, tenant_id: int) -> Tenant:
 
 
 def next_booking_reference(db: Session, day: date) -> str:
-    prefix = f"PDS-{day.strftime('%Y%m%d')}-"
+    # One sequence across dates; retained audits prevent reuse after deletion.
+    prefix = "pds-"
     used = db.scalars(
         select(DeploymentBooking.booking_reference).where(
             DeploymentBooking.booking_reference.like(f"{prefix}%")
         )
     ).all()
+    # References remain reserved after permanent deletion through retained audit rows.
+    used += db.scalars(select(BookingAudit.booking_reference).where(
+        BookingAudit.booking_reference.like(f"{prefix}%")
+    ).distinct()).all()
     highest = 0
     for ref in used:
-        tail = ref.rsplit("-", 1)[-1]
+        tail = ref[len(prefix):]
         if tail.isdigit():
             highest = max(highest, int(tail))
     return f"{prefix}{highest + 1:03d}"
@@ -591,6 +596,8 @@ def update_booking(
         raise BusinessRuleError(AUTOMATIC_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
     new_slot_number = payload.slot_number or booking.slot_number
     moved = (new_day, new_slot_number) != (booking.deployment_date, booking.slot_number)
+    if moved and booking.status == BookingStatus.COMPLETED.value:
+        raise BusinessRuleError("A completed/closed booking cannot be rescheduled.")
     if moved and not booking.is_emergency:
         _validate_slot_target(db, new_day, new_slot_number, actor, app_settings, exclude_id=booking.id, manual_override=payload.manual_override, override_reason=payload.override_reason)
 
@@ -761,7 +768,7 @@ def next_available_slots(
     Normal users additionally have the tenant weekly limit applied per week.
     """
     app_settings = get_app_settings(db)
-    if booking.is_emergency or booking.status == BookingStatus.CANCELLED.value:
+    if booking.is_emergency or booking.status in {BookingStatus.CANCELLED.value, BookingStatus.COMPLETED.value}:
         return []
     try:
         assert_booking_mutable(db, booking, actor)
@@ -857,8 +864,8 @@ def reschedule_booking(
     """
     app_settings = get_app_settings(db)
     assert_booking_not_past(booking)
-    if booking.status == BookingStatus.CANCELLED.value:
-        raise BusinessRuleError("A cancelled booking cannot be rescheduled.")
+    if booking.status in {BookingStatus.CANCELLED.value, BookingStatus.COMPLETED.value}:
+        raise BusinessRuleError("A cancelled or completed/closed booking cannot be rescheduled.")
     if booking.is_emergency:
         raise BusinessRuleError(
             "Emergency changes have no deployment slot and are moved by date from the "
@@ -993,8 +1000,8 @@ def assign_users_to_booking(
             status.HTTP_403_FORBIDDEN,
         )
     assert_booking_mutable(db, booking, actor)
-    if booking.status == BookingStatus.CANCELLED.value:
-        raise BusinessRuleError("A cancelled booking cannot be assigned.")
+    if booking.status in {BookingStatus.CANCELLED.value, BookingStatus.COMPLETED.value}:
+        raise BusinessRuleError("A cancelled or completed booking cannot be assigned.")
 
     unique_ids = list(dict.fromkeys(user_ids))
     users = list(
@@ -1047,8 +1054,10 @@ def start_work(
 ) -> DeploymentBooking:
     """An assigned Release Manager supplies the separate Change No. and starts work."""
     assert_booking_mutable(db, booking, actor)
-    if booking.status == BookingStatus.CANCELLED.value:
-        raise BusinessRuleError("A cancelled booking cannot be started.")
+    if booking.status not in {BookingStatus.BOOKED.value, BookingStatus.IN_PROGRESS.value}:
+        raise BusinessRuleError("Only booked or in-progress tasks can be started or updated.")
+    if not change_number.strip():
+        raise BusinessRuleError("Change No. is required to start work.")
 
     account = db.get(User, actor.user_id) if actor.user_id is not None else None
     is_release_manager = (

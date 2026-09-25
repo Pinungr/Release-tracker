@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../services/api'
 import type { Schedule } from '../types'
 
@@ -7,16 +7,18 @@ import type { Schedule } from '../types'
  * bookings are pulled on start-up.
  */
 export function useSchedule(anchor: string) {
+  const resolvedWeek = useRef('')
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal, initial = false) => {
       setLoading(true)
       try {
-        const result = await api.getSchedule(anchor)
+        const result = await api.getSchedule(anchor || resolvedWeek.current || new Date().toISOString().slice(0, 10), anchor === '' && initial)
         if (!signal?.aborted) {
+          resolvedWeek.current = result.week_start
           setSchedule(result)
           setError(null)
         }
@@ -33,7 +35,7 @@ export function useSchedule(anchor: string) {
 
   useEffect(() => {
     const controller = new AbortController()
-    void load(controller.signal)
+    void load(controller.signal, true)
     return () => controller.abort()
   }, [load])
 
