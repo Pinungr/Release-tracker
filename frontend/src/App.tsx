@@ -309,7 +309,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
       />
 
       {!pageOpen && <ScheduleSearch onOpen={openBooking} />}
-      {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact your organization owner for help with group membership.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
+      {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact the Release Management team to be added to the appropriate tenant group.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
       {globalAuditOpen && (auth.isAdmin ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to the Owner and Release Managers.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
       {scheduleAuditOpen ? <ScheduleAuditPage booking={detailBooking} loading={detailLoading} timezone={timezone} onClose={closeDetails} /> : null}
       {!pageOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
