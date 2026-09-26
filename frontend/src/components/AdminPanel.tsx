@@ -11,7 +11,7 @@ import { AdminTenantManager } from './AdminTenantManager'
 import { AdminUserManager } from './AdminUserManager'
 import { AuditHistory } from './AuditHistory'
 import { Drawer } from './Drawer'
-import { Calendar, Check, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
+import { Calendar, Check, ChevronRight, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
 import { ConfirmationModal } from './Modal'
 import { useToast } from './ToastNotification'
@@ -26,8 +26,8 @@ type Tab =
   | 'audit'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
-  { key: 'users', label: 'Users', icon: <User className="size-4" /> },
-  { key: 'tenants', label: 'Tenants', icon: <Shield className="size-4" /> },
+  { key: 'users', label: 'Accounts', icon: <User className="size-4" /> },
+  { key: 'tenants', label: 'Tenant settings', icon: <Shield className="size-4" /> },
   { key: 'general', label: 'General', icon: <Settings className="size-4" /> },
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
@@ -66,6 +66,7 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
       subtitle="Configuration applies immediately to the weekly board."
     >
       <nav className="-mx-1 mb-5 flex gap-1 overflow-x-auto px-1 pb-1" aria-label="Release control sections">
+        <a href="#/admin/groups" onClick={onClose} className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-brand-600 hover:bg-brand-50"><Shield className="size-4" />Groups<ChevronRight className="size-3" /></a>
         {TABS.map((entry) => (
           <button
             key={entry.key}

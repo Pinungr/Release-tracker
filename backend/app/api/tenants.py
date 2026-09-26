@@ -1,4 +1,4 @@
-"""Tenant master lookup for authenticated scheduling clients."""
+"""Tenant lookup scoped by group membership."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Tenant
 from ..security import UserPrincipal, require_user
+from ..services import group_service
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -17,9 +18,18 @@ def list_active_tenants(
     db: Session = Depends(get_db),
     user: UserPrincipal = Depends(require_user),
 ) -> list[dict]:
-    tenants = db.scalars(
-        select(Tenant).where(Tenant.is_active.is_(True)).order_by(Tenant.name)
-    ).all()
+    # Owner / Release Managers require the full list for administration and
+    # overrides. Management is read-only but may see the organization-wide
+    # schedule, so it also receives all tenant labels. Tenant users receive
+    # only tenant subgroups they actually belong to.
+    if user.is_admin or group_service.is_management(db, user.user_id):
+        stmt = select(Tenant).where(Tenant.is_active.is_(True)).order_by(Tenant.name)
+    else:
+        allowed = group_service.tenant_ids_for_user(db, user.user_id)
+        if not allowed:
+            return []
+        stmt = select(Tenant).where(Tenant.is_active.is_(True), Tenant.id.in_(allowed)).order_by(Tenant.name)
+    tenants = db.scalars(stmt).all()
     return [
         {
             "id": tenant.id,

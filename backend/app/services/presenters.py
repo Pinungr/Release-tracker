@@ -12,6 +12,7 @@ from ..models import (
     BookingAudit,
     BookingAttachment,
     BookingStatus,
+    BookingCollaborator,
     DeploymentBooking,
     User,
     DocumentCategory,
@@ -32,7 +33,7 @@ from ..schemas.booking import (
     SlotView,
 )
 from ..utils.dates import WEEKDAY_NAMES, format_day, format_time, format_week_range, today_local
-from . import booking_service, schedule_service
+from . import booking_service, group_service, schedule_service
 from .settings_service import AppSettings, get_app_settings
 
 
@@ -95,15 +96,16 @@ def booking_detail(
     date_mutable = base["lock_reason"] not in {"CURRENT_DATE", "PAST_DATE", "AUTOMATIC_DATE_FREEZE"}
     mutable = active and date_mutable and (is_admin or not base["is_locked"])
     owner = user_id is not None and user_id == booking.created_by_user_id
+    collaborator = user_id is not None and booking_service.user_is_collaborator(db, booking, user_id)
     assigned = user_id is not None and booking_service.user_is_assigned(booking, user_id)
     account = db.get(User, user_id) if user_id is not None else None
     is_release_manager = (
         account is not None
         and account.is_active
-        and account.role == "ADMIN"
         and not account.is_owner
+        and group_service.is_release_manager(db, account.id)
     )
-    can_edit = mutable and (is_admin or (owner and not booking.is_emergency))
+    can_edit = mutable and (is_admin or ((owner or collaborator) and not booking.is_emergency))
     from ..models import BookingAudit
     from sqlalchemy import select
     import json
@@ -132,10 +134,26 @@ def booking_detail(
         cancelled_at=booking.cancelled_at,
         cancelled_by_user_id=booking.cancelled_by_user_id,
         attachments=[attachment_out(a) for a in sorted(booking.attachments, key=lambda a: a.id)],
+        collaborators=[
+            AssignedUserOut(
+                user_id=row.user_id,
+                full_name=user.full_name,
+                username=user.username,
+                email=user.email,
+                assigned_at=row.created_at,
+            )
+            for row, user in db.execute(
+                select(BookingCollaborator, User)
+                .join(User, User.id == BookingCollaborator.user_id)
+                .where(BookingCollaborator.booking_id == booking.id)
+                .order_by(User.full_name, User.username)
+            ).all()
+        ],
         can_edit=can_edit,
         can_cancel=can_edit and booking.status != BookingStatus.COMPLETED.value,
         can_reschedule=can_edit and booking.status != BookingStatus.COMPLETED.value,
         can_assign_rm=mutable and is_admin and booking.status != BookingStatus.COMPLETED.value,
+        can_assign_self=mutable and is_release_manager and (not assigned or len(booking.assignments) > 1) and booking.status != BookingStatus.COMPLETED.value,
         can_start_work=mutable and assigned and is_release_manager and booking.status in {BookingStatus.BOOKED.value, BookingStatus.IN_PROGRESS.value},
         # Every signed-in user can read any change record, documents included.
         can_download_attachments=True,

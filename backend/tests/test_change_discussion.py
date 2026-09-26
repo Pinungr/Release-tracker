@@ -64,15 +64,31 @@ def test_discussion_allowed_without_changing_protected_booking(admin, user, tena
     assert db.scalars(select(BookingAudit).where(BookingAudit.booking_id == row.id, BookingAudit.event_type == 'COMMENT_ADDED')).first()
 
 
-def test_rm_can_assign_self_then_start(admin, user, other_user, tenant, next_monday):
+def test_rm_can_search_assign_self_then_start(admin, user, other_user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
     bid = booking['id']
     rm_id = promote_to_release_manager(admin, other_user)
     owner_id = admin.get('/api/auth/me').json()['id']
+
+    # Type-ahead starts at two characters and only returns Release Manager members.
+    assert other_user.get('/api/admin/release-managers/search?q=u').status_code == 422
+    search = other_user.get('/api/admin/release-managers/search?q=us')
+    assert search.status_code == 200, search.text
+    assert [row['id'] for row in search.json()] == [rm_id]
+
+    details = other_user.get(f'/api/bookings/{bid}').json()
+    assert details['can_assign_self'] is True
+    assert details['can_start_work'] is False
+
+    # The protected Owner remains invalid as an assignee.
     assert other_user.post(f'/api/admin/bookings/{bid}/assign-users', json={'user_ids': [owner_id]}).status_code == 422
-    assigned = other_user.post(f'/api/admin/bookings/{bid}/assign-users', json={'user_ids': [rm_id]})
-    assert assigned.status_code == 200
-    assert other_user.get(f'/api/bookings/{bid}').json()['can_start_work']
+
+    assigned = other_user.post(f'/api/admin/bookings/{bid}/assign-self')
+    assert assigned.status_code == 200, assigned.text
+    assert [row['user_id'] for row in assigned.json()['assigned_users']] == [rm_id]
+    assert assigned.json()['can_assign_self'] is False
+    assert assigned.json()['can_start_work'] is True
+
     assert other_user.post(f'/api/bookings/{bid}/start-work', json={'change_number': 'CHG-123'}).status_code == 200
     assert other_user.post(f'/api/admin/bookings/{bid}/status', json={'status': 'COMPLETED'}).status_code == 200
     assert other_user.post(f'/api/admin/bookings/{bid}/assign-users', json={'user_ids': [rm_id]}).status_code == 400

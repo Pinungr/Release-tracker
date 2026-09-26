@@ -25,9 +25,13 @@ from ..models import (
     ACTIVE_STATUSES,
     DOCUMENT_LABELS,
     BookingAssignment,
+    BookingCollaborator,
     BookingAttachment,
     BookingAudit,
     BookingStatus,
+    AccessGroup,
+    GroupMembership,
+    GroupType,
     DeploymentBooking,
     DocumentCategory,
     SlotFreeze,
@@ -36,7 +40,7 @@ from ..models import (
 )
 from ..schemas.booking import BookingCreate, BookingUpdate, DocumentReadiness, DocumentStatus
 from ..utils.dates import format_day, format_time, is_deployment_weekday, now_utc, today_local, week_start
-from . import audit_service, schedule_service
+from . import audit_service, schedule_service, group_service
 from .settings_service import AppSettings, get_app_settings
 
 
@@ -274,6 +278,36 @@ class Actor:
         return "ADMIN" if self.is_admin else "USER"
 
 
+def assert_tenant_access(db: Session, actor: Actor, tenant_id: int) -> None:
+    """Non-admin writers may schedule only for tenant subgroups they belong to."""
+    if actor.is_admin:
+        return
+    if actor.user_id is None:
+        raise BusinessRuleError("Authentication required.", status.HTTP_401_UNAUTHORIZED)
+    if group_service.is_management(db, actor.user_id):
+        raise BusinessRuleError("Management access is read-only.", status.HTTP_403_FORBIDDEN)
+    allowed = group_service.tenant_ids_for_user(db, actor.user_id)
+    if tenant_id not in allowed:
+        if group_service.is_member_pool(db, actor.user_id):
+            raise BusinessRuleError(
+                "Your account is still in Member Pool. Ask an administrator or Release Manager to assign you to a tenant group before scheduling.",
+                status.HTTP_403_FORBIDDEN,
+            )
+        raise BusinessRuleError(
+            "You can schedule only for tenant groups you belong to.",
+            status.HTTP_403_FORBIDDEN,
+        )
+
+
+def user_is_collaborator(db: Session, booking: DeploymentBooking, user_id: int) -> bool:
+    return db.scalar(
+        select(BookingCollaborator.id).where(
+            BookingCollaborator.booking_id == booking.id,
+            BookingCollaborator.user_id == user_id,
+        )
+    ) is not None
+
+
 # --------------------------------------------------------------------------- #
 # Slot / limit validation
 # --------------------------------------------------------------------------- #
@@ -470,6 +504,7 @@ def create_booking(
 ) -> DeploymentBooking:
     app_settings = get_app_settings(db)
     tenant = resolve_tenant(db, payload.tenant_id)
+    assert_tenant_access(db, actor, tenant.id)
     jira_number = _normalise_jira_number(payload, app_settings)
     assert_day_not_past(payload.deployment_date)
     if is_date_automatically_frozen(db, payload.deployment_date, app_settings):
@@ -602,6 +637,7 @@ def update_booking(
         _validate_slot_target(db, new_day, new_slot_number, actor, app_settings, exclude_id=booking.id, manual_override=payload.manual_override, override_reason=payload.override_reason)
 
     tenant = resolve_tenant(db, payload.tenant_id)
+    assert_tenant_access(db, actor, tenant.id)
     jira_number = _normalise_jira_number(payload, app_settings)
     if not booking.is_emergency and (moved or tenant.id != booking.tenant_id):
         applied = _validate_weekly_limit(
@@ -987,12 +1023,11 @@ def delete_booking(db: Session, booking: DeploymentBooking, actor: Actor) -> Non
 def assign_users_to_booking(
     db: Session, booking: DeploymentBooking, user_ids: list[int], actor: Actor
 ) -> DeploymentBooking:
-    """Replace the Release Manager assignment list for a booking.
+    """Replace a booking's assignee with exactly one Release Manager.
 
     The protected Owner account may assign work but can never be an assignee.
-    Release Managers are active non-owner accounts with the internal ADMIN role;
-    a Release Manager may assign the booking to themselves or to another
-    Release Manager.
+    Release Manager group membership is the source of truth; a Release Manager
+    may assign the booking to themselves or to another Release Manager.
     """
     if not actor.is_admin:
         raise BusinessRuleError(
@@ -1004,14 +1039,24 @@ def assign_users_to_booking(
         raise BusinessRuleError("A cancelled or completed booking cannot be assigned.")
 
     unique_ids = list(dict.fromkeys(user_ids))
+    if len(unique_ids) != 1:
+        raise BusinessRuleError(
+            "Select exactly one Release Manager for this schedule.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
     users = list(
         db.scalars(
-            select(User).where(
+            select(User)
+            .join(GroupMembership, GroupMembership.user_id == User.id)
+            .join(AccessGroup, AccessGroup.id == GroupMembership.group_id)
+            .where(
                 User.id.in_(unique_ids),
                 User.is_active.is_(True),
-                User.role == "ADMIN",
                 User.is_owner.is_(False),
+                AccessGroup.group_type == GroupType.RELEASE_MANAGERS.value,
+                AccessGroup.is_active.is_(True),
             )
+            .distinct()
         ).all()
     )
     found = {u.id for u in users}
@@ -1023,6 +1068,10 @@ def assign_users_to_booking(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
+    # Serialize replacements on PostgreSQL so simultaneous selections cannot
+    # each append an assignee after reading the same old assignment list.
+    db.execute(select(DeploymentBooking).where(DeploymentBooking.id == booking.id).with_for_update())
+    db.expire(booking, ["assignments"])
     before_ids = [a.user_id for a in booking.assignments]
     booking.assignments.clear()
     db.flush()
@@ -1063,8 +1112,8 @@ def start_work(
     is_release_manager = (
         account is not None
         and account.is_active
-        and account.role == "ADMIN"
         and not account.is_owner
+        and group_service.is_release_manager(db, account.id)
     )
     if (
         not is_release_manager

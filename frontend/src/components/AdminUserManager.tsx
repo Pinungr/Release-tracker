@@ -2,16 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '../services/api'
 import type { ManagedUser } from '../types'
 import { formatTimestamp } from '../utils/dates'
-import { Check, Search, Shield, Spinner, User } from './Icons'
-import { ConfirmationModal, Modal } from './Modal'
+import { Check, Search, Spinner } from './Icons'
+import { Modal } from './Modal'
 import { useToast } from './ToastNotification'
 
-/**
- * Owner / Release Manager view of the shared users table. The internal ADMIN
- * permission role is presented to users as "Release Manager"; the one protected
- * Owner is displayed separately. Only the Owner may grant or revoke Release
- * Manager access. The API remains the authorization source of truth.
- */
+/** Account-level controls only. Group membership is managed on the Groups tab. */
 export function AdminUserManager({
   timezone,
   currentUserId,
@@ -27,17 +22,13 @@ export function AdminUserManager({
   const [search, setSearch] = useState('')
   const [busyId, setBusyId] = useState<number | null>(null)
   const [resetTarget, setResetTarget] = useState<ManagedUser | null>(null)
-  const [confirmRole, setConfirmRole] = useState<ManagedUser | null>(null)
 
   const load = useCallback((term = '') => {
     setError(null)
-    api
-      .listUsers(term.trim() || undefined)
-      .then(setUsers)
-      .catch((caught) => {
-        setUsers([])
-        setError(caught instanceof ApiError ? caught.message : 'Could not load users.')
-      })
+    api.listUsers(term.trim() || undefined).then(setUsers).catch((caught) => {
+      setUsers([])
+      setError(caught instanceof ApiError ? caught.message : 'Could not load accounts.')
+    })
   }, [])
 
   useEffect(() => load(), [load])
@@ -49,7 +40,7 @@ export function AdminUserManager({
       load(search)
       toast.success(success, user.username)
     } catch (caught) {
-      toast.error('Could not update the user', caught instanceof ApiError ? caught.message : '')
+      toast.error('Could not update the account', caught instanceof ApiError ? caught.message : '')
     } finally {
       setBusyId(null)
     }
@@ -57,193 +48,52 @@ export function AdminUserManager({
 
   return (
     <section>
-      <h3 className="text-sm font-semibold text-ink">User management</h3>
+      <h3 className="text-sm font-semibold text-ink">Accounts</h3>
       <p className="mt-0.5 text-xs text-ink-muted">
-        Everyone signs in through the same login. The Owner can grant Release Manager access;
-        Release Managers can manage deployments and assign work.
+        Account status and password controls live here. Release Manager, tenant, Management and custom-team membership is managed only from Groups.
       </p>
 
-      <form
-        className="mt-4 mb-4 flex gap-2"
-        onSubmit={(event) => {
-          event.preventDefault()
-          load(search)
-        }}
-      >
+      <form className="mt-4 mb-4 flex gap-2" onSubmit={(event) => { event.preventDefault(); load(search) }}>
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-muted" />
-          <input
-            className="field pl-9"
-            placeholder="Search name, username or email"
-            aria-label="Search users"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
+          <input className="field pl-9" placeholder="Search name, username or email" aria-label="Search users" value={search} onChange={(event) => setSearch(event.target.value)} />
         </div>
-        <button type="submit" className="btn-secondary">
-          Search
-        </button>
+        <button type="submit" className="btn-secondary">Search</button>
       </form>
 
       {error ? <p className="mb-3 text-sm text-rose-600">{error}</p> : null}
-
       {!users ? (
-        <div className="flex items-center gap-2 py-8 text-sm text-ink-muted">
-          <Spinner className="size-4" />
-          Loading users…
-        </div>
+        <div className="flex items-center gap-2 py-8 text-sm text-ink-muted"><Spinner className="size-4" />Loading accounts…</div>
       ) : users.length === 0 ? (
-        <p className="text-sm text-ink-muted">No users match that search.</p>
+        <p className="text-sm text-ink-muted">No accounts match that search.</p>
       ) : (
         <ul className="space-y-2">
           {users.map((user) => {
-            // Mirrors _assert_may_manage on the server.
-            const manageable =
-              !user.is_owner && user.id !== currentUserId && (isOwner || user.role !== 'ADMIN')
-            const canPromote = isOwner
+            const manageable = !user.is_owner && user.id !== currentUserId && (isOwner || user.role !== 'ADMIN')
             return (
-            <li key={user.id} className="rounded-lg border border-line p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-ink">{user.full_name}</span>
-                <span className="text-xs text-ink-muted">@{user.username}</span>
-                <span
-                  className={`badge ${
-                    user.role === 'ADMIN'
-                      ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-100'
-                      : 'bg-slate-100 text-slate-600 ring-1 ring-slate-200'
-                  }`}
-                >
-                  {user.role === 'ADMIN' ? <Shield className="size-3" /> : <User className="size-3" />}
-                  {user.is_owner ? 'Owner' : user.role === 'ADMIN' ? 'Release Manager' : 'Tenant User'}
-                </span>
-                <span
-                  className={`badge ${
-                    user.is_active
-                      ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
-                      : 'bg-slate-100 text-slate-500 ring-1 ring-slate-200'
-                  }`}
-                >
-                  {user.is_active ? 'Active' : 'Inactive'}
-                </span>
-                {user.is_owner ? (
-                  <span className="tooltip-host">
-                    <span className="badge bg-violet-50 text-violet-700 ring-1 ring-violet-200">
-                      <Shield className="size-3" />
-                      Protected
-                    </span>
-                    <span className="tooltip">
-                      The protected owner account. It cannot be demoted, deactivated or reset by
-                      anyone, and only the Owner can manage Release Managers.
-                    </span>
-                  </span>
-                ) : null}
-                {user.must_change_password ? (
-                  <span className="badge bg-amber-50 text-amber-800 ring-1 ring-amber-200">
-                    Must change password
-                  </span>
-                ) : null}
-              </div>
-
-              <p className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-ink-muted">
-                <span>{user.email}</span>
-                <span>Created {formatTimestamp(user.created_at, timezone)}</span>
-              </p>
-
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {manageable ? (
-                  <>
-                    {user.role === 'ADMIN' || canPromote ? (
-                      <button
-                        type="button"
-                        className="btn-secondary btn-sm"
-                        disabled={busyId === user.id}
-                        onClick={() => setConfirmRole(user)}
-                      >
-                        {user.role === 'ADMIN' ? 'Remove Release Manager access' : 'Make Release Manager'}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="btn-ghost btn-sm"
-                      disabled={busyId === user.id}
-                      onClick={() =>
-                        void act(
-                          user,
-                          () => api.setUserActive(user.id, !user.is_active),
-                          user.is_active ? 'User deactivated.' : 'User activated.',
-                        )
-                      }
-                    >
-                      {user.is_active ? 'Deactivate' : 'Activate'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-ghost btn-sm"
-                      disabled={busyId === user.id}
-                      onClick={() => setResetTarget(user)}
-                    >
-                      Reset password
-                    </button>
-                  </>
-                ) : (
-                  <p className="text-xs text-ink-muted">
-                    {user.is_owner
-                      ? 'The owner account is protected. Its credentials are managed by the owner alone.'
-                      : user.id === currentUserId
-                        ? 'You cannot manage your own account here. Change your password from your profile.'
-                        : 'Only the Owner can manage a Release Manager account.'}
-                  </p>
-                )}
-              </div>
-            </li>
+              <li key={user.id} className="rounded-lg border border-line p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-ink">{user.full_name}</span>
+                  <span className="text-xs text-ink-muted">@{user.username}</span>
+                  {user.is_owner ? <span className="badge bg-violet-50 text-violet-700 ring-1 ring-violet-200">Owner</span> : null}
+                  {(user.groups ?? []).map((group) => <span key={group.id} className="badge bg-canvas text-ink-muted ring-1 ring-line">{group.name}</span>)}
+                  <span className={`badge ${user.is_active ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100' : 'bg-slate-100 text-slate-500 ring-1 ring-slate-200'}`}>{user.is_active ? 'Active' : 'Inactive'}</span>
+                  {user.must_change_password ? <span className="badge bg-amber-50 text-amber-800 ring-1 ring-amber-200">Must change password</span> : null}
+                </div>
+                <p className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-ink-muted"><span>{user.email}</span><span>Created {formatTimestamp(user.created_at, timezone)}</span></p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {manageable ? <>
+                    <button type="button" className="btn-ghost btn-sm" disabled={busyId === user.id} onClick={() => void act(user, () => api.setUserActive(user.id, !user.is_active), user.is_active ? 'Account deactivated.' : 'Account activated.')}>{user.is_active ? 'Deactivate' : 'Activate'}</button>
+                    <button type="button" className="btn-ghost btn-sm" disabled={busyId === user.id} onClick={() => setResetTarget(user)}>Reset password</button>
+                  </> : <p className="text-xs text-ink-muted">{user.is_owner ? 'The Owner account is protected.' : user.id === currentUserId ? 'Use your profile to manage your own password.' : 'Only the Owner can manage a Release Manager account.'}</p>}
+                </div>
+              </li>
             )
           })}
         </ul>
       )}
 
-      <ConfirmationModal
-        open={confirmRole !== null}
-        onClose={() => setConfirmRole(null)}
-        onConfirm={() => {
-          const target = confirmRole
-          if (!target) return
-          setConfirmRole(null)
-          void act(
-            target,
-            () => api.setUserRole(target.id, target.role === 'ADMIN' ? 'TENANT_USER' : 'ADMIN'),
-            'Role updated.',
-          )
-        }}
-        title={confirmRole?.role === 'ADMIN' ? 'Remove Release Manager access?' : 'Make this user a Release Manager?'}
-        facts={
-          confirmRole
-            ? [
-                { label: 'User', value: confirmRole.full_name },
-                { label: 'Username', value: confirmRole.username },
-                { label: 'Current role', value: confirmRole.is_owner ? 'Owner' : confirmRole.role === 'ADMIN' ? 'Release Manager' : 'Tenant User' },
-              ]
-            : []
-        }
-        note={
-          confirmRole?.role === 'ADMIN'
-            ? 'They will lose Release Manager access on their very next request.'
-            : 'They will gain Release Manager access immediately, including deployment administration, emergency changes and overrides.'
-        }
-        confirmLabel={confirmRole?.role === 'ADMIN' ? 'Remove access' : 'Make Release Manager'}
-        cancelLabel="Keep current role"
-        destructive={confirmRole?.role === 'ADMIN'}
-      />
-
-      {resetTarget ? (
-        <ResetPasswordModal
-          user={resetTarget}
-          onClose={() => setResetTarget(null)}
-          onDone={() => {
-            setResetTarget(null)
-            load(search)
-          }}
-        />
-      ) : null}
+      {resetTarget ? <ResetPasswordModal user={resetTarget} onClose={() => setResetTarget(null)} onDone={() => { setResetTarget(null); load(search) }} /> : null}
     </section>
   )
 }

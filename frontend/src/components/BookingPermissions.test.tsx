@@ -24,6 +24,7 @@ function booking(overrides: Partial<BookingDetail> = {}): BookingDetail {
     deployment_date: '2026-10-04', slot_number: 1, slot_label: 'Slot 1', slot_time: '09:00 PM - 05:00 AM',
     status: 'BOOKED', is_emergency: false, is_past: false, is_locked: false, lock_reason: 'NONE',
     created_by_user_id: 1, assigned_users: [{ user_id: 2, full_name: 'RM User', username: 'rm', email: 'rm@example.com', assigned_at: '' }],
+    collaborators: [], can_assign_self: false,
     change_number: null, jira_number: null, jira_url: null, git_repository: 'https://example.com/repo',
     attachments: [{ id: 10, category: 'TEST_RESULTS', original_filename: 'evidence.pdf', size_bytes: 42 }],
     documents: { items: [], missing_labels: [], percent: 100, complete: true, provided_required: 1, total_required: 1 },
@@ -57,7 +58,6 @@ describe('authoritative booking permissions', () => {
 
   it('keeps editable future booking actions', async () => {
     show(booking())
-    await waitFor(() => expect(api.listUsers).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: 'Edit' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Reschedule' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()

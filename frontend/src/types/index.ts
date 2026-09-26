@@ -116,10 +116,12 @@ export interface BookingDetail extends BookingSummary {
   cancelled_at: string | null
   cancelled_by_user_id: number | null
   attachments: Attachment[]
+  collaborators: AssignedUser[]
   can_edit: boolean
   can_cancel: boolean
   can_reschedule: boolean
   can_assign_rm: boolean
+  can_assign_self: boolean
   can_start_work: boolean
   can_download_attachments: boolean
   can_manage_attachments: boolean
@@ -247,6 +249,30 @@ export interface Schedule {
   settings: PublicSettings
 }
 
+
+export interface GroupMember {
+  id: number
+  full_name: string
+  username: string
+  email: string
+  is_active: boolean
+  is_owner: boolean
+}
+
+export interface AccessGroup {
+  id: number
+  name: string
+  group_type: 'MEMBER_POOL' | 'RELEASE_MANAGERS' | 'TENANTS' | 'TENANT_SUBGROUP' | 'MANAGEMENT' | 'CUSTOM'
+  parent_group_id: number | null
+  tenant_id: number | null
+  description: string | null
+  permissions: Record<string, boolean>
+  is_system: boolean
+  is_active: boolean
+  member_count: number
+  members?: GroupMember[]
+}
+
 /** A row in Owner / Release Manager user management. */
 export interface ManagedUser {
   id: number
@@ -259,6 +285,7 @@ export interface ManagedUser {
   is_active: boolean
   must_change_password: boolean
   created_at: string
+  groups?: Pick<AccessGroup, 'id' | 'name' | 'group_type' | 'tenant_id'>[]
 }
 
 /** The tenant master as an administrator sees it. */
@@ -287,6 +314,7 @@ export interface AuthUser {
   /** Only the Owner may manage other Release Manager accounts. */
   is_owner?: boolean
   must_change_password?: boolean
+  groups?: Pick<AccessGroup, 'id' | 'name' | 'group_type' | 'tenant_id'>[]
 }
 
 export interface AdminSettings {

@@ -13,7 +13,7 @@ from pydantic import ValidationError as PydanticValidationError
 from fastapi.exceptions import RequestValidationError
 
 from ..database import get_db
-from ..models import DeploymentBooking, DocumentCategory, BookingAudit, User
+from ..models import DeploymentBooking, DocumentCategory, BookingAudit, BookingCollaborator, User
 from ..schemas import (
     BookingCancel,
     BookingCreate,
@@ -27,7 +27,7 @@ from ..schemas import (
 )
 from ..security import AdminPrincipal, UserPrincipal
 from ..security.ratelimit import enforce
-from ..services import attachment_service, booking_service, presenters, audit_service
+from ..services import attachment_service, booking_service, presenters, audit_service, group_service
 from ..services.booking_service import Actor
 from ..services.settings_service import get_app_settings
 from ..services.comment_images import ImageReference, ReferencedImage, validated_images, resolve_image, is_image
@@ -54,6 +54,7 @@ def _assert_can_view(
 
 
 def _owner_actor(
+    db: Session,
     booking: DeploymentBooking,
     admin: AdminPrincipal | None,
     user: UserPrincipal | None,
@@ -62,7 +63,9 @@ def _owner_actor(
         return Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-    if booking.created_by_user_id != user.user_id:
+    if group_service.is_management(db, user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
+    if booking.created_by_user_id != user.user_id and not booking_service.user_is_collaborator(db, booking, user.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not authorized to modify this booking.")
     return Actor(is_admin=False, requester_email=user.email, user_id=user.user_id)
 
@@ -203,7 +206,7 @@ def update_booking(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    actor = _owner_actor(booking, admin, user)
+    actor = _owner_actor(db, booking, admin, user)
     updated = booking_service.update_booking(db, booking, payload, actor)
     return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
@@ -217,7 +220,7 @@ def cancel_booking(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingSummary:
-    actor = _owner_actor(booking, admin, user)
+    actor = _owner_actor(db, booking, admin, user)
     cancelled = booking_service.cancel_booking(db, booking, actor, payload.override_reason)
     return presenters.booking_summary(db, cancelled, get_app_settings(db))
 
@@ -235,7 +238,7 @@ def reschedule_options(
     Only the owner or an administrator may reschedule, so the same check
     guards the picker: nobody sees availability for a record they cannot move.
     """
-    actor = _owner_actor(booking, admin, user)
+    actor = _owner_actor(db, booking, admin, user)
     return [
         presenters.slot_option_out(option)
         for option in booking_service.next_available_slots(db, booking, actor, limit=limit)
@@ -250,7 +253,7 @@ def reschedule_booking(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    actor = _owner_actor(booking, admin, user)
+    actor = _owner_actor(db, booking, admin, user)
     moved = booking_service.reschedule_booking(
         db,
         booking,
@@ -260,6 +263,86 @@ def reschedule_booking(
         payload.override_reason,
     )
     return presenters.booking_detail(db, moved, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
+
+
+@router.get("/{booking_id}/collaborator-candidates", response_model=list[dict])
+def collaborator_candidates(
+    q: str | None = Query(default=None),
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+) -> list[dict]:
+    # Only the booking creator or an administrator manages delegation.
+    if admin is None and (user is None or booking.created_by_user_id != user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the booking owner can manage collaborators.")
+    if admin is None and user is not None and group_service.is_management(db, user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
+    allowed_ids = group_service.tenant_ids_for_user(db, user.user_id) if user is not None else {booking.tenant_id}
+    if admin is None and booking.tenant_id not in allowed_ids:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are no longer a member of this tenant group.")
+    stmt = (
+        select(User)
+        .join(group_service.GroupMembership, group_service.GroupMembership.user_id == User.id)
+        .join(group_service.AccessGroup, group_service.AccessGroup.id == group_service.GroupMembership.group_id)
+        .where(
+            group_service.AccessGroup.tenant_id == booking.tenant_id,
+            User.is_active.is_(True),
+            User.id != booking.created_by_user_id,
+        )
+        .distinct()
+        .order_by(User.full_name, User.username)
+    )
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        stmt = stmt.where((User.full_name.ilike(term)) | (User.username.ilike(term)) | (User.email.ilike(term)))
+    existing = set(db.scalars(select(BookingCollaborator.user_id).where(BookingCollaborator.booking_id == booking.id)).all())
+    return [
+        {"id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email, "selected": u.id in existing}
+        for u in db.scalars(stmt.limit(50)).all()
+    ]
+
+
+@router.put("/{booking_id}/collaborators", response_model=BookingDetail)
+def replace_collaborators(
+    payload: dict,
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+) -> BookingDetail:
+    if admin is None and (user is None or booking.created_by_user_id != user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the booking owner can manage collaborators.")
+    if admin is None and user is not None and group_service.is_management(db, user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
+    actor_id = admin.user_id if admin is not None else user.user_id  # type: ignore[union-attr]
+    raw = payload.get("user_ids", [])
+    if not isinstance(raw, list):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "user_ids must be a list.")
+    try:
+        user_ids = list(dict.fromkeys(int(v) for v in raw))
+    except (TypeError, ValueError):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid collaborator user id.") from None
+    valid = set(db.scalars(
+        select(User.id)
+        .join(group_service.GroupMembership, group_service.GroupMembership.user_id == User.id)
+        .join(group_service.AccessGroup, group_service.AccessGroup.id == group_service.GroupMembership.group_id)
+        .where(
+            User.id.in_(user_ids),
+            User.is_active.is_(True),
+            group_service.AccessGroup.tenant_id == booking.tenant_id,
+        )
+    ).all()) if user_ids else set()
+    if valid != set(user_ids):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Collaborators must be active members of this booking's tenant group.")
+    db.query(BookingCollaborator).filter(BookingCollaborator.booking_id == booking.id).delete(synchronize_session=False)
+    for uid in user_ids:
+        if uid == booking.created_by_user_id:
+            continue
+        db.add(BookingCollaborator(booking_id=booking.id, user_id=uid, added_by_user_id=actor_id))
+    db.commit()
+    db.refresh(booking)
+    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=admin is not None, user_id=actor_id)
 
 
 @router.post("/{booking_id}/start-work", response_model=BookingDetail)
@@ -284,6 +367,11 @@ def start_work(
 
 # Discussion is append-only and deliberately independent of scheduling freezes.
 # Existing booking audit storage preserves comments without a schema migration.
+
+
+def _assert_may_write_discussion(db: Session, admin: AdminPrincipal | None, user: UserPrincipal | None) -> None:
+    if admin is None and user is not None and group_service.is_management(db, user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
 
 
 class CommentCreate(BaseModel):
@@ -352,6 +440,7 @@ def add_comment(
     user: UserPrincipal | None = Depends(current_user),
 ):
     _assert_can_view(booking, admin, user)
+    _assert_may_write_discussion(db, admin, user)
     if payload.internal and admin is None:
         raise HTTPException(403, "Internal notes are restricted to the RM team.")
     enforce(request, "booking-comment", limit=30, window_seconds=300)
@@ -405,6 +494,7 @@ def add_comment_with_files(
 ):
     from ..services.comment_attachment_service import save_files
     _assert_can_view(booking, admin, user)
+    _assert_may_write_discussion(db, admin, user)
     if internal and admin is None:
         raise HTTPException(403, "Internal notes are restricted to the RM team.")
     if not body.strip():

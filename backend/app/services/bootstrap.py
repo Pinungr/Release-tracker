@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import ApplicationSetting, DeploymentSlotConfiguration, User
+from ..models import ApplicationSetting, DeploymentSlotConfiguration, GroupType, User
 from ..security import hash_secret
 from .migrations import upgrade_database
+from . import group_service
 
 #: Normal production deployment windows run overnight by default.
 DEFAULT_SLOT_START = time(21, 0)
@@ -126,9 +127,33 @@ def ensure_single_owner(db: Session) -> None:
     db.commit()
 
 
+
+def ensure_group_model(db: Session) -> None:
+    """Seed system groups and place existing users into a deterministic home."""
+    groups = group_service.ensure_system_groups(db)
+    group_service.sync_all_tenant_groups(db)
+    # Existing databases predate memberships. Owners stay outside Member Pool;
+    # existing Release Managers are migrated into the RM group; all other
+    # unassigned users start in Member Pool until Admin gives them a group.
+    for user in db.scalars(select(User).order_by(User.id)).all():
+        if user.is_owner:
+            continue
+        if group_service.user_groups(db, user.id):
+            group_service.reconcile_member_pool(db, user.id)
+            continue
+        if user.role == "ADMIN":
+            group_service.add_membership(
+                db, groups[GroupType.RELEASE_MANAGERS.value], user, actor_user_id=None
+            )
+        else:
+            group_service.reconcile_member_pool(db, user.id)
+    db.commit()
+
+
 def initialise() -> None:
     upgrade_database()
     with SessionLocal() as db:
         ensure_slot_configurations(db)
         ensure_bootstrap_admin(db)
         ensure_single_owner(db)
+        ensure_group_model(db)

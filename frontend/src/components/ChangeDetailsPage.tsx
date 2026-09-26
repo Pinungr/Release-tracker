@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../services/api'
-import type { BookingDetail, ManagedUser, PublicSettings } from '../types'
+import type { BookingDetail, PublicSettings } from '../types'
 import { formatDate, formatTimestamp } from '../utils/dates'
 import { DocumentReadinessPanel } from './DocumentReadiness'
 import { DocumentUploader } from './DocumentUploader'
@@ -9,6 +9,7 @@ import { ChangeActivity } from './ChangeActivity'
 import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Spinner, Trash, User } from './Icons'
 import { ConfirmationModal, Modal } from './Modal'
 import { RescheduleModal } from './RescheduleModal'
+import { ReleaseManagerAssignee } from './ReleaseManagerAssignee'
 import { BookingStatusBadge, EmergencyBadge, LockBadge } from './StatusBadge'
 import { useToast } from './ToastNotification'
 
@@ -56,16 +57,19 @@ export function ChangeDetailsPage({
   const [moveDate, setMoveDate] = useState('')
   const [moveBusy, setMoveBusy] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
-  const [assignmentUsers, setAssignmentUsers] = useState<ManagedUser[]>([])
-  const [selectedAssignees, setSelectedAssignees] = useState<number[]>([])
-  const [assignmentBusy, setAssignmentBusy] = useState(false)
   const [changeNumber, setChangeNumber] = useState('')
   const [workBusy, setWorkBusy] = useState(false)
   const [workError, setWorkError] = useState<string | null>(null)
+  const [collaboratorOpen, setCollaboratorOpen] = useState(false)
+  const [collaboratorSearch, setCollaboratorSearch] = useState('')
+  const [collaboratorCandidates, setCollaboratorCandidates] = useState<Array<{ id: number; full_name: string; username: string; email: string; selected: boolean }>>([])
+  const [collaboratorSelection, setCollaboratorSelection] = useState<number[]>([])
+  const [collaboratorBusy, setCollaboratorBusy] = useState(false)
 
   const ownsBooking = booking !== null && userId === booking.created_by_user_id
   const canAct = booking?.can_edit ?? false
   const hasLockReason = booking !== null && booking.lock_reason !== 'NONE'
+  const isAssigned = booking !== null && userId !== null && booking.assigned_users.some((u) => u.user_id === userId)
   const lockMessages = {
     CURRENT_DATE: 'This booking is locked because deployments scheduled for today are read-only.',
     PAST_DATE: 'This booking is historical and cannot be modified.',
@@ -73,32 +77,35 @@ export function ChangeDetailsPage({
     MANUAL_SLOT_FREEZE: 'This slot was manually frozen by the Owner or a Release Manager.',
     NONE: '',
   }
-  const isAssigned = booking !== null && userId !== null && booking.assigned_users.some((u) => u.user_id === userId)
 
   useEffect(() => {
-    setSelectedAssignees(booking?.assigned_users.map((u) => u.user_id) ?? [])
     setChangeNumber(booking?.change_number ?? '')
     setWorkError(null)
-    if (open && booking?.can_assign_rm) {
-      void api.listUsers().then((users) => setAssignmentUsers(users.filter((u) => u.is_active && u.role === 'ADMIN' && !u.is_owner))).catch(() => setAssignmentUsers([]))
-    }
-  }, [booking, open, isAdmin])
+  }, [booking?.id, booking?.change_number, open])
 
-  async function saveAssignments(ids = selectedAssignees) {
-    if (!booking || !booking.can_assign_rm) return
-    if (!ids.length) {
-      toast.error('Select at least one Release Manager.')
-      return
-    }
-    setAssignmentBusy(true)
+  useEffect(() => {
+    if (!collaboratorOpen || !booking || !ownsBooking) return
+    const timer = window.setTimeout(() => {
+      void api.getCollaboratorCandidates(booking.id, collaboratorSearch).then((rows) => {
+        setCollaboratorCandidates(rows)
+        setCollaboratorSelection((current) => current.length ? current : booking.collaborators.map((u) => u.user_id))
+      }).catch(() => setCollaboratorCandidates([]))
+    }, 150)
+    return () => window.clearTimeout(timer)
+  }, [collaboratorOpen, collaboratorSearch, booking?.id, booking?.collaborators, ownsBooking])
+
+  async function saveCollaborators() {
+    if (!booking || !ownsBooking) return
+    setCollaboratorBusy(true)
     try {
-      await api.assignBookingUsers(booking.id, ids)
-      toast.success('Release Managers assigned.', booking.booking_reference)
+      await api.setCollaborators(booking.id, collaboratorSelection)
+      toast.success('Booking collaborators updated.')
+      setCollaboratorOpen(false)
       onChanged()
     } catch (error) {
-      toast.error('Could not assign Release Managers', error instanceof ApiError ? error.message : 'Please try again.')
+      toast.error('Could not update collaborators', error instanceof ApiError ? error.message : 'Please try again.')
     } finally {
-      setAssignmentBusy(false)
+      setCollaboratorBusy(false)
     }
   }
 
@@ -242,6 +249,7 @@ export function ChangeDetailsPage({
                   if (!navigator.clipboard) { toast.error('Copy unavailable', 'Select and copy the Schedule No. shown above.'); return }
                   void navigator.clipboard.writeText(booking.booking_reference).then(() => toast.success('Schedule No. copied')).catch(() => toast.error('Could not copy', 'Select and copy the Schedule No. shown above.'))
                 }}>Copy Schedule No.</button>
+                {ownsBooking && !booking.is_emergency ? <button type="button" className="btn-secondary" onClick={() => { setCollaboratorSelection(booking.collaborators.map((u) => u.user_id)); setCollaboratorOpen(true) }}>Collaborators</button> : null}
                 {canAct ? (
                   <>
                     <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
@@ -329,8 +337,11 @@ export function ChangeDetailsPage({
                 )}
               </Row>
               <Row label="Change No.">{booking.change_number ?? 'Pending RM update'}</Row>
-              <Row label="Assigned Release Managers">
+              <Row label="Assigned Release Manager">
                 {booking.assigned_users.length ? booking.assigned_users.map((u) => u.full_name).join(', ') : 'Not assigned'}
+              </Row>
+              <Row label="Booking collaborators">
+                {booking.collaborators.length ? booking.collaborators.map((u) => u.full_name).join(', ') : 'None'}
               </Row>
               <Row label="Requester">
                 <span className="inline-flex flex-wrap items-center gap-x-2">
@@ -388,32 +399,7 @@ export function ChangeDetailsPage({
                 <p className="text-xs text-ink-muted">Started: {booking.work_started_at ? formatTimestamp(booking.work_started_at, timezone) : 'Not started'}</p>
               </section>
             {booking.can_assign_rm ? (
-              <section className="rounded-xl border border-line bg-canvas/50 p-4">
-                <h3 className="text-sm font-semibold text-ink">Assign Release Managers</h3>
-                <p className="mt-1 text-xs text-ink-muted">Only assigned Release Managers can start this CRQ and provide the separate Change No. The protected Owner account cannot be assigned.</p>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {assignmentUsers.length === 0 ? (
-                    <p className="text-xs text-ink-muted sm:col-span-2">No active Release Managers are available. The Owner can promote a tenant user from User management.</p>
-                  ) : null}
-                  {assignmentUsers.map((user) => (
-                    <label key={user.id} className="flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={selectedAssignees.includes(user.id)}
-                        onChange={(event) => setSelectedAssignees((current) => event.target.checked ? [...current, user.id] : current.filter((id) => id !== user.id))}
-                      />
-                      <span>{user.full_name} <span className="text-ink-muted">({user.username})</span></span>
-                    </label>
-                  ))}
-                </div>
-                <button type="button" className="btn-primary mt-3" disabled={assignmentBusy || !selectedAssignees.length} onClick={() => void saveAssignments()}>
-                  {assignmentBusy ? <Spinner className="size-4" /> : null}
-                  Save Release Manager assignment
-                </button>
-                {userId !== null && !isAssigned && assignmentUsers.some(u => u.id === userId) ? (
-                  <button className="btn-secondary mt-3 ml-2" disabled={assignmentBusy} onClick={() => void saveAssignments([...booking.assigned_users.map(u => u.user_id), userId])}>Assign to me</button>
-                ) : null}
-              </section>
+              <ReleaseManagerAssignee key={booking.id} booking={booking} onChanged={onChanged} />
             ) : null}
 
             {booking.can_start_work ? (
@@ -446,7 +432,7 @@ export function ChangeDetailsPage({
                 booking={booking}
                 settings={settings}
                 isAdmin={isAdmin}
-                canManage={ownsBooking}
+                canManage={booking.can_manage_attachments}
                 readOnly={!booking.can_manage_attachments}
                 onUpdated={() => onChanged()}
               />
@@ -489,6 +475,42 @@ export function ChangeDetailsPage({
             </div>
           </div>
           {moveError ? <p className="mt-3 text-xs font-medium text-rose-600">{moveError}</p> : null}
+        </Modal>
+      ) : null}
+
+      {booking && ownsBooking ? (
+        <Modal
+          open={collaboratorOpen}
+          onClose={() => setCollaboratorOpen(false)}
+          title="Booking collaborators"
+          description={`Choose colleagues from ${booking.tenant_name}. Collaborators can edit, reschedule, cancel and manage documents under the same booking rules as you.`}
+          size="md"
+          footer={
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={() => setCollaboratorOpen(false)} disabled={collaboratorBusy}>Cancel</button>
+              <button type="button" className="btn-primary" onClick={() => void saveCollaborators()} disabled={collaboratorBusy}>
+                {collaboratorBusy ? <Spinner className="size-4" /> : null}
+                Save collaborators
+              </button>
+            </div>
+          }
+        >
+          <label className="field-label" htmlFor="collaborator-search">Search same-tenant colleagues</label>
+          <input id="collaborator-search" className="field" value={collaboratorSearch} onChange={(event) => setCollaboratorSearch(event.target.value)} placeholder="Name, username or email" />
+          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+            {collaboratorCandidates.map((candidate) => (
+              <label key={candidate.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={collaboratorSelection.includes(candidate.id)}
+                  onChange={(event) => setCollaboratorSelection((current) => event.target.checked ? [...current, candidate.id] : current.filter((id) => id !== candidate.id))}
+                />
+                <span><span className="font-medium text-ink">{candidate.full_name}</span><span className="ml-2 text-xs text-ink-muted">@{candidate.username}</span></span>
+              </label>
+            ))}
+            {!collaboratorCandidates.length ? <p className="py-5 text-center text-sm text-ink-muted">No eligible colleagues found in this tenant group.</p> : null}
+          </div>
+          <p className="mt-3 text-xs text-ink-muted">Only the booking creator can add or remove collaborators. Collaborators cannot delegate access onward.</p>
         </Modal>
       ) : null}
 

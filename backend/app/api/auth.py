@@ -17,6 +17,7 @@ from ..security import (
 from ..security.tokens import create_user_token
 from ..security.ratelimit import enforce
 from ..utils.dates import now_utc
+from ..services import group_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -44,6 +45,13 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=8, max_length=256)
     confirm_new_password: str = Field(min_length=8, max_length=256)
+
+
+def _group_payload(db: Session, user: User) -> list[dict]:
+    return [
+        {"id": g.id, "name": g.name, "group_type": g.group_type, "tenant_id": g.tenant_id}
+        for g in group_service.user_groups(db, user.id)
+    ]
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
@@ -78,6 +86,7 @@ def register_user(
     )
     db.add(user)
     db.flush()
+    group_service.reconcile_member_pool(db, user.id)
 
     db.commit()
     return {
@@ -88,6 +97,7 @@ def register_user(
             "username": user.username,
             "email": user.email,
             "role": user.role,
+            "groups": _group_payload(db, user),
         },
     }
 
@@ -115,6 +125,7 @@ def login_user(request: Request, payload: LoginRequest, db: Session = Depends(ge
                 "username": user.username,
                 "email": user.email,
                 "role": user.role,
+                "groups": _group_payload(db, user),
                 "is_owner": user.is_owner,
                 "must_change_password": user.must_change_password,
             },
@@ -172,6 +183,7 @@ def read_me(user=Depends(require_authenticated_user), db: Session = Depends(get_
         "username": account.username,
         "email": account.email,
         "role": account.role,
+        "groups": _group_payload(db, account),
         "is_owner": account.is_owner,
         "must_change_password": account.must_change_password,
     }

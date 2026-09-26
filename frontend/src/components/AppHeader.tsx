@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Logout, Settings, Shield, User } from './Icons'
 
 interface AppHeaderProps {
+  groupsOpen?: boolean
   timezone: string
   username: string
   isAdmin: boolean
@@ -13,6 +14,7 @@ interface AppHeaderProps {
 }
 
 export function AppHeader({
+  groupsOpen = false,
   timezone,
   username,
   isAdmin,
@@ -28,7 +30,12 @@ export function AppHeader({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3 py-3.5">
           {/* On phones the brand takes its own line so the title is never
               truncated down to a few characters. */}
-          <div className="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-auto">
+          <a
+            href="#"
+            aria-label="Go to dashboard"
+            title="Go to dashboard"
+            className="flex min-w-0 flex-1 basis-full items-center gap-3 rounded-lg transition hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-600 sm:basis-auto"
+          >
             <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-brand-600 text-sm font-bold text-white shadow-sm">
               PD
             </span>
@@ -37,10 +44,10 @@ export function AppHeader({
                 Production Deployment Scheduler
               </h1>
               <p className="truncate text-xs text-ink-muted">
-                Weekly production release board · {timezone.replace('_', ' ')}
+                {groupsOpen ? 'People & groups' : 'Weekly production release board'} · {timezone.replace('_', ' ')}
               </p>
             </div>
-          </div>
+          </a>
 
           <div className="order-3 w-full lg:order-2 lg:w-auto">{weekNavigator}</div>
 
@@ -53,11 +60,12 @@ export function AppHeader({
 
             {isAdmin ? (
               <>
+                <a href={groupsOpen ? '#' : '#/admin/groups'} className="btn-secondary">{groupsOpen ? 'Schedule' : 'Groups'}</a>
                 <span className="hidden items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 sm:inline-flex">
                   <Shield className="size-4" />
                   {isOwner ? 'OWNER' : 'RELEASE MANAGER'}
                 </span>
-                <button type="button" onClick={onAdminPanel} className="btn-primary">
+                <button type="button" onClick={onAdminPanel} className="btn-primary" aria-label="Release controls">
                   <Settings className="size-4" />
                   <span className="hidden sm:inline">Release controls</span>
                 </button>

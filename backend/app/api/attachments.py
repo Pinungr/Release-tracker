@@ -9,7 +9,7 @@ from ..database import get_db
 from ..models import BookingStatus, DeploymentBooking, DocumentCategory
 from ..schemas import BookingDetail
 from ..security import AdminPrincipal, UserPrincipal
-from ..services import attachment_service, booking_service, presenters
+from ..services import attachment_service, booking_service, presenters, group_service
 from ..services.booking_service import Actor
 from ..services.settings_service import get_app_settings
 from ..utils import files as file_utils
@@ -19,6 +19,7 @@ router = APIRouter(prefix="/bookings", tags=["attachments"])
 
 
 def _actor(
+    db: Session,
     booking: DeploymentBooking,
     admin: AdminPrincipal | None,
     user: UserPrincipal | None,
@@ -27,7 +28,9 @@ def _actor(
         return Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-    if booking.created_by_user_id != user.user_id:
+    if group_service.is_management(db, user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
+    if booking.created_by_user_id != user.user_id and not booking_service.user_is_collaborator(db, booking, user.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not authorized to modify these documents.")
     if booking.status == BookingStatus.CANCELLED.value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This booking has been cancelled.")
@@ -43,7 +46,7 @@ def upload_attachment(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    actor = _actor(booking, admin, user)
+    actor = _actor(db, booking, admin, user)
     booking_service.assert_booking_mutable(db, booking, actor)
     attachment_service.save_upload(db, booking, category, file, actor)
     return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
@@ -57,7 +60,7 @@ def delete_attachment(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    actor = _actor(booking, admin, user)
+    actor = _actor(db, booking, admin, user)
     booking_service.assert_booking_mutable(db, booking, actor)
     attachment = booking_service.attachment_of(booking, attachment_id)
     if attachment is None:

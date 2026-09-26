@@ -16,11 +16,14 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import (
     ACTIVE_STATUSES,
+    AccessGroup,
     BookingAudit,
     BookingStatus,
     DailySlotCapacity,
     DeploymentBooking,
     DeploymentSlotConfiguration,
+    GroupMembership,
+    GroupType,
     Holiday,
     SlotFreeze,
     Tenant,
@@ -47,7 +50,7 @@ from ..security import (
     hash_secret,
     require_admin,
 )
-from ..services import audit_service, booking_service, presenters, schedule_service
+from ..services import audit_service, booking_service, presenters, schedule_service, group_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
 from ..services.bootstrap import ensure_regular_slot_count
@@ -179,6 +182,7 @@ def create_tenant(
     )
     db.add(tenant)
     db.flush()
+    group_service.ensure_tenant_group(db, tenant)
     audit_service.record(
         db,
         event_type="TENANT_CREATED",
@@ -227,6 +231,7 @@ def update_tenant(
     tenant.description = payload.get("description")
     if "weekly_booking_limit" in payload:
         tenant.weekly_booking_limit = _tenant_weekly_limit(payload.get("weekly_booking_limit"))
+    group_service.ensure_tenant_group(db, tenant)
     db.commit()
     return {
         "id": tenant.id,
@@ -251,6 +256,7 @@ def update_tenant_status(
     if not isinstance(payload.get("is_active"), bool):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "is_active must be a boolean value.")
     tenant.is_active = payload["is_active"]
+    group_service.ensure_tenant_group(db, tenant)
     db.commit()
     return {
         "id": tenant.id,
@@ -288,6 +294,10 @@ def list_users(
             "is_active": u.is_active,
             "must_change_password": u.must_change_password,
             "created_at": u.created_at,
+            "groups": [
+                {"id": g.id, "name": g.name, "group_type": g.group_type, "tenant_id": g.tenant_id}
+                for g in group_service.user_groups(db, u.id)
+            ],
         }
         for u in users
     ]
@@ -367,6 +377,7 @@ def update_user_role(
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ):
+    """Compatibility endpoint: Release Manager access is now group membership."""
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
@@ -374,28 +385,220 @@ def update_user_role(
     if role not in {"ADMIN", "TENANT_USER"}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "role must be ADMIN or TENANT_USER.")
     _assert_may_manage(db, user, admin, "promoted or demoted")
-    # Creating a new administrator is an owner-only act. Otherwise any
-    # administrator could mint allies and outvote the rest of the installation.
-    if role == "ADMIN" and not _is_owner(db, admin):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Only the Owner can grant Release Manager access.",
-        )
-    if role != "ADMIN":
+    rm = group_service.system_group(db, GroupType.RELEASE_MANAGERS.value)
+    if rm is None:
+        rm = group_service.ensure_system_groups(db)[GroupType.RELEASE_MANAGERS.value]
+    if role == "ADMIN":
+        if not _is_owner(db, admin):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Owner can grant Release Manager access.")
+        group_service.add_membership(db, rm, user, actor_user_id=admin.user_id)
+    else:
         _assert_not_last_active_admin(db, user, admin)
-    previous = user.role
-    user.role = role
-    audit_service.record(
-        db,
-        event_type="USER_ROLE_UPDATED",
-        actor_type="ADMIN",
-        admin_username=admin.username,
-        requester_email=user.email,
-        old_values={"role": previous},
-        new_values={"role": user.role},
-    )
+        group_service.remove_membership(db, rm, user, actor_user_id=admin.user_id)
     db.commit()
-    return {"message": "Role updated.", "user_id": user.id, "role": user.role}
+    return {"message": "Group membership updated.", "user_id": user.id, "role": user.role}
+
+
+# --------------------------------------------------------------------------- #
+# Group-based access control
+# --------------------------------------------------------------------------- #
+
+def _group_out(db: Session, group: AccessGroup, *, include_members: bool = False) -> dict:
+    member_rows = []
+    if include_members:
+        users = db.scalars(
+            select(User)
+            .join(GroupMembership, GroupMembership.user_id == User.id)
+            .where(GroupMembership.group_id == group.id)
+            .order_by(User.full_name, User.username)
+        ).all()
+        member_rows = [
+            {
+                "id": u.id, "full_name": u.full_name, "username": u.username,
+                "email": u.email, "is_active": u.is_active, "is_owner": u.is_owner,
+            }
+            for u in users
+        ]
+    count = db.scalar(select(func.count(GroupMembership.id)).where(GroupMembership.group_id == group.id)) or 0
+    return {
+        "id": group.id,
+        "name": group.name,
+        "group_type": group.group_type,
+        "parent_group_id": group.parent_group_id,
+        "tenant_id": group.tenant_id,
+        "description": group.description,
+        "permissions": group_service.permissions(group),
+        "is_system": group.is_system,
+        "is_active": group.is_active,
+        "member_count": count,
+        "members": member_rows,
+    }
+
+
+@router.get("/groups", response_model=list[dict])
+def list_groups(
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> list[dict]:
+    group_service.ensure_system_groups(db)
+    group_service.sync_all_tenant_groups(db)
+    db.commit()
+    groups = db.scalars(
+        select(AccessGroup).order_by(AccessGroup.parent_group_id.nulls_first(), AccessGroup.group_type, AccessGroup.name)
+    ).all()
+    return [_group_out(db, group) for group in groups]
+
+
+@router.get("/release-managers/search", response_model=list[dict])
+def search_release_managers(
+    q: str = Query(min_length=2, max_length=100),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> list[dict]:
+    """Type-ahead lookup for assignment; only RM group members are returned."""
+    return [
+        {
+            "id": user.id,
+            "full_name": user.full_name,
+            "username": user.username,
+            "email": user.email,
+            "is_active": user.is_active,
+            "is_owner": user.is_owner,
+        }
+        for user in group_service.search_release_managers(db, q, limit=10)
+    ]
+
+
+@router.get("/groups/{group_id}", response_model=dict)
+def read_group(
+    group_id: int,
+    search: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    group = db.get(AccessGroup, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found.")
+    result = _group_out(db, group, include_members=True)
+    if search:
+        term = search.strip().lower()
+        result["members"] = [
+            u for u in result["members"]
+            if term in u["full_name"].lower() or term in u["username"].lower() or term in u["email"].lower()
+        ]
+    return result
+
+
+@router.post("/groups", response_model=dict, status_code=status.HTTP_201_CREATED)
+def create_custom_group(
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Group name is required.")
+    duplicate = db.scalars(select(AccessGroup).where(AccessGroup.name == name, AccessGroup.parent_group_id.is_(None))).first()
+    if duplicate:
+        raise HTTPException(status.HTTP_409_CONFLICT, "A group with this name already exists.")
+    import json
+    permissions = payload.get("permissions") if isinstance(payload.get("permissions"), dict) else {}
+    group = AccessGroup(
+        name=name,
+        group_type=GroupType.CUSTOM.value,
+        description=str(payload.get("description", "")).strip() or None,
+        permissions_json=json.dumps(permissions, separators=(",", ":")),
+        is_system=False,
+    )
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+    return _group_out(db, group)
+
+
+@router.put("/groups/{group_id}", response_model=dict)
+def update_group(
+    group_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    group = db.get(AccessGroup, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found.")
+    import json
+    if not group.is_system and group.group_type == GroupType.CUSTOM.value and "name" in payload:
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Group name is required.")
+        group.name = name
+    if "description" in payload:
+        group.description = str(payload.get("description", "")).strip() or None
+    if "permissions" in payload and isinstance(payload.get("permissions"), dict):
+        group.permissions_json = json.dumps(payload["permissions"], separators=(",", ":"))
+    db.commit()
+    return _group_out(db, group)
+
+
+@router.post("/groups/{group_id}/members/{user_id}", response_model=dict)
+def add_group_member(
+    group_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    group = db.get(AccessGroup, group_id)
+    user = db.get(User, user_id)
+    if group is None or user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group or user not found.")
+    if group.group_type in {GroupType.MEMBER_POOL.value, GroupType.TENANTS.value}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This system group is managed automatically. Assign a working group or tenant subgroup instead.")
+    if group.group_type == GroupType.RELEASE_MANAGERS.value and not _is_owner(db, admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Owner can grant Release Manager access.")
+    group_service.add_membership(db, group, user, actor_user_id=admin.user_id)
+    db.commit()
+    return _group_out(db, group, include_members=True)
+
+
+@router.delete("/groups/{group_id}/members/{user_id}", response_model=dict)
+def remove_group_member(
+    group_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    group = db.get(AccessGroup, group_id)
+    user = db.get(User, user_id)
+    if group is None or user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group or user not found.")
+    if group.group_type == GroupType.MEMBER_POOL.value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Member Pool is managed automatically.")
+    if group.group_type == GroupType.RELEASE_MANAGERS.value:
+        if not _is_owner(db, admin):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Owner can remove Release Manager access.")
+        _assert_not_last_active_admin(db, user, admin)
+    group_service.remove_membership(db, group, user, actor_user_id=admin.user_id)
+    db.commit()
+    return _group_out(db, group, include_members=True)
+
+
+@router.delete("/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_custom_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> None:
+    group = db.get(AccessGroup, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found.")
+    if group.is_system or group.group_type != GroupType.CUSTOM.value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "System and tenant groups cannot be deleted here.")
+    affected = list(db.scalars(select(GroupMembership.user_id).where(GroupMembership.group_id == group.id)).all())
+    db.delete(group)
+    db.flush()
+    for uid in affected:
+        group_service.reconcile_member_pool(db, uid, added_by_user_id=admin.user_id)
+    db.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -712,7 +915,19 @@ def assign_booking_users(
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
     updated = booking_service.assign_users_to_booking(db, booking, payload.user_ids, _actor(admin))
-    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=True)
+    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=True, user_id=admin.user_id)
+
+
+@router.post("/bookings/{booking_id}/assign-self", response_model=BookingDetail)
+def assign_booking_to_self(
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> BookingDetail:
+    if not group_service.is_release_manager(db, admin.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only a Release Manager can assign a booking to themselves.")
+    updated = booking_service.assign_users_to_booking(db, booking, [admin.user_id], _actor(admin))
+    return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=True, user_id=admin.user_id)
 
 
 @router.post("/bookings/{booking_id}/move", response_model=BookingDetail)

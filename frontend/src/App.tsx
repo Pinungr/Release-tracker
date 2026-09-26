@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AdminGroupManager } from './components/AdminGroupManager'
 import { AdminPanel } from './components/AdminPanel'
 import { AppFooter } from './components/AppFooter'
 import { AppHeader } from './components/AppHeader'
@@ -117,6 +118,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }, [schedule, user.id])
 
   const [route, setRoute] = useState(() => window.location.hash)
+  const groupsOpen = /^#\/admin\/groups(?:\/|$)/.test(route)
   const closeDetails = useCallback(() => { window.location.hash = '' }, [])
   const openBooking = useCallback((id: number) => { window.location.hash = `change/${id}` }, [])
   useEffect(() => {
@@ -267,7 +269,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         onProfile={() => setProfileOpen(true)}
         onAdminPanel={() => setAdminPanelOpen(true)}
         onLogout={() => void auth.signOut()}
-        weekNavigator={detailOpen ? null : (
+        groupsOpen={groupsOpen}
+        weekNavigator={detailOpen || groupsOpen ? null : (
           <WeekNavigator
             label={schedule?.week_label ?? '—'}
             loading={loading}
@@ -279,8 +282,9 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         )}
       />
 
-      <ScheduleSearch onOpen={openBooking} />
-      {!detailOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      {!groupsOpen && <ScheduleSearch onOpen={openBooking} />}
+      {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact your organization owner for help with group membership.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
+      {!detailOpen && !groupsOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {cloneSource && <div className="card flex flex-wrap items-center gap-3 border-blue-200 bg-blue-50 p-4">
           <p className="flex-1 text-sm text-blue-900">Cloning <strong>{cloneSource.booking_reference}</strong>. Choose an available slot, review the details, and upload fresh required documents.</p>
           <button className="btn-secondary" onClick={endClone}>Cancel clone</button>

@@ -4,6 +4,8 @@
 import type {
   AuthSession,
   AuthUser,
+  AccessGroup,
+  GroupMember,
   AdminSettings,
   AdminTenant,
   AuditEvent,
@@ -231,11 +233,17 @@ export const api = {
   moveBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingDetail>(`/admin/bookings/${id}/move`, { method: 'POST', body: json(payload) }),
 
+  searchReleaseManagers: (q: string) =>
+    request<GroupMember[]>(`/admin/release-managers/search?q=${encodeURIComponent(q)}`),
+
   assignBookingUsers: (id: number, user_ids: number[]) =>
     request<BookingDetail>(`/admin/bookings/${id}/assign-users`, {
       method: 'POST',
       body: json({ user_ids }),
     }),
+
+  assignBookingToMe: (id: number) =>
+    request<BookingDetail>(`/admin/bookings/${id}/assign-self`, { method: 'POST' }),
 
   setBookingStatus: (id: number, status: string, overrideReason?: string) =>
     request<BookingDetail>(`/admin/bookings/${id}/status`, {
@@ -267,6 +275,10 @@ export const api = {
   },
   getBookingComments: (id: number, beforeId?: number) =>
     request<BookingComment[]>(`/bookings/${id}/comments${beforeId ? `?before_id=${beforeId}` : ''}`),
+  getCollaboratorCandidates: (id: number, q?: string) =>
+    request<Array<{ id: number; full_name: string; username: string; email: string; selected: boolean }>>(`/bookings/${id}/collaborator-candidates${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  setCollaborators: (id: number, user_ids: number[]) =>
+    request<BookingDetail>(`/bookings/${id}/collaborators`, { method: 'PUT', body: json({ user_ids }) }),
   addBookingComment: (id: number, body: string, internal: boolean, imageRefs: CommentImageRef[] = []) =>
     request<BookingComment>(`/bookings/${id}/comments`, { method: 'POST', body: JSON.stringify({ body, internal, image_refs: imageRefs }) }),
   getBookingAudit: (id: number, beforeId?: number) =>
@@ -277,6 +289,18 @@ export const api = {
   // ---- admin: people and tenants -------------------------------------------
   listUsers: (search?: string) =>
     request<ManagedUser[]>(`/admin/users${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+
+  listGroups: () => request<AccessGroup[]>('/admin/groups'),
+  getGroup: (id: number, search?: string) => request<AccessGroup>(`/admin/groups/${id}${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+  createGroup: (payload: { name: string; description?: string; permissions?: Record<string, boolean> }) =>
+    request<AccessGroup>('/admin/groups', { method: 'POST', body: json(payload) }),
+  updateGroup: (id: number, payload: Record<string, unknown>) =>
+    request<AccessGroup>(`/admin/groups/${id}`, { method: 'PUT', body: json(payload) }),
+  deleteGroup: (id: number) => request<void>(`/admin/groups/${id}`, { method: 'DELETE' }),
+  addGroupMember: (groupId: number, userId: number) =>
+    request<AccessGroup>(`/admin/groups/${groupId}/members/${userId}`, { method: 'POST' }),
+  removeGroupMember: (groupId: number, userId: number) =>
+    request<AccessGroup>(`/admin/groups/${groupId}/members/${userId}`, { method: 'DELETE' }),
 
   setUserRole: (id: number, role: 'ADMIN' | 'TENANT_USER') =>
     request<{ role: string }>(`/admin/users/${id}/role`, {

@@ -137,6 +137,59 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class GroupType(str, enum.Enum):
+    MEMBER_POOL = "MEMBER_POOL"
+    RELEASE_MANAGERS = "RELEASE_MANAGERS"
+    TENANTS = "TENANTS"
+    TENANT_SUBGROUP = "TENANT_SUBGROUP"
+    MANAGEMENT = "MANAGEMENT"
+    CUSTOM = "CUSTOM"
+
+
+class AccessGroup(Base):
+    """Organization group used for membership, scope and future permissions."""
+
+    __tablename__ = "access_groups"
+    __table_args__ = (
+        UniqueConstraint("name", "parent_group_id", name="uq_access_group_name_parent"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    group_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    parent_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("access_groups.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    tenant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, unique=True, index=True
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    permissions_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}", nullable=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class GroupMembership(Base):
+    __tablename__ = "group_memberships"
+    __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_group_membership"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("access_groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    added_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
 class DeploymentSlotConfiguration(Base):
     """Normal deployment slot grid applied to every working day.
 
@@ -244,6 +297,25 @@ class DeploymentBooking(Base):
     assignments: Mapped[list["BookingAssignment"]] = relationship(
         back_populates="booking", cascade="all, delete-orphan", lazy="selectin"
     )
+
+
+class BookingCollaborator(Base):
+    """Tenant colleague delegated owner-equivalent booking access."""
+
+    __tablename__ = "booking_collaborators"
+    __table_args__ = (UniqueConstraint("booking_id", "user_id", name="uq_booking_collaborator"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("deployment_bookings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    added_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
 class BookingAssignment(Base):

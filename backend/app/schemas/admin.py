@@ -92,7 +92,7 @@ class MoveBookingRequest(BaseModel):
 
 
 class AssignUsersRequest(BaseModel):
-    user_ids: list[int] = Field(min_length=1, max_length=50)
+    user_ids: list[int] = Field(min_length=1, max_length=1)
 
 
 class StatusUpdateRequest(BaseModel):

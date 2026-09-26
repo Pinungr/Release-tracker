@@ -756,9 +756,18 @@ Use **Back to calendar** to return to the selected calendar week.
 
 The page includes change information, documents, RM assignment, **Assign to me**,
 start-work and completion actions, plus **Comments** and **Audit history** tabs.
-The protected Owner may assign work but cannot be assigned. Completed changes
-cannot be reassigned, restarted or rescheduled. Existing date freeze rules still
-apply to assignments and workflow actions.
+RM assignment uses a type-ahead search against the **Release Managers** group:
+suggestions appear after two characters and may be selected without loading the
+full user list. Each schedule has one Release Manager assignee. Their full name
+appears inside the search field; selecting a suggestion saves immediately and
+replaces the existing assignee. **Assign to me** also replaces the existing
+assignee. There are no assignee tags or separate Save assignment button. The API
+rejects requests containing multiple assignees. Existing schedules with multiple
+legacy assignees are reduced to the selected person on their next reassignment;
+historical records are not rewritten. The protected Owner may assign work but
+cannot be assigned.
+Completed changes cannot be reassigned, restarted or rescheduled. Existing date
+freeze rules still apply to assignments and workflow actions.
 
 Booking owners can post public comments on their own changes; Owner/Release
 Managers can post public comments or **internal RM notes**. Internal notes are
@@ -886,3 +895,43 @@ the existing audit JSON, so this update requires no database schema change.
 Validation for this update: production frontend build, 19 frontend tests and
 17 focused backend tests, covering emoji insertion, image selection, reference
 reuse, private-image protection, cross-schedule access, pagination and previews.
+
+## Group-based access model
+
+User access is organized through groups instead of assigning business roles directly to individual records.
+
+- **Member Pool** is the automatic holding group for every new/unassigned account. It is not a business role. When a user receives any operational group membership, they are removed from Member Pool automatically. If all operational memberships are removed later, they return to Member Pool.
+- **Release Managers** is the working RM group. The protected Owner controls who receives or loses Release Manager membership. Existing RM accounts are migrated into this group at startup.
+- **Tenants** is a system container. Every tenant master record has one matching tenant subgroup beneath it. A user may belong to multiple tenant subgroups, and the booking form only exposes tenant groups that user belongs to.
+- **Management** is read-only. Management members can see schedules, changes and documents but cannot book, edit, cancel, reschedule, upload, comment, or delegate collaborators.
+- **Custom groups** can be created dynamically for teams such as DBA, Azure, Network, Security, CAB, etc. A JSON permission map is stored per custom group as the foundation for the task/change workflow permissions.
+
+Open **Groups** in the application header for a full-page group workspace, or follow **Release controls → Groups**. The group directory is at `/#/admin/groups`; system and custom groups have bookmarkable pages using their names, such as `/#/admin/groups/Release%20Managers` and `/#/admin/groups/DBA%20Team`. Tenant groups use `/#/admin/groups/tenants/<tenant-name>`, such as `/#/admin/groups/tenants/ncap`. Spaces and special characters are URL-encoded; tenant names use lowercase. Existing numeric group bookmarks remain supported. If a group is renamed, use its new name in the URL (numeric bookmarks still resolve by ID). Browser Back/Forward and page refresh preserve the selected group. Links require an authenticated Owner or Release Manager account. Clicking the PD logo or application title returns to the dashboard.
+
+The directory includes group cards and group/member counts. Group pages provide searchable member tables, active/inactive filters, an Add members dialog and confirmation before removing members or deleting a custom group. The Tenants page links to individual tenant groups. On small screens, a group selector replaces the sidebar. Existing membership and access rules are unchanged. Tenant groups are created, renamed, enabled and disabled from the existing tenant master so there is only one tenant source of truth.
+
+### Booking collaborators
+
+The booking creator can delegate a normal booking to colleagues who belong to the same tenant subgroup. Collaborators receive the same booking-level edit/reschedule/cancel/document permissions as the creator, subject to all existing date and freeze rules. Collaborators cannot grant access to additional people; only the original booking creator (or an administrator) can manage the collaborator list.
+
+
+### Group page redesign verification (2026-09-26)
+
+- Production frontend build: passed.
+- Ten group workspace regression tests: passed (named and numeric deep links, missing groups, owner-only RM membership, tenant navigation and breadcrumbs, mobile named links, candidate exclusion, removal confirmation, stale requests and error recovery).
+- Browser checks with mocked API responses: passed for named and legacy numeric links, tenant name links, logo/title navigation to the dashboard, reload, Back/Forward, add/remove members, create/delete groups, missing groups, tenant access guard, desktop layout and 390px mobile layout. No page errors or mobile horizontal overflow.
+- Prior redesign baseline full frontend suite: 29 passed, 7 failed. The same seven booking-permission test failures were reproduced from the original uploaded ZIP; those test fixtures lack `booking.collaborators`. These files were not changed for the group redesign.
+- No backend, database, authentication, or dependency changes are required for this UI update.
+
+
+### Single Release Manager assignment (2026-09-26)
+
+- Full names remain inside the assignee search input, including after reload and self-assignment.
+- Selecting another Release Manager immediately replaces the existing assignment, with audit history retained.
+- Searching alone does not change the assignee. Escape or leaving the field restores the saved name; failed saves retain the existing assignment.
+- The API accepts exactly one assignee and self-assignment replaces all previous assignments. Date locks, Owner restrictions and completed/cancelled protections remain enforced.
+- PostgreSQL replacements lock the booking row to serialize simultaneous assignment updates. No schema migration, database reset or new application dependency is required.
+- Production build and all 44 frontend tests passed.
+- Eight focused backend assignment tests passed using SQLite: single-RM replacement, self replacement, old-RM permission removal, audit preservation, rejection of multiple/empty selections, legacy multi-assignee replacement, protected dates/statuses, and Owner/non-RM restrictions.
+- Browser checks with mocked API responses passed for full-name display, automatic replacement, self-assignment, reload persistence and mobile layout.
+- A broader selection of older backend tests still fails during booking setup because test users are not added to tenant groups. A representative failure was reproduced against the original uploaded code. These legacy fixtures were not changed; PostgreSQL concurrency was not exercised in the SQLite checks.

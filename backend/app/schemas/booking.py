@@ -189,10 +189,12 @@ class BookingDetail(BookingSummary):
     cancelled_at: datetime | None
     cancelled_by_user_id: int | None
     attachments: list[AttachmentOut]
+    collaborators: list[AssignedUserOut] = []
     can_edit: bool
     can_cancel: bool
     can_reschedule: bool
     can_assign_rm: bool
+    can_assign_self: bool
     can_start_work: bool
     can_download_attachments: bool
     can_manage_attachments: bool
