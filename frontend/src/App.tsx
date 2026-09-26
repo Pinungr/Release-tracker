@@ -76,6 +76,7 @@ export default function App() {
 function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const toast = useToast()
   const user = auth.user!
+  const isMemberPool = user.groups?.some((group) => group.group_type === 'MEMBER_POOL') ?? false
 
   const [anchor, setAnchor] = useState(() => auth.isAdmin ? weekStart(toIsoDate(new Date())) : '')
   const { schedule, loading, error, refresh } = useSchedule(anchor)
@@ -372,6 +373,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         }}
         settings={settings}
         isAdmin={auth.isAdmin}
+        isMemberPool={isMemberPool}
         createTarget={createTarget}
         editBooking={editBooking}
         cloneSource={editBooking ? null : cloneSource}

@@ -20,15 +20,20 @@ def list_active_tenants(
 ) -> list[dict]:
     # Owner / Release Managers require the full list for administration and
     # overrides. Management is read-only but may see the organization-wide
-    # schedule, so it also receives all tenant labels. Tenant users receive
-    # only tenant subgroups they actually belong to.
+    # schedule, so it also receives all tenant labels. Member Pool users are
+    # intentionally unscoped: they may schedule for any active tenant, but the
+    # booking form requires them to choose the tenant explicitly. Users who
+    # belong to tenant subgroups continue to receive only those tenants.
     if user.is_admin or group_service.is_management(db, user.user_id):
         stmt = select(Tenant).where(Tenant.is_active.is_(True)).order_by(Tenant.name)
     else:
         allowed = group_service.tenant_ids_for_user(db, user.user_id)
-        if not allowed:
+        if allowed:
+            stmt = select(Tenant).where(Tenant.is_active.is_(True), Tenant.id.in_(allowed)).order_by(Tenant.name)
+        elif group_service.is_member_pool(db, user.user_id):
+            stmt = select(Tenant).where(Tenant.is_active.is_(True)).order_by(Tenant.name)
+        else:
             return []
-        stmt = select(Tenant).where(Tenant.is_active.is_(True), Tenant.id.in_(allowed)).order_by(Tenant.name)
     tenants = db.scalars(stmt).all()
     return [
         {

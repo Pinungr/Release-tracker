@@ -279,7 +279,12 @@ class Actor:
 
 
 def assert_tenant_access(db: Session, actor: Actor, tenant_id: int) -> None:
-    """Non-admin writers may schedule only for tenant subgroups they belong to."""
+    """Enforce tenant scope for writers.
+
+    Member Pool is the self-service/unassigned scheduling pool. Those users may
+    choose any active tenant from the tenant master. Once a user is assigned to
+    one or more tenant subgroups, scheduling is restricted to those groups.
+    """
     if actor.is_admin:
         return
     if actor.user_id is None:
@@ -287,12 +292,11 @@ def assert_tenant_access(db: Session, actor: Actor, tenant_id: int) -> None:
     if group_service.is_management(db, actor.user_id):
         raise BusinessRuleError("Management access is read-only.", status.HTTP_403_FORBIDDEN)
     allowed = group_service.tenant_ids_for_user(db, actor.user_id)
+    if tenant_id in allowed:
+        return
+    if not allowed and group_service.is_member_pool(db, actor.user_id):
+        return
     if tenant_id not in allowed:
-        if group_service.is_member_pool(db, actor.user_id):
-            raise BusinessRuleError(
-                "Your account is still in Member Pool. Ask an administrator or Release Manager to assign you to a tenant group before scheduling.",
-                status.HTTP_403_FORBIDDEN,
-            )
         raise BusinessRuleError(
             "You can schedule only for tenant groups you belong to.",
             status.HTTP_403_FORBIDDEN,

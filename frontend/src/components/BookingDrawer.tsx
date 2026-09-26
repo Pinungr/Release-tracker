@@ -38,6 +38,8 @@ interface BookingDrawerProps {
   onClose: () => void
   settings: PublicSettings
   isAdmin: boolean
+  /** Member Pool users must explicitly choose which tenant they are scheduling for. */
+  isMemberPool?: boolean
   /**
    * Present when creating. A normal change carries the chosen slot; an
    * emergency change carries none, because it joins the date's queue.
@@ -54,6 +56,7 @@ export function BookingDrawer({
   onClose,
   settings,
   isAdmin,
+  isMemberPool = false,
   createTarget,
   editBooking,
   cloneSource = null,
@@ -88,9 +91,11 @@ export function BookingDrawer({
     setValues(
       editBooking
         ? valuesFromBooking(editBooking)
-        : cloneSource ? valuesForClone(cloneSource) : { ...EMPTY_BOOKING_VALUES, technology: technologyRef.current },
+        : cloneSource
+          ? { ...valuesForClone(cloneSource), ...(isMemberPool ? { tenant_id: '' } : {}) }
+          : { ...EMPTY_BOOKING_VALUES, technology: technologyRef.current },
     )
-  }, [open, editBooking, cloneSource])
+  }, [open, editBooking, cloneSource, isMemberPool])
 
   useEffect(() => {
     if (!open) return
@@ -99,11 +104,11 @@ export function BookingDrawer({
       .then((items) => {
         setTenants(items)
 
-        // A controlled <select> with value="" but no empty option can
-        // visually display the first tenant while the actual form state is
-        // still blank. Keep the visible selection and submitted tenant_id in
-        // sync by selecting the first active tenant for new bookings.
-        if (!editBooking && items.length > 0) {
+        // Scoped tenant users can keep the convenience of their first allowed
+        // tenant being selected. Member Pool is different: the user has no
+        // tenant membership, so choosing who this schedule belongs to must be
+        // an explicit action rather than silently defaulting to the first row.
+        if (!editBooking && !isMemberPool && items.length > 0) {
           setValues((current) =>
             current.tenant_id ? current : { ...current, tenant_id: String(items[0].id) },
           )
@@ -111,7 +116,7 @@ export function BookingDrawer({
         }
       })
       .catch(() => setTenants([]))
-  }, [open, editBooking, cloneSource])
+  }, [open, editBooking, cloneSource, isMemberPool])
 
   const heading = useMemo(() => {
     if (created) return isEmergency ? 'Emergency change queued' : 'Deployment slot booked'
