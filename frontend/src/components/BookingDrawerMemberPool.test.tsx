@@ -18,12 +18,15 @@ vi.mock('../services/api', () => ({
 
 afterEach(cleanup)
 
-const settings = {
+const settings: PublicSettings = {
+  weekly_booking_limit: 2,
+  booking_freeze_dates: 2,
   jira_required_at_booking: false,
   max_file_size_mb: 20,
+  mandatory_documents: [],
   technologies: ['Application'],
   document_catalog: [],
-} as PublicSettings
+}
 
 const target = {
   day: { day: '2026-10-04', weekday: 'Sunday', date_label: '4 October' } as DayView,
