@@ -21,7 +21,7 @@ interface DeploymentSlotProps {
   isAdmin: boolean
   isHistorical: boolean
   onBook: (day: DayView, slot: SlotView) => void
-  onOpenBooking: (bookingId: number) => void
+  onOpenBooking: (bookingId: number, bookingReference?: string) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
 }
 
@@ -97,7 +97,7 @@ export function DeploymentSlot({
           <Cell label="Tenant" className="mt-2 lg:mt-0">
             <button
               type="button"
-              onClick={() => onOpenBooking(booking.id)}
+              onClick={() => onOpenBooking(booking.id, booking.booking_reference)}
               className="group flex w-full min-w-0 items-center gap-2 overflow-hidden text-left"
             >
               <span
@@ -174,7 +174,7 @@ export function DeploymentSlot({
             ) : null}
             <button
               type="button"
-              onClick={() => onOpenBooking(booking.id)}
+              onClick={() => onOpenBooking(booking.id, booking.booking_reference)}
               className="btn-secondary btn-sm"
             >
               Details

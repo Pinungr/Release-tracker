@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AdminGroupManager } from './components/AdminGroupManager'
+import { AuditPage } from './components/AuditPage'
 import { AdminPanel } from './components/AdminPanel'
 import { AppFooter } from './components/AppFooter'
 import { AppHeader } from './components/AppHeader'
 import { ChangeDetailsPage } from './components/ChangeDetailsPage'
+import { ScheduleAuditPage } from './components/ScheduleAuditPage'
 import { BookingDrawer, type CreateTarget } from './components/BookingDrawer'
 import { Alert, Spinner } from './components/Icons'
 import { LandingBanner } from './components/LandingBanner'
@@ -93,7 +95,6 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const [bookingDrawerOpen, setBookingDrawerOpen] = useState(false)
 
   const [detailBooking, setDetailBooking] = useState<BookingDetail | null>(null)
-  const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
 
   const [profileOpen, setProfileOpen] = useState(false)
@@ -119,31 +120,55 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
 
   const [route, setRoute] = useState(() => window.location.hash)
   const groupsOpen = /^#\/admin\/groups(?:\/|$)/.test(route)
+  const globalAuditOpen = /^#\/audit\/?$/.test(route)
+  const auditScheduleRoute = /^#\/audit\/([^/]+)\/?$/.exec(route)
+  const legacyScheduleAuditRoute = /^#\/schedules\/([^/]+)\/audit\/?$/.exec(route)
+  const scheduleRoute = /^#\/schedules\/([^/]+)\/?$/.exec(route)
+  const scheduleReference = auditScheduleRoute
+    ? decodeURIComponent(auditScheduleRoute[1])
+    : scheduleRoute
+      ? decodeURIComponent(scheduleRoute[1])
+      : null
+  const scheduleAuditOpen = Boolean(auditScheduleRoute)
+  const scheduleDetailOpen = Boolean(scheduleRoute)
+  const legacyDetailRoute = /^#change\/(\d+)$/.exec(route)
+  const detailOpen = scheduleDetailOpen || Boolean(legacyDetailRoute)
+  const pageOpen = groupsOpen || globalAuditOpen || detailOpen || scheduleAuditOpen || Boolean(legacyScheduleAuditRoute)
   const closeDetails = useCallback(() => { window.location.hash = '' }, [])
-  const openBooking = useCallback((id: number) => { window.location.hash = `change/${id}` }, [])
+  const openBooking = useCallback((id: number, reference?: string) => {
+    window.location.hash = reference ? `/schedules/${encodeURIComponent(reference)}` : `change/${id}`
+  }, [])
   useEffect(() => {
     const onHash = () => setRoute(window.location.hash)
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
   useEffect(() => {
-    const match = /^#change\/(\d+)$/.exec(route)
+    if (!legacyScheduleAuditRoute) return
+    // Keep old bookmarks working, but make /audit/{schedule-no} the only
+    // canonical schedule-audit URL shown by the application.
+    window.location.hash = `/audit/${legacyScheduleAuditRoute[1]}`
+  }, [route])
+  useEffect(() => {
+    const shouldLoad = Boolean(scheduleReference || legacyDetailRoute)
     setDetailBooking(null)
-    setDetailOpen(Boolean(match))
-    if (!match) return
+    if (!shouldLoad) return
     window.scrollTo(0, 0)
     let active = true
     setDetailLoading(true)
-    api.getBooking(Number(match[1])).then(booking => {
+    const request = scheduleReference
+      ? api.getBookingByReference(scheduleReference)
+      : api.getBooking(Number(legacyDetailRoute![1]))
+    request.then(booking => {
       if (active) setDetailBooking(booking)
     }).catch(caught => {
       if (active) {
-        toast.error('Could not open the change record', caught instanceof ApiError ? caught.message : 'Please try again.')
+        toast.error('Could not open the schedule', caught instanceof ApiError ? caught.message : 'Please try again.')
         closeDetails()
       }
     }).finally(() => { if (active) setDetailLoading(false) })
     return () => { active = false }
-  }, [route, closeDetails, toast])
+  }, [route, scheduleReference, closeDetails, toast])
 
   /** After any mutation, refresh both the board and the open detail drawer. */
   const refreshAll = useCallback(() => {
@@ -270,7 +295,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         onAdminPanel={() => setAdminPanelOpen(true)}
         onLogout={() => void auth.signOut()}
         groupsOpen={groupsOpen}
-        weekNavigator={detailOpen || groupsOpen ? null : (
+        weekNavigator={pageOpen ? null : (
           <WeekNavigator
             label={schedule?.week_label ?? '—'}
             loading={loading}
@@ -282,9 +307,11 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         )}
       />
 
-      {!groupsOpen && <ScheduleSearch onOpen={openBooking} />}
+      {!pageOpen && <ScheduleSearch onOpen={openBooking} />}
       {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact your organization owner for help with group membership.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
-      {!detailOpen && !groupsOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      {globalAuditOpen && (auth.isAdmin ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to the Owner and Release Managers.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
+      {scheduleAuditOpen ? <ScheduleAuditPage booking={detailBooking} loading={detailLoading} timezone={timezone} onClose={closeDetails} /> : null}
+      {!pageOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {cloneSource && <div className="card flex flex-wrap items-center gap-3 border-blue-200 bg-blue-50 p-4">
           <p className="flex-1 text-sm text-blue-900">Cloning <strong>{cloneSource.booking_reference}</strong>. Choose an available slot, review the details, and upload fresh required documents.</p>
           <button className="btn-secondary" onClick={endClone}>Cancel clone</button>
@@ -328,7 +355,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           filter={filter}
           onBook={startBooking}
           onBookEmergency={startEmergencyBooking}
-          onOpenBooking={(id) => void openBooking(id)}
+          onOpenBooking={openBooking}
           onToggleFreeze={(day, slot) => void toggleSlotFreeze(day, slot)}
           onAdjustCapacity={(day, delta) => void adjustDayCapacity(day, delta)}
         />

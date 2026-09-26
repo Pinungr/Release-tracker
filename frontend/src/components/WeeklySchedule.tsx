@@ -12,7 +12,7 @@ interface WeeklyScheduleProps {
   filter: FilterKey
   onBook: (day: DayView, slot: SlotView) => void
   onBookEmergency: (day: DayView) => void
-  onOpenBooking: (bookingId: number) => void
+  onOpenBooking: (bookingId: number, bookingReference?: string) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
   onAdjustCapacity: (day: DayView, delta: 1 | -1) => void
 }

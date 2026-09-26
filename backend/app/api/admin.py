@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1128,11 +1128,39 @@ def unfreeze_slot(
 @router.get("/audit", response_model=list[AuditEventOut])
 def read_audit(
     booking_id: int | None = None,
+    q: str | None = Query(default=None, max_length=120),
+    event_type: str | None = Query(default=None, max_length=48),
+    actor_type: str | None = Query(default=None, pattern="^(USER|ADMIN|SYSTEM)$"),
+    before_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> list[AuditEventOut]:
-    stmt = select(BookingAudit).order_by(BookingAudit.id.desc()).limit(limit)
+    # Discussion has its own UI; keep the audit trail focused on operational/admin changes.
+    stmt = select(BookingAudit).where(
+        BookingAudit.event_type.not_in(["COMMENT_ADDED", "INTERNAL_NOTE_ADDED"])
+    )
     if booking_id:
         stmt = stmt.where(BookingAudit.booking_id == booking_id)
+    if before_id is not None:
+        stmt = stmt.where(BookingAudit.id < before_id)
+    if event_type:
+        stmt = stmt.where(BookingAudit.event_type == event_type.strip().upper())
+    if actor_type:
+        normalized_actor = actor_type.strip().upper()
+        if normalized_actor == 'USER':
+            stmt = stmt.where(BookingAudit.actor_type.in_(['USER', 'TENANT_USER']))
+        else:
+            stmt = stmt.where(BookingAudit.actor_type == normalized_actor)
+    if q and q.strip():
+        term = q.strip()
+        stmt = stmt.where(or_(
+            BookingAudit.booking_reference.icontains(term, autoescape=True),
+            BookingAudit.event_type.icontains(term, autoescape=True),
+            BookingAudit.requester_email.icontains(term, autoescape=True),
+            BookingAudit.admin_username.icontains(term, autoescape=True),
+            BookingAudit.old_values.icontains(term, autoescape=True),
+            BookingAudit.new_values.icontains(term, autoescape=True),
+        ))
+    stmt = stmt.order_by(BookingAudit.id.desc()).limit(limit)
     return [presenters.audit_event_out(e) for e in db.scalars(stmt).all()]

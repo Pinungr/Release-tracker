@@ -9,7 +9,6 @@ import type {
 import { formatDate, formatSlotTime } from '../utils/dates'
 import { AdminTenantManager } from './AdminTenantManager'
 import { AdminUserManager } from './AdminUserManager'
-import { AuditHistory } from './AuditHistory'
 import { Drawer } from './Drawer'
 import { Calendar, Check, ChevronRight, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
@@ -23,7 +22,6 @@ type Tab =
   | 'slots'
   | 'holidays'
   | 'documents'
-  | 'audit'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'users', label: 'Accounts', icon: <User className="size-4" /> },
@@ -32,7 +30,6 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
   { key: 'documents', label: 'Documents', icon: <Check className="size-4" /> },
-  { key: 'audit', label: 'Audit', icon: <History className="size-4" /> },
 ]
 
 const DOCUMENT_LABELS: Record<DocumentCategory, string> = {
@@ -67,6 +64,7 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
     >
       <nav className="-mx-1 mb-5 flex gap-1 overflow-x-auto px-1 pb-1" aria-label="Release control sections">
         <a href="#/admin/groups" onClick={onClose} className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-brand-600 hover:bg-brand-50"><Shield className="size-4" />Groups<ChevronRight className="size-3" /></a>
+        <a href="#/audit" onClick={onClose} className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-brand-600 hover:bg-brand-50"><History className="size-4" />Audit<ChevronRight className="size-3" /></a>
         {TABS.map((entry) => (
           <button
             key={entry.key}
@@ -93,7 +91,6 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
       {tab === 'slots' ? <SlotConfiguration onChanged={onChanged} /> : null}
       {tab === 'holidays' ? <HolidayManager onChanged={onChanged} /> : null}
       {tab === 'documents' ? <DocumentSettings onChanged={onChanged} /> : null}
-      {tab === 'audit' ? <AuditHistory timezone={timezone} /> : null}
     </Drawer>
   )
 }

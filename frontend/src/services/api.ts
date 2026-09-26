@@ -283,8 +283,19 @@ export const api = {
     request<BookingComment>(`/bookings/${id}/comments`, { method: 'POST', body: JSON.stringify({ body, internal, image_refs: imageRefs }) }),
   getBookingAudit: (id: number, beforeId?: number) =>
     request<AuditEvent[]>(`/bookings/${id}/audit${beforeId ? `?before_id=${beforeId}` : ''}`),
-  getAudit: (bookingId?: number) =>
-    request<AuditEvent[]>(`/admin/audit${bookingId ? `?booking_id=${bookingId}` : ''}`),
+  getBookingByReference: (reference: string) =>
+    request<BookingDetail>(`/bookings/by-reference/${encodeURIComponent(reference)}`),
+  getAudit: (filters: { bookingId?: number; q?: string; eventType?: string; actorType?: 'USER' | 'ADMIN' | 'SYSTEM'; beforeId?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (filters.bookingId) params.set('booking_id', String(filters.bookingId))
+    if (filters.q?.trim()) params.set('q', filters.q.trim())
+    if (filters.eventType) params.set('event_type', filters.eventType)
+    if (filters.actorType) params.set('actor_type', filters.actorType)
+    if (filters.beforeId) params.set('before_id', String(filters.beforeId))
+    if (filters.limit) params.set('limit', String(filters.limit))
+    const query = params.toString()
+    return request<AuditEvent[]>(`/admin/audit${query ? `?${query}` : ''}`)
+  },
 
   // ---- admin: people and tenants -------------------------------------------
   listUsers: (search?: string) =>

@@ -6,6 +6,7 @@ import { DocumentReadinessPanel } from './DocumentReadiness'
 import { DocumentUploader } from './DocumentUploader'
 import { ChangePageShell } from './ChangePageShell'
 import { ChangeActivity } from './ChangeActivity'
+import { SchedulePageNav } from './SchedulePageNav'
 import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Spinner, Trash, User } from './Icons'
 import { ConfirmationModal, Modal } from './Modal'
 import { RescheduleModal } from './RescheduleModal'
@@ -227,6 +228,7 @@ export function ChangeDetailsPage({
             </span>
           ) : undefined
         }
+        navigation={booking ? <SchedulePageNav reference={booking.booking_reference} active="overview" /> : undefined}
         footer={
           booking ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -318,7 +320,7 @@ export function ChangeDetailsPage({
             ) : null}
 
             <dl className="card grid grid-cols-[8rem_1fr] gap-x-4 p-5">
-              {booking.cloned_from_reference && <Row label="Cloned from"><a className="text-brand-600 underline" href={`#change/${booking.cloned_from_id}`}>{booking.cloned_from_reference}</a></Row>}
+              {booking.cloned_from_reference && <Row label="Cloned from"><a className="text-brand-600 underline" href={`#/schedules/${encodeURIComponent(booking.cloned_from_reference)}`}>{booking.cloned_from_reference}</a></Row>}
               <Row label="Tenant">{booking.tenant_name}</Row>
               <Row label="Technology">{booking.technology}</Row>
               <Row label="Jira No.">
@@ -437,7 +439,7 @@ export function ChangeDetailsPage({
                 onUpdated={() => onChanged()}
               />
             </section>
-            <div className="lg:col-span-2"><ChangeActivity key={booking.id} bookingId={booking.id} isAdmin={isAdmin} timezone={timezone} revision={JSON.stringify([booking.updated_at, booking.status, booking.assigned_users])} /></div>
+            <div className="lg:col-span-2"><ChangeActivity key={booking.id} bookingId={booking.id} isAdmin={isAdmin} timezone={timezone} /></div>
           </div>
         )}
       </ChangePageShell>

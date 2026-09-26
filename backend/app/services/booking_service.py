@@ -1073,6 +1073,7 @@ def assign_users_to_booking(
     db.execute(select(DeploymentBooking).where(DeploymentBooking.id == booking.id).with_for_update())
     db.expire(booking, ["assignments"])
     before_ids = [a.user_id for a in booking.assignments]
+    before_names = [a.user.full_name for a in booking.assignments if a.user is not None]
     booking.assignments.clear()
     db.flush()
     for uid in unique_ids:
@@ -1086,8 +1087,11 @@ def assign_users_to_booking(
         booking=booking,
         actor_type=actor.actor_type,
         admin_username=actor.admin_username,
-        old_values={"assigned_user_ids": before_ids},
-        new_values={"assigned_user_ids": unique_ids},
+        old_values={"assigned_user_ids": before_ids, "assigned_user_names": before_names},
+        new_values={
+            "assigned_user_ids": unique_ids,
+            "assigned_user_names": [next(u.full_name for u in users if u.id == uid) for uid in unique_ids],
+        },
     )
     db.commit()
     db.refresh(booking)

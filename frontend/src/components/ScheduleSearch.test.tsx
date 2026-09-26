@@ -11,6 +11,6 @@ it('opens a completed schedule returned by global number search', async () => {
  fireEvent.click(screen.getByRole('button',{name:'Find schedule'}))
  await waitFor(()=>expect(api.searchSchedules).toHaveBeenCalledWith('pds-001',undefined))
  fireEvent.click(await screen.findByRole('button',{name:/pds-001.*Tenant/}))
- expect(onOpen).toHaveBeenCalledWith(4)
+ expect(onOpen).toHaveBeenCalledWith(4, 'pds-001')
  expect(screen.queryByText('COMPLETED')).toBeNull()
 })

@@ -2,17 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../services/api'
 import type { BookingComment, CommentImage } from '../types'
 import { formatTimestamp } from '../utils/dates'
-import { AuditHistory } from './AuditHistory'
 import { Paperclip, Send, Spinner, Smile, ImageIcon } from './Icons'
 import { CommentImagePreview, ExistingImagePicker, imageKey } from './CommentImages'
 
-export function ChangeActivity({ bookingId, isAdmin, timezone, revision }: {
-  bookingId: number; isAdmin: boolean; timezone: string; revision: string
+export function ChangeActivity({ bookingId, isAdmin, timezone }: {
+  bookingId: number; isAdmin: boolean; timezone: string
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null)
   const [picker, setPicker] = useState<'emoji' | 'image' | null>(null)
   const [selectedImages, setSelectedImages] = useState<CommentImage[]>([])
-  const [tab, setTab] = useState<'comments' | 'history'>('comments')
   const [comments, setComments] = useState<BookingComment[]>([])
   const [body, setBody] = useState('')
   const [files, setFiles] = useState<File[]>([])
@@ -81,13 +79,10 @@ export function ChangeActivity({ bookingId, isAdmin, timezone, revision }: {
     } catch { setError('Could not load older comments. Please retry.') }
     finally { setBusy(false) }
   }
-  return <section className="card p-5" aria-label="Change activity">
-    <h2 className="text-lg font-bold text-ink">Activity</h2>
-    <div className="my-4 flex gap-2" role="tablist" aria-label="Activity views">
-      <button role="tab" aria-selected={tab === 'comments'} className={tab === 'comments' ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab('comments')}>Comments</button>
-      <button role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab('history')}>Audit history</button>
-    </div>
-    {tab === 'history' ? <AuditHistory key={revision} bookingId={bookingId} timezone={timezone} scoped /> : <div role="tabpanel" className="space-y-4">
+  return <section className="card p-5" aria-label="Change comments">
+    <h2 className="text-lg font-bold text-ink">Comments</h2>
+    <p className="mt-1 mb-4 text-sm text-ink-muted">Conversation stays here. Operational history is available from the Audit tab above.</p>
+    <div className="space-y-4">
       <div className="overflow-hidden rounded-xl border border-line bg-surface transition-shadow focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/15">
         <label htmlFor="change-comment" className="sr-only">{internal && isAdmin ? 'Internal RM note' : 'Comment visible to the requester and RM team'}</label>
         <textarea ref={textarea} id="change-comment" className="block min-h-28 w-full resize-y border-0 bg-transparent px-4 pt-3 pb-2 text-sm text-ink outline-none placeholder:text-ink-muted focus:ring-0 disabled:opacity-60" value={body} onChange={e => setBody(e.target.value)} maxLength={5000} disabled={busy} placeholder={internal && isAdmin ? 'Write an internal RM note…' : 'Ask a question or share an update…'} />
@@ -142,6 +137,6 @@ export function ChangeActivity({ bookingId, isAdmin, timezone, revision }: {
         {c.attachments?.length ? <ul className="mt-3 space-y-2" aria-label="Comment attachments">{c.attachments.map(a => <li key={a.id}><button className="btn-secondary max-w-full whitespace-normal break-all text-left" onClick={() => void download(c.id, a)}>{a.original_filename} · {(a.size_bytes / 1024 / 1024).toFixed(2)} MB · Download</button></li>)}</ul> : null}
       </article>)}
       {more && <button className="btn-secondary" disabled={busy} onClick={() => void loadOlder()}>Load older comments</button>}
-    </div>}
+    </div>
   </section>
 }

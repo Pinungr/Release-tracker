@@ -4,7 +4,7 @@ import type { ScheduleSearchResult } from '../types'
 import { BookingStatusBadge } from './StatusBadge'
 import { formatDate } from '../utils/dates'
 
-export function ScheduleSearch({ onOpen }: { onOpen: (id: number) => void }) {
+export function ScheduleSearch({ onOpen }: { onOpen: (id: number, bookingReference?: string) => void }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ScheduleSearchResult[] | null>(null)
   const [busy, setBusy] = useState(false)
@@ -37,7 +37,7 @@ export function ScheduleSearch({ onOpen }: { onOpen: (id: number) => void }) {
     {error && <p role="alert" className="mt-2 text-sm text-rose-700">{error}</p>}
     {results !== null && <div className="card mt-3 space-y-2 p-3" aria-live="polite">
       {results.length === 0 && <p className="text-sm text-ink-muted">No accessible schedules match this number. Check the number or your access.</p>}
-      {results.map(row => <button key={row.id} className="flex w-full flex-wrap items-center gap-3 rounded-lg border border-line p-3 text-left hover:bg-canvas" onClick={() => { onOpen(row.id); clear() }}>
+      {results.map(row => <button key={row.id} className="flex w-full flex-wrap items-center gap-3 rounded-lg border border-line p-3 text-left hover:bg-canvas" onClick={() => { onOpen(row.id, row.booking_reference); clear() }}>
         <strong className="text-sm text-brand-700">{row.booking_reference}</strong><span className="text-sm">{row.tenant_name}</span><span className="text-xs text-ink-muted">{formatDate(row.deployment_date)}</span><BookingStatusBadge status={row.status} />
       </button>)}
       {more && <button className="btn-secondary" disabled={busy} onClick={() => void search(true)}>Load more results</button>}

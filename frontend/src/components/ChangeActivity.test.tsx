@@ -7,19 +7,18 @@ vi.mock('../services/api', () => ({ api: {
   uploadComment: vi.fn().mockResolvedValue({}), downloadCommentAttachment: vi.fn().mockResolvedValue(undefined), getBookingComments: vi.fn().mockResolvedValue([]), addBookingComment: vi.fn().mockResolvedValue({}), getBookingAudit: vi.fn().mockResolvedValue([]),
 }, ApiError: class extends Error {} }))
 afterEach(cleanup)
-it('lets a tenant post a public comment and read scoped history', async () => {
-  render(<ChangeActivity bookingId={7} isAdmin={false} timezone="Asia/Kolkata" revision="1" />)
+it('lets a tenant post a public comment while audit stays on its own page', async () => {
+  render(<ChangeActivity bookingId={7} isAdmin={false} timezone="Asia/Kolkata" />)
   await screen.findByText('No comments yet. Start the conversation.')
   expect(screen.queryByRole('checkbox')).toBeNull()
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Please review' } })
   fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
   await waitFor(() => expect(api.addBookingComment).toHaveBeenCalledWith(7, 'Please review', false))
-  fireEvent.click(screen.getByRole('tab', { name: 'Audit history' }))
-  await waitFor(() => expect(api.getBookingAudit).toHaveBeenCalledWith(7))
+  expect(screen.getByText('Conversation stays here. Operational history is available from the Audit tab above.')).toBeTruthy()
 })
 it('clearly labels internal notes and renders text without executing HTML', async () => {
   vi.mocked(api.getBookingComments).mockResolvedValueOnce([{ id: 1, body: '<script>bad()</script>', internal: true, author_id: 2, author_name: 'RM', created_at: '2026-10-01T10:00:00Z' }])
-  const { container } = render(<ChangeActivity bookingId={7} isAdmin timezone="Asia/Kolkata" revision="1" />)
+  const { container } = render(<ChangeActivity bookingId={7} isAdmin timezone="Asia/Kolkata" />)
   expect(await screen.findByText('<script>bad()</script>')).toBeTruthy()
   expect(container.querySelector('script')).toBeNull()
   fireEvent.click(screen.getByRole('checkbox'))
@@ -29,7 +28,7 @@ it('clearly labels internal notes and renders text without executing HTML', asyn
 })
 
 it('blocks files above 20 MB and posts valid attachments with their comment', async () => {
- render(<ChangeActivity bookingId={7} isAdmin={false} timezone="Asia/Kolkata" revision="1" />)
+ render(<ChangeActivity bookingId={7} isAdmin={false} timezone="Asia/Kolkata" />)
  await screen.findByText('No comments yet. Start the conversation.')
  fireEvent.change(screen.getByRole('textbox'),{target:{value:'Please see attached'}})
  const tooLarge = new File(['x'],'big.txt',{type:'text/plain'})
@@ -46,7 +45,7 @@ it('blocks files above 20 MB and posts valid attachments with their comment', as
 
 
 it('inserts an emoji at the cursor and submits Unicode text', async () => {
- render(<ChangeActivity bookingId={7} isAdmin={false} timezone="UTC" revision="1" />)
+ render(<ChangeActivity bookingId={7} isAdmin={false} timezone="UTC" />)
  await screen.findByText('No comments yet. Start the conversation.')
  const box = screen.getByRole('textbox') as HTMLTextAreaElement
  fireEvent.change(box,{target:{value:'Ready now'}})
@@ -60,7 +59,7 @@ it('inserts an emoji at the cursor and submits Unicode text', async () => {
 
 it('references an existing uploaded image without uploading its bytes again', async () => {
  vi.mocked(api.listCommentImages).mockResolvedValueOnce({images:[{kind:'comment',attachment_id:'abc',comment_id:12,original_filename:'proof.png',internal:false}],next_before_id:null})
- render(<ChangeActivity bookingId={7} isAdmin={false} timezone="UTC" revision="1" />)
+ render(<ChangeActivity bookingId={7} isAdmin={false} timezone="UTC" />)
  await screen.findByText('No comments yet. Start the conversation.')
  fireEvent.change(screen.getByRole('textbox'),{target:{value:'See this image'}})
  fireEvent.click(screen.getByRole('button',{name:'Insert uploaded image'}))
@@ -73,7 +72,7 @@ it('references an existing uploaded image without uploading its bytes again', as
 
 it('removes an internal image when an RM switches the draft to public', async () => {
  vi.mocked(api.listCommentImages).mockResolvedValueOnce({images:[{kind:'comment',attachment_id:'private',comment_id:13,original_filename:'internal.png',internal:true}],next_before_id:null})
- render(<ChangeActivity bookingId={7} isAdmin timezone="UTC" revision="1" />)
+ render(<ChangeActivity bookingId={7} isAdmin timezone="UTC" />)
  await screen.findByText('No comments yet. Start the conversation.')
  fireEvent.click(screen.getByRole('checkbox'))
  fireEvent.click(screen.getByRole('button',{name:'Insert uploaded image'}))

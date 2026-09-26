@@ -11,7 +11,7 @@ interface DayScheduleProps {
   filtered: boolean
   onBook: (day: DayView, slot: SlotView) => void
   onBookEmergency: (day: DayView) => void
-  onOpenBooking: (bookingId: number) => void
+  onOpenBooking: (bookingId: number, bookingReference?: string) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
   onAdjustCapacity: (day: DayView, delta: 1 | -1) => void
 }
@@ -181,7 +181,7 @@ export function DaySchedule({
         {day.emergency_bookings.length ? (
           <div className="mt-3 space-y-2">
             {day.emergency_bookings.map((booking) => (
-              <button key={booking.id} type="button" className="flex w-full items-center gap-3 rounded-lg border border-orange-200 bg-white p-3 text-left" onClick={() => onOpenBooking(booking.id)}>
+              <button key={booking.id} type="button" className="flex w-full items-center gap-3 rounded-lg border border-orange-200 bg-white p-3 text-left" onClick={() => onOpenBooking(booking.id, booking.booking_reference)}>
                 <span className="font-semibold text-orange-950">{booking.booking_reference}</span>
                 <span className="text-sm text-ink">{booking.tenant_name}</span>
                 <span className="text-sm text-ink-muted">{booking.change_number ?? 'Pending'} | {booking.jira_number ?? 'Pending'}</span>

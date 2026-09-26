@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import json
-from sqlalchemy import select
+from sqlalchemy import func, select
 from pydantic import BaseModel, Field, field_validator
 from ..schemas.booking import AuditEventOut
 
@@ -182,6 +182,27 @@ def search_schedules(
     return [ScheduleSearchResult(id=b.id, booking_reference=b.booking_reference, tenant_name=b.tenant_name,
         deployment_date=b.deployment_date, status=b.status, change_number=b.change_number)
         for b in db.scalars(stmt.order_by(DeploymentBooking.id.desc()).limit(25)).all()]
+
+
+@router.get("/by-reference/{booking_reference}", response_model=BookingDetail)
+def read_booking_by_reference(
+    booking_reference: str,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal | None = Depends(current_admin),
+    user: UserPrincipal | None = Depends(current_user),
+) -> BookingDetail:
+    if admin is None and user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
+    reference = booking_reference.strip().lower()
+    booking = db.scalar(
+        select(DeploymentBooking).where(func.lower(DeploymentBooking.booking_reference) == reference)
+    )
+    if booking is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Schedule not found.")
+    _assert_can_view(booking, admin, user)
+    return presenters.booking_detail(
+        db, booking, get_app_settings(db), is_admin=admin is not None, user_id=user.user_id if user else None
+    )
 
 
 @router.get("/{booking_id}", response_model=BookingDetail)
