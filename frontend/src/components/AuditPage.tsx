@@ -1,6 +1,9 @@
 import { useState } from 'react'
+import type { DateWindowValue, TenantOption } from '../types'
 import { AuditHistory } from './AuditHistory'
+import { DateWindowFilter, EMPTY_WINDOW } from './DateWindowFilter'
 import { History, Search } from './Icons'
+import { TenantPicker } from './TenantPicker'
 
 const EVENT_TYPES = [
   ['BOOKING_CREATED', 'Schedule created'],
@@ -33,17 +36,29 @@ export function AuditPage({ timezone }: { timezone: string }) {
   const [query, setQuery] = useState('')
   const [eventType, setEventType] = useState('')
   const [actorType, setActorType] = useState<'' | 'USER' | 'ADMIN' | 'SYSTEM'>('')
-  const [applied, setApplied] = useState({ query: '', eventType: '', actorType: '' as '' | 'USER' | 'ADMIN' | 'SYSTEM' })
+  const [tenant, setTenant] = useState<TenantOption | null>(null)
+  const [dateWindow, setDateWindow] = useState<DateWindowValue>(EMPTY_WINDOW)
+  const [applied, setApplied] = useState({
+    query: '',
+    eventType: '',
+    actorType: '' as '' | 'USER' | 'ADMIN' | 'SYSTEM',
+    tenant: null as TenantOption | null,
+    window: EMPTY_WINDOW,
+  })
+  const invalidRange = Boolean(dateWindow.dateFrom && dateWindow.dateTo && dateWindow.dateFrom > dateWindow.dateTo)
 
   function apply() {
-    setApplied({ query: query.trim(), eventType, actorType })
+    if (invalidRange) return
+    setApplied({ query: query.trim(), eventType, actorType, tenant, window: dateWindow })
   }
 
   function clear() {
     setQuery('')
     setEventType('')
     setActorType('')
-    setApplied({ query: '', eventType: '', actorType: '' })
+    setTenant(null)
+    setDateWindow(EMPTY_WINDOW)
+    setApplied({ query: '', eventType: '', actorType: '', tenant: null, window: EMPTY_WINDOW })
   }
 
   return (
@@ -61,7 +76,7 @@ export function AuditPage({ timezone }: { timezone: string }) {
       </header>
 
       <section className="card p-5" aria-label="Audit filters">
-        <form className="grid gap-3 lg:grid-cols-[minmax(15rem,1fr)_15rem_12rem_auto] lg:items-end" onSubmit={(event) => { event.preventDefault(); apply() }}>
+        <form className="grid gap-3 lg:grid-cols-4 lg:items-end" onSubmit={(event) => { event.preventDefault(); apply() }}>
           <label className="text-xs font-semibold text-ink-muted">Search history
             <div className="relative mt-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-muted" />
@@ -82,15 +97,25 @@ export function AuditPage({ timezone }: { timezone: string }) {
               <option value="SYSTEM">System</option>
             </select>
           </label>
+          <TenantPicker id="audit-tenant" value={tenant} onChange={setTenant} />
+          <DateWindowFilter idPrefix="audit" value={dateWindow} onChange={setDateWindow} />
           <div className="flex gap-2">
-            <button className="btn-primary" type="submit">Apply</button>
-            {(applied.query || applied.eventType || applied.actorType) ? <button className="btn-secondary" type="button" onClick={clear}>Clear</button> : null}
+            <button className="btn-primary" type="submit" disabled={invalidRange}>Apply</button>
+            <button className="btn-secondary" type="button" onClick={clear}>Clear filters</button>
           </div>
         </form>
       </section>
 
       <section className="card p-5 sm:p-6">
-        <AuditHistory timezone={timezone} query={applied.query} eventType={applied.eventType} actorType={applied.actorType} linkSchedules />
+        <AuditHistory
+          timezone={timezone}
+          query={applied.query}
+          eventType={applied.eventType}
+          actorType={applied.actorType}
+          tenantId={applied.tenant?.id ?? null}
+          window={applied.window}
+          linkSchedules
+        />
       </section>
     </main>
   )

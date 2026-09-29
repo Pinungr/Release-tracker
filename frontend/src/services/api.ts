@@ -24,6 +24,10 @@ import type {
   SlotConfig,
   SlotOption,
   Tenant,
+  DateWindowValue,
+  ScheduleListItem,
+  TenantOption,
+  TenantUpcoming,
 } from '../types'
 
 const BASE = '/api'
@@ -110,6 +114,21 @@ async function download(path: string, filename: string): Promise<void> {
   anchor.click()
   anchor.remove()
   URL.revokeObjectURL(url)
+}
+
+/**
+ * Send either Days or a From/To range, never both. The UI already keeps them
+ * exclusive; this is the last line of defence before the API, which would
+ * reject the pair.
+ */
+function appendWindow(params: URLSearchParams, window?: DateWindowValue) {
+  if (!window) return
+  if (window.dateFrom || window.dateTo) {
+    if (window.dateFrom) params.set('date_from', window.dateFrom)
+    if (window.dateTo) params.set('date_to', window.dateTo)
+  } else if (window.days) {
+    params.set('days', String(window.days))
+  }
 }
 
 export const api = {
@@ -251,6 +270,22 @@ export const api = {
       body: json({ status, override_reason: overrideReason ?? null }),
     }),
 
+  lookupTenants: (q: string) =>
+    request<TenantOption[]>(`/tenants/lookup?q=${encodeURIComponent(q)}`),
+  getTenantUpcoming: (tenantId: number) =>
+    request<TenantUpcoming>(`/bookings/upcoming?tenant_id=${tenantId}`),
+  getScheduleHistory: (filters: { tenantId?: number | null; window?: DateWindowValue; before?: { date: string; id: number }; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (filters.tenantId) params.set('tenant_id', String(filters.tenantId))
+    appendWindow(params, filters.window)
+    if (filters.before) {
+      params.set('before_date', filters.before.date)
+      params.set('before_id', String(filters.before.id))
+    }
+    if (filters.limit) params.set('limit', String(filters.limit))
+    const query = params.toString()
+    return request<ScheduleListItem[]>(`/bookings/history${query ? `?${query}` : ''}`)
+  },
   searchSchedules: (q: string, beforeId?: number) => request<ScheduleSearchResult[]>(`/bookings/search?q=${encodeURIComponent(q)}${beforeId ? `&before_id=${beforeId}` : ''}`),
   downloadCommentAttachment: (bookingId: number, commentId: number, attachmentId: string, filename: string) =>
     download(`/bookings/${bookingId}/comments/${commentId}/attachments/${encodeURIComponent(attachmentId)}`, filename),
@@ -285,9 +320,11 @@ export const api = {
     request<AuditEvent[]>(`/bookings/${id}/audit${beforeId ? `?before_id=${beforeId}` : ''}`),
   getBookingByReference: (reference: string) =>
     request<BookingDetail>(`/bookings/by-reference/${encodeURIComponent(reference)}`),
-  getAudit: (filters: { bookingId?: number; q?: string; eventType?: string; actorType?: 'USER' | 'ADMIN' | 'SYSTEM'; beforeId?: number; limit?: number } = {}) => {
+  getAudit: (filters: { bookingId?: number; q?: string; eventType?: string; actorType?: 'USER' | 'ADMIN' | 'SYSTEM'; tenantId?: number | null; window?: DateWindowValue; beforeId?: number; limit?: number } = {}) => {
     const params = new URLSearchParams()
     if (filters.bookingId) params.set('booking_id', String(filters.bookingId))
+    if (filters.tenantId) params.set('tenant_id', String(filters.tenantId))
+    appendWindow(params, filters.window)
     if (filters.q?.trim()) params.set('q', filters.q.trim())
     if (filters.eventType) params.set('event_type', filters.eventType)
     if (filters.actorType) params.set('actor_type', filters.actorType)

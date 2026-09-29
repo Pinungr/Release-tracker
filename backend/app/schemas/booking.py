@@ -210,6 +210,8 @@ class BookingCreated(BaseModel):
 class AuditEventOut(BaseModel):
     id: int
     booking_reference: str | None
+    tenant_id: int | None = None
+    tenant_name: str | None = None
     event_type: str
     actor_type: Literal["USER", "ADMIN", "SYSTEM"]
     requester_email: str | None
@@ -329,3 +331,41 @@ class PublicSettings(BaseModel):
 
 
 ScheduleResponse.model_rebuild()
+
+
+class ScheduleListItem(BaseModel):
+    """A schedule as listed in tenant search and history.
+
+    Deliberately lean: these lists can be long, so per-row lock and document
+    readiness are left to the full record, which opens on click.
+    """
+
+    id: int
+    booking_reference: str
+    tenant_id: int
+    tenant_name: str
+    deployment_date: date
+    slot_number: int | None
+    is_emergency: bool
+    status: str
+    change_number: str | None
+    jira_number: str | None
+    jira_url: str | None
+    release_managers: list[str]
+
+
+class UpcomingWeek(BaseModel):
+    week_start: date
+    week_end: date
+    week_label: str
+    schedules: list[ScheduleListItem]
+
+
+class TenantUpcoming(BaseModel):
+    """One tenant's upcoming schedules, grouped only into weeks that hold one."""
+
+    tenant_id: int
+    tenant_name: str
+    weeks: list[UpcomingWeek]
+    #: True when more schedules exist than were returned.
+    truncated: bool

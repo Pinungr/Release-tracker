@@ -1,14 +1,14 @@
 """Tenant lookup scoped by group membership."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Tenant
 from ..security import UserPrincipal, require_user
-from ..services import group_service
+from ..services import group_service, search_service
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -44,4 +44,24 @@ def list_active_tenants(
             "weekly_booking_limit": tenant.weekly_booking_limit,
         }
         for tenant in tenants
+    ]
+
+
+@router.get("/lookup", response_model=list[dict])
+def lookup_tenants(
+    q: str = Query(default="", max_length=120),
+    limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user: UserPrincipal = Depends(require_user),
+) -> list[dict]:
+    """Tenant autocomplete for search, history and audit filters.
+
+    Unlike ``/active`` (which scopes the tenants a user may *book* for), this
+    returns any tenant: every signed-in user can already read every schedule
+    and its tenant on the board, so it reveals nothing new. Inactive tenants
+    are included because their history remains searchable.
+    """
+    return [
+        {"id": t.id, "name": t.name, "tenant_code": t.tenant_code, "is_active": t.is_active}
+        for t in search_service.lookup_tenants(db, q, limit=limit)
     ]

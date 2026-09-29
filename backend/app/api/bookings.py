@@ -5,7 +5,7 @@ from datetime import date, datetime
 import json
 from sqlalchemy import func, select
 from pydantic import BaseModel, Field, field_validator
-from ..schemas.booking import AuditEventOut
+from ..schemas.booking import AuditEventOut, ScheduleListItem, TenantUpcoming
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
@@ -25,9 +25,9 @@ from ..schemas import (
     SlotOptionOut,
     StartWorkRequest,
 )
-from ..security import AdminPrincipal, UserPrincipal
+from ..security import AdminPrincipal, UserPrincipal, require_user
 from ..security.ratelimit import enforce
-from ..services import attachment_service, booking_service, presenters, audit_service, group_service
+from ..services import attachment_service, booking_service, presenters, audit_service, group_service, search_service
 from ..services.booking_service import Actor
 from ..services.settings_service import get_app_settings
 from ..services.comment_images import ImageReference, ReferencedImage, validated_images, resolve_image, is_image
@@ -182,6 +182,44 @@ def search_schedules(
     return [ScheduleSearchResult(id=b.id, booking_reference=b.booking_reference, tenant_name=b.tenant_name,
         deployment_date=b.deployment_date, status=b.status, change_number=b.change_number)
         for b in db.scalars(stmt.order_by(DeploymentBooking.id.desc()).limit(25)).all()]
+
+
+@router.get("/upcoming", response_model=TenantUpcoming)
+def tenant_upcoming_schedules(
+    tenant_id: int = Query(ge=1),
+    db: Session = Depends(get_db),
+    user: UserPrincipal = Depends(require_user),
+) -> TenantUpcoming:
+    """One tenant's open schedules from today, grouped only into weeks that hold one."""
+    return search_service.tenant_upcoming(db, search_service.get_tenant(db, tenant_id))
+
+
+@router.get("/history", response_model=list[ScheduleListItem])
+def schedule_history(
+    tenant_id: int | None = Query(default=None, ge=1),
+    days: int | None = Query(default=None, ge=1, le=search_service.MAX_DAYS),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    before_date: date | None = None,
+    before_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: UserPrincipal = Depends(require_user),
+) -> list[ScheduleListItem]:
+    """Paged schedule history, newest first. Filters combine freely."""
+    if (before_date is None) != (before_id is None):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "before_date and before_id must be sent together."
+        )
+    if tenant_id is not None:
+        search_service.get_tenant(db, tenant_id)
+    return search_service.schedule_history(
+        db,
+        tenant_id=tenant_id,
+        window=search_service.date_window(days, date_from, date_to),
+        before=(before_date, before_id) if before_date is not None else None,
+        limit=limit,
+    )
 
 
 @router.get("/by-reference/{booking_reference}", response_model=BookingDetail)

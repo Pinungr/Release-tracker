@@ -224,12 +224,16 @@ class DeploymentBooking(Base):
             postgresql_where=text("status <> 'CANCELLED' AND is_emergency = false"),
         ),
         Index("ix_booking_date", "deployment_date"),
+        # Tenant search (upcoming and history) filters by tenant and orders by
+        # deployment date; this serves both without a sort.
+        Index("ix_booking_tenant_date", "tenant_id", "deployment_date"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     booking_reference: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
 
-    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    # Indexed by ix_booking_tenant_date, whose leading column is tenant_id.
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), nullable=False)
     tenant_name: Mapped[str] = mapped_column(String(120), nullable=False)
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
@@ -425,10 +429,21 @@ class ApplicationSetting(Base):
 
 class BookingAudit(Base):
     __tablename__ = "booking_audit"
+    __table_args__ = (
+        # Central Audit filters by tenant and pages newest-first by id.
+        Index("ix_booking_audit_tenant_id_id", "tenant_id", "id"),
+        # Days / From-To filters on the event time.
+        Index("ix_booking_audit_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     booking_id: Mapped[int | None] = mapped_column(
         ForeignKey("deployment_bookings.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Denormalised so tenant filtering still finds the history of a schedule
+    # that was later hard-deleted (its booking_id is nulled on delete).
+    tenant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True
     )
     booking_reference: Mapped[str | None] = mapped_column(String(32), nullable=True)
     event_type: Mapped[str] = mapped_column(String(48), nullable=False)
@@ -441,3 +456,4 @@ class BookingAudit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     booking: Mapped[DeploymentBooking | None] = relationship(back_populates="audit_events")
+    tenant: Mapped[Tenant | None] = relationship()

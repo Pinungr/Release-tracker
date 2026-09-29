@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AdminGroupManager } from './components/AdminGroupManager'
 import { AuditPage } from './components/AuditPage'
+import { HistoryPage } from './components/HistoryPage'
 import { AdminPanel } from './components/AdminPanel'
 import { AppFooter } from './components/AppFooter'
 import { AppHeader } from './components/AppHeader'
@@ -122,6 +123,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const [route, setRoute] = useState(() => window.location.hash)
   const groupsOpen = /^#\/admin\/groups(?:\/|$)/.test(route)
   const globalAuditOpen = /^#\/audit\/?$/.test(route)
+  const historyOpen = /^#\/history\/?$/.test(route)
   const auditScheduleRoute = /^#\/audit\/([^/]+)\/?$/.exec(route)
   const legacyScheduleAuditRoute = /^#\/schedules\/([^/]+)\/audit\/?$/.exec(route)
   const scheduleRoute = /^#\/schedules\/([^/]+)\/?$/.exec(route)
@@ -134,7 +136,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const scheduleDetailOpen = Boolean(scheduleRoute)
   const legacyDetailRoute = /^#change\/(\d+)$/.exec(route)
   const detailOpen = scheduleDetailOpen || Boolean(legacyDetailRoute)
-  const pageOpen = groupsOpen || globalAuditOpen || detailOpen || scheduleAuditOpen || Boolean(legacyScheduleAuditRoute)
+  const pageOpen = groupsOpen || globalAuditOpen || historyOpen || detailOpen || scheduleAuditOpen || Boolean(legacyScheduleAuditRoute)
   const closeDetails = useCallback(() => { window.location.hash = '' }, [])
   const openBooking = useCallback((id: number, reference?: string) => {
     window.location.hash = reference ? `/schedules/${encodeURIComponent(reference)}` : `change/${id}`
@@ -309,6 +311,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
       />
 
       {!pageOpen && <ScheduleSearch onOpen={openBooking} />}
+      {historyOpen ? <HistoryPage onOpen={openBooking} /> : null}
       {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact the Release Management team to be added to the appropriate tenant group.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
       {globalAuditOpen && (auth.isAdmin ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to the Owner and Release Managers.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
       {scheduleAuditOpen ? <ScheduleAuditPage booking={detailBooking} loading={detailLoading} timezone={timezone} onClose={closeDetails} /> : null}

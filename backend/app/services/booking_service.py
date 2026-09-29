@@ -1018,6 +1018,8 @@ def delete_booking(db: Session, booking: DeploymentBooking, actor: Actor) -> Non
         requester_email=booking.requester_email,
         admin_username=actor.admin_username,
         old_values=snapshot,
+        # The booking row is about to go, so carry its tenant explicitly.
+        tenant_id=booking.tenant_id,
     )
     deleted_event.booking_reference = reference
     db.delete(booking)

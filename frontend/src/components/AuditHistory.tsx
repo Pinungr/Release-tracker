@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../services/api'
-import type { AuditEvent } from '../types'
+import type { AuditEvent, DateWindowValue } from '../types'
 import { formatTimestamp } from '../utils/dates'
 import { titleCase } from '../utils/format'
 import { History, Shield, Spinner, User } from './Icons'
@@ -14,6 +14,8 @@ interface AuditHistoryProps {
   actorType?: 'USER' | 'ADMIN' | 'SYSTEM' | ''
   linkSchedules?: boolean
   refreshKey?: string | number
+  tenantId?: number | null
+  window?: DateWindowValue
 }
 
 const EVENT_LABELS: Record<string, string> = {
@@ -137,6 +139,8 @@ export function AuditHistory({
   actorType = '',
   linkSchedules = false,
   refreshKey = '',
+  tenantId = null,
+  window,
 }: AuditHistoryProps) {
   const [events, setEvents] = useState<AuditEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -144,7 +148,10 @@ export function AuditHistory({
   const [busy, setBusy] = useState(false)
   const pageSize = scoped ? 50 : 100
 
-  const filterKey = useMemo(() => JSON.stringify([query.trim(), eventType, actorType]), [query, eventType, actorType])
+  const filterKey = useMemo(
+    () => JSON.stringify([query.trim(), eventType, actorType, tenantId, window]),
+    [query, eventType, actorType, tenantId, window],
+  )
 
   useEffect(() => {
     let active = true
@@ -152,7 +159,7 @@ export function AuditHistory({
     setError(null)
     const load = scoped && bookingId
       ? api.getBookingAudit(bookingId)
-      : api.getAudit({ bookingId, q: query, eventType, actorType: actorType || undefined, limit: pageSize })
+      : api.getAudit({ bookingId, q: query, eventType, actorType: actorType || undefined, tenantId, window, limit: pageSize })
     load
       .then((result) => {
         if (active) {
@@ -210,6 +217,9 @@ export function AuditHistory({
                       ) : (
                         <span className="badge bg-canvas text-ink-muted ring-1 ring-line">System / configuration</span>
                       )}
+                      {event.tenant_name ? (
+                        <span className="badge bg-canvas text-ink ring-1 ring-line">{event.tenant_name}</span>
+                      ) : null}
                     </div>
                     {summary ? <p className="mt-1 text-sm text-ink-muted">{summary}</p> : null}
                   </div>
@@ -242,7 +252,7 @@ export function AuditHistory({
           try {
             const rows = scoped && bookingId
               ? await api.getBookingAudit(bookingId, beforeId)
-              : await api.getAudit({ bookingId, q: query, eventType, actorType: actorType || undefined, beforeId, limit: pageSize })
+              : await api.getAudit({ bookingId, q: query, eventType, actorType: actorType || undefined, tenantId, window, beforeId, limit: pageSize })
             setEvents((current) => [...(current ?? []), ...rows])
             setMore(rows.length === pageSize)
           } catch {

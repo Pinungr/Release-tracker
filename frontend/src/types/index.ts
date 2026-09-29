@@ -338,6 +338,8 @@ export interface SlotConfig {
 export interface AuditEvent {
   id: number
   booking_reference: string | null
+  tenant_id?: number | null
+  tenant_name?: string | null
   event_type: string
   actor_type: 'USER' | 'ADMIN' | 'SYSTEM'
   requester_email: string | null
@@ -407,4 +409,50 @@ export interface CommentImageRef {
 export interface CommentImage extends CommentImageRef {
   original_filename: string
   internal: boolean
+}
+
+/** A tenant as offered by search, history and audit autocomplete. */
+export interface TenantOption {
+  id: number
+  name: string
+  tenant_code: string | null
+  is_active: boolean
+}
+
+/** A schedule as listed in tenant search and history (lean; open for full detail). */
+export interface ScheduleListItem {
+  id: number
+  booking_reference: string
+  tenant_id: number
+  tenant_name: string
+  deployment_date: string
+  slot_number: number | null
+  is_emergency: boolean
+  status: BookingStatus
+  change_number: string | null
+  jira_number: string | null
+  jira_url: string | null
+  release_managers: string[]
+}
+
+export interface UpcomingWeek {
+  week_start: string
+  week_end: string
+  week_label: string
+  schedules: ScheduleListItem[]
+}
+
+/** One tenant's upcoming schedules, grouped only into weeks that hold one. */
+export interface TenantUpcoming {
+  tenant_id: number
+  tenant_name: string
+  weeks: UpcomingWeek[]
+  truncated: boolean
+}
+
+/** Days XOR From/To: choosing one clears the other, so the two never conflict. */
+export interface DateWindowValue {
+  days: number | null
+  dateFrom: string
+  dateTo: string
 }

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Logout, Settings, Shield, User } from './Icons'
+import { History, Logout, Settings, Shield, User } from './Icons'
 
 interface AppHeaderProps {
   groupsOpen?: boolean
@@ -52,6 +52,11 @@ export function AppHeader({
           <div className="order-3 w-full lg:order-2 lg:w-auto">{weekNavigator}</div>
 
           <div className="order-2 ml-auto flex items-center gap-2 lg:order-3">
+            {/* Schedule history is readable by every signed-in user. */}
+            <a href="#/history" className="btn-secondary">
+              <History className="size-4" />
+              <span className="hidden sm:inline">History</span>
+            </a>
             <button type="button" onClick={onProfile} className="btn-secondary">
               <User className="size-4" />
               <span className="hidden sm:inline">{username}</span>

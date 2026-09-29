@@ -327,6 +327,8 @@ def audit_event_out(event: BookingAudit) -> AuditEventOut:
     return AuditEventOut(
         id=event.id,
         booking_reference=event.booking_reference,
+        tenant_id=event.tenant_id,
+        tenant_name=event.tenant.name if event.tenant is not None else None,
         event_type=event.event_type,
         actor_type="USER" if event.actor_type == "TENANT_USER" else event.actor_type,  # type: ignore[arg-type]
         requester_email=event.requester_email,

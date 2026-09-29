@@ -73,9 +73,11 @@ def record(
     override_reason: str | None = None,
     old_values: dict[str, Any] | None = None,
     new_values: dict[str, Any] | None = None,
+    tenant_id: int | None = None,
 ) -> BookingAudit:
     event = BookingAudit(
         booking_id=booking.id if booking else None,
+        tenant_id=booking.tenant_id if booking is not None else tenant_id,
         booking_reference=booking.booking_reference if booking else None,
         event_type=event_type,
         actor_type=actor_type,

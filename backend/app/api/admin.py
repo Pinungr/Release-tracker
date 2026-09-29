@@ -11,7 +11,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
 from ..models import (
@@ -50,7 +50,7 @@ from ..security import (
     hash_secret,
     require_admin,
 )
-from ..services import audit_service, booking_service, presenters, schedule_service, group_service
+from ..services import audit_service, booking_service, presenters, schedule_service, group_service, search_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
 from ..services.bootstrap import ensure_regular_slot_count
@@ -1131,17 +1131,30 @@ def read_audit(
     q: str | None = Query(default=None, max_length=120),
     event_type: str | None = Query(default=None, max_length=48),
     actor_type: str | None = Query(default=None, pattern="^(USER|ADMIN|SYSTEM)$"),
+    tenant_id: int | None = Query(default=None, ge=1),
+    days: int | None = Query(default=None, ge=1, le=search_service.MAX_DAYS),
+    date_from: date | None = None,
+    date_to: date | None = None,
     before_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> list[AuditEventOut]:
+    # Access is unchanged: Owner and Release Managers only (require_admin).
+    # The new filters only ever narrow what that role could already see.
     # Discussion has its own UI; keep the audit trail focused on operational/admin changes.
     stmt = select(BookingAudit).where(
         BookingAudit.event_type.not_in(["COMMENT_ADDED", "INTERNAL_NOTE_ADDED"])
     )
     if booking_id:
         stmt = stmt.where(BookingAudit.booking_id == booking_id)
+    if tenant_id is not None:
+        stmt = stmt.where(BookingAudit.tenant_id == tenant_id)
+    window_start, window_end = search_service.date_window(days, date_from, date_to).utc_bounds()
+    if window_start is not None:
+        stmt = stmt.where(BookingAudit.created_at >= window_start)
+    if window_end is not None:
+        stmt = stmt.where(BookingAudit.created_at < window_end)
     if before_id is not None:
         stmt = stmt.where(BookingAudit.id < before_id)
     if event_type:
@@ -1162,5 +1175,5 @@ def read_audit(
             BookingAudit.old_values.icontains(term, autoescape=True),
             BookingAudit.new_values.icontains(term, autoescape=True),
         ))
-    stmt = stmt.order_by(BookingAudit.id.desc()).limit(limit)
+    stmt = stmt.options(selectinload(BookingAudit.tenant)).order_by(BookingAudit.id.desc()).limit(limit)
     return [presenters.audit_event_out(e) for e in db.scalars(stmt).all()]
