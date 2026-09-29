@@ -430,7 +430,7 @@ class ApplicationSetting(Base):
 class BookingAudit(Base):
     __tablename__ = "booking_audit"
     __table_args__ = (
-        # Central Audit filters by tenant and pages newest-first by id.
+        # Central Audit filters by tenant; event time is the primary sort key.
         Index("ix_booking_audit_tenant_id_id", "tenant_id", "id"),
         # Days / From-To filters on the event time.
         Index("ix_booking_audit_created_at", "created_at"),

@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react'
 import { api, ApiError } from '../services/api'
-import type { DateWindowValue, ScheduleListItem, ScheduleSearchResult, TenantOption } from '../types'
+import type { DateWindowValue, ScheduleListItem, ScheduleSearchResult, TenantOption, TenantUpcoming } from '../types'
 import { exactTenant, useTenantSuggestions } from '../hooks/useTenantSuggestions'
 import { DateWindowFilter, EMPTY_WINDOW, isWindowEmpty } from './DateWindowFilter'
 import { BookingStatusBadge } from './StatusBadge'
 import { ScheduleListRow } from './ScheduleListRow'
+import { TenantUpcomingResults } from './TenantUpcomingResults'
 import { Search, Spinner } from './Icons'
 import { formatDate } from '../utils/dates'
 
@@ -13,6 +14,7 @@ const HISTORY_PAGE = 50
 
 type Results =
   | { kind: 'number'; term: string; rows: ScheduleSearchResult[] }
+  | { kind: 'upcoming'; tenant: TenantOption; result: TenantUpcoming }
   | { kind: 'history'; tenant: TenantOption | null; term: string; window: DateWindowValue; rows: ScheduleListItem[] }
 
 /**
@@ -20,8 +22,8 @@ type Results =
  * tenant, optionally narrowed to a recent period or an exact date range.
  *
  * A plain Schedule No. with no dates keeps the original all-dates number
- * search. Anything involving a tenant or dates runs the server-side history
- * search, filtered and paged in the database.
+ * search. A tenant with no date filter opens that tenant's upcoming/open
+ * schedules. Adding Days or a From/To range switches to server-side history.
  */
 export function ScheduleSearch({ onOpen }: { onOpen: (id: number, bookingReference?: string) => void }) {
   const [text, setText] = useState('')
@@ -54,7 +56,12 @@ export function ScheduleSearch({ onOpen }: { onOpen: (id: number, bookingReferen
     const request = ++generation.current
     setBusy(true); setError('')
     try {
-      if (!chosen && isWindowEmpty(dateWindow)) {
+      if (chosen && isWindowEmpty(dateWindow)) {
+        const result = await api.getTenantUpcoming(chosen.id)
+        if (request !== generation.current) return
+        setResults({ kind: 'upcoming', tenant: chosen, result })
+        setMore(false)
+      } else if (!chosen && isWindowEmpty(dateWindow)) {
         if (term.length < 2) { setError('Enter at least two characters, choose a tenant, or pick a date range.'); return }
         const rows = await api.searchSchedules(term)
         if (request !== generation.current) return
@@ -79,7 +86,7 @@ export function ScheduleSearch({ onOpen }: { onOpen: (id: number, bookingReferen
   }
 
   async function loadMore() {
-    if (!results) return
+    if (!results || results.kind === 'upcoming') return
     const request = generation.current
     setBusy(true)
     try {
@@ -176,6 +183,10 @@ export function ScheduleSearch({ onOpen }: { onOpen: (id: number, bookingReferen
         <strong className="text-sm text-brand-700">{row.booking_reference}</strong><span className="text-sm">{row.tenant_name}</span><span className="text-xs text-ink-muted">{formatDate(row.deployment_date)}</span><BookingStatusBadge status={row.status} />
       </button>)}
       {more && <button className="btn-secondary" disabled={busy} onClick={() => void loadMore()}>Load more results</button>}
+    </div>}
+
+    {results?.kind === 'upcoming' && <div className="card mt-3 p-3" aria-live="polite">
+      <TenantUpcomingResults result={results.result} onOpen={open} />
     </div>}
 
     {results?.kind === 'history' && <div className="card mt-3 space-y-2 p-3" aria-live="polite">

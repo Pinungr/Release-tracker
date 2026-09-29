@@ -1156,7 +1156,13 @@ def read_audit(
     if window_end is not None:
         stmt = stmt.where(BookingAudit.created_at < window_end)
     if before_id is not None:
-        stmt = stmt.where(BookingAudit.id < before_id)
+        cursor = db.get(BookingAudit, before_id)
+        if cursor is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid audit pagination cursor.")
+        stmt = stmt.where(or_(
+            BookingAudit.created_at < cursor.created_at,
+            (BookingAudit.created_at == cursor.created_at) & (BookingAudit.id < cursor.id),
+        ))
     if event_type:
         stmt = stmt.where(BookingAudit.event_type == event_type.strip().upper())
     if actor_type:
@@ -1175,5 +1181,5 @@ def read_audit(
             BookingAudit.old_values.icontains(term, autoescape=True),
             BookingAudit.new_values.icontains(term, autoescape=True),
         ))
-    stmt = stmt.options(selectinload(BookingAudit.tenant)).order_by(BookingAudit.id.desc()).limit(limit)
+    stmt = stmt.options(selectinload(BookingAudit.tenant)).order_by(BookingAudit.created_at.desc(), BookingAudit.id.desc()).limit(limit)
     return [presenters.audit_event_out(e) for e in db.scalars(stmt).all()]

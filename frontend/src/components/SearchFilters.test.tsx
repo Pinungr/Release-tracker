@@ -5,6 +5,7 @@ import type { DateWindowValue, TenantOption, TenantUpcoming } from '../types'
 import { DateWindowFilter, EMPTY_WINDOW } from './DateWindowFilter'
 import { TenantPicker } from './TenantPicker'
 import { TenantUpcomingResults } from './TenantUpcomingResults'
+import { ScheduleSearch } from './ScheduleSearch'
 import { api } from '../services/api'
 
 vi.mock('../services/api', async (importOriginal) => {
@@ -101,4 +102,29 @@ it('shows a clear message and no week containers when nothing is upcoming', () =
   render(<TenantUpcomingResults result={{ tenant_id: 7, tenant_name: 'NCAP', truncated: false, weeks: [] }} onOpen={vi.fn()} />)
   expect(screen.getByRole('status').textContent).toBe('No upcoming PDS schedules found for NCAP.')
   expect(screen.queryAllByRole('region')).toHaveLength(0)
+})
+
+
+it('uses upcoming schedules for a tenant-only top search', async () => {
+  const result: TenantUpcoming = {
+    tenant_id: 7,
+    tenant_name: 'NCAP',
+    truncated: false,
+    weeks: [
+      { week_start: '2026-10-18', week_end: '2026-10-22', week_label: '18 - 22 Oct 2026', schedules: [schedule(15, 'PDS-015', '2026-10-19')] },
+    ],
+  }
+  const upcoming = vi.spyOn(api, 'getTenantUpcoming').mockResolvedValueOnce(result)
+  const history = vi.spyOn(api, 'getScheduleHistory')
+
+  render(<ScheduleSearch onOpen={vi.fn()} />)
+  const input = screen.getByRole('combobox', { name: /Search Schedule No. or tenant/i })
+  fireEvent.focus(input)
+  fireEvent.change(input, { target: { value: 'NCA' } })
+  fireEvent.click(await screen.findByRole('option', { name: /NCAP/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Find schedule' }))
+
+  await waitFor(() => expect(upcoming).toHaveBeenCalledWith(7))
+  expect(history).not.toHaveBeenCalled()
+  expect(await screen.findByText('NCAP – Upcoming schedules')).toBeTruthy()
 })

@@ -283,3 +283,29 @@ def test_history_schedule_number_search_combines_with_dates(db, user, ncap, abc)
     # With a Days range it is narrowed to that period.
     assert hist(user, q=future.booking_reference, days=30) == []
     assert hist(user, q=past.booking_reference, days=30) == [past.booking_reference]
+
+
+
+def test_audit_orders_and_pages_by_timestamp_then_id(db, admin, user, ncap, next_monday):
+    """A backfilled event with a lower id but newer timestamp must sort first."""
+    first_booking = create_booking(user, ncap, next_monday, 1)
+    second_booking = create_booking(user, ncap, next_monday + timedelta(days=1), 1)
+
+    first_event = db.query(BookingAudit).filter_by(
+        booking_id=first_booking["id"], event_type="BOOKING_CREATED"
+    ).one()
+    second_event = db.query(BookingAudit).filter_by(
+        booking_id=second_booking["id"], event_type="BOOKING_CREATED"
+    ).one()
+
+    # first_event has the lower id, but make its event time newer.
+    first_event.created_at = datetime(2026, 9, 29, 12, 0, 0)
+    second_event.created_at = datetime(2026, 9, 28, 12, 0, 0)
+    db.commit()
+
+    params = {"tenant_id": ncap, "event_type": "BOOKING_CREATED", "limit": 1}
+    first_page = audit(admin, **params)
+    assert [row["id"] for row in first_page] == [first_event.id]
+
+    second_page = audit(admin, **params, before_id=first_page[-1]["id"])
+    assert [row["id"] for row in second_page] == [second_event.id]
