@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { DASHBOARD_HASH } from '../utils/routes'
 import { api, ApiError } from '../services/api'
 import type { AccessGroup, GroupMember, ManagedUser } from '../types'
 import { groupUrl, resolveGroupRoute } from '../utils/groupRoutes'
@@ -180,7 +181,7 @@ export function AdminGroupManager({ isOwner, route }: { isOwner: boolean; route:
   return (
     <main className="mx-auto w-full max-w-[88rem] flex-1 px-4 py-6 sm:px-6 lg:px-8">
       <nav aria-label="Breadcrumb" className="mb-6 flex flex-wrap items-center gap-2 text-sm text-ink-muted">
-        <a href="#" className="hover:text-brand-600">
+        <a href={DASHBOARD_HASH} className="hover:text-brand-600">
           Schedule
         </a>
         <ChevronRight className="size-3.5" />
@@ -256,7 +257,7 @@ export function AdminGroupManager({ isOwner, route }: { isOwner: boolean; route:
             <p className="text-xs leading-5 text-ink-muted">
               Groups organize your people. Choose a group to view and manage its members.
             </p>
-            <a href="#" className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-brand-600">
+            <a href={DASHBOARD_HASH} className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-brand-600">
               <ChevronLeft className="size-3.5" />
               Back to schedule
             </a>

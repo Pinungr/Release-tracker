@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { DASHBOARD_HASH } from '../utils/routes'
 import { Logout, Settings, Shield, User } from './Icons'
 
 interface AppHeaderProps {
@@ -31,7 +32,7 @@ export function AppHeader({
           {/* On phones the brand takes its own line so the title is never
               truncated down to a few characters. */}
           <a
-            href="#"
+            href={DASHBOARD_HASH}
             aria-label="Go to dashboard"
             title="Go to dashboard"
             className="flex min-w-0 flex-1 basis-full items-center gap-3 rounded-lg transition hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-600 sm:basis-auto"

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { DASHBOARD_HASH } from '../utils/routes'
 import type { DateWindowValue, TenantOption } from '../types'
 import { AuditHistory } from './AuditHistory'
 import { DateWindowFilter, EMPTY_WINDOW } from './DateWindowFilter'
@@ -63,7 +64,7 @@ export function AuditPage({ timezone }: { timezone: string }) {
 
   return (
     <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-5 px-4 py-6 sm:px-6 lg:px-8">
-      <a className="btn-secondary inline-flex" href="#">← Back to calendar</a>
+      <a className="btn-secondary inline-flex" href={DASHBOARD_HASH}>← Back to calendar</a>
       <header className="card p-5 sm:p-6">
         <div className="flex flex-wrap items-start gap-4">
           <div className="grid size-11 place-items-center rounded-xl bg-brand-50 text-brand-700"><History className="size-5" /></div>

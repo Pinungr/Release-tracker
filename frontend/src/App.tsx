@@ -25,6 +25,7 @@ import { useSchedule } from './hooks/useSchedule'
 import { api, ApiError } from './services/api'
 import type { BookingDetail, DayView, FilterKey, PublicSettings, SlotView, TenantOption, TenantUpcoming } from './types'
 import { addDays, toIsoDate, weekStart } from './utils/dates'
+import { DASHBOARD_HASH, isDashboardHash, replaceWithDashboard } from './utils/routes'
 
 /** Used only until the first schedule response arrives. */
 const FALLBACK_SETTINGS: PublicSettings = {
@@ -51,7 +52,17 @@ export default function App() {
       </div>
     )
   } else if (!auth.isAuthenticated) {
-    content = <SignInScreen onSignedIn={auth.signIn} />
+    content = (
+      <SignInScreen
+        onSignedIn={(session) => {
+          // A fresh sign-in always starts on the dashboard. The address is set
+          // before the session so the app mounts straight onto it. A session
+          // restored on reload keeps whatever page the URL already names.
+          replaceWithDashboard()
+          auth.signIn(session)
+        }}
+      />
+    )
   } else if (auth.user?.must_change_password) {
     content = (
       <RequiredPasswordChangeScreen
@@ -140,12 +151,17 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const legacyDetailRoute = /^#change\/(\d+)$/.exec(route)
   const detailOpen = scheduleDetailOpen || Boolean(legacyDetailRoute)
   const pageOpen = groupsOpen || globalAuditOpen || detailOpen || scheduleAuditOpen || Boolean(legacyScheduleAuditRoute)
-  const closeDetails = useCallback(() => { window.location.hash = '' }, [])
+  const closeDetails = useCallback(() => { window.location.hash = DASHBOARD_HASH }, [])
   const openBooking = useCallback((id: number, reference?: string) => {
     window.location.hash = reference ? `/schedules/${encodeURIComponent(reference)}` : `change/${id}`
   }, [])
   useEffect(() => {
-    const onHash = () => setRoute(window.location.hash)
+    const onHash = () => {
+      // Give the dashboard its proper address however it was reached.
+      if (isDashboardHash(window.location.hash)) replaceWithDashboard()
+      setRoute(window.location.hash)
+    }
+    onHash()
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -336,8 +352,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
       />
 
       {!pageOpen && <ScheduleSearch onOpen={openBooking} />}
-      {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact the Release Management team to be added to the appropriate tenant group.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
-      {globalAuditOpen && (auth.isAdmin ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to the Owner and Release Managers.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
+      {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact the Release Management team to be added to the appropriate tenant group.</p><a href={DASHBOARD_HASH} className="btn-primary mt-5">Back to schedule</a></main>)}
+      {globalAuditOpen && (auth.isAdmin ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to the Owner and Release Managers.</p><a href={DASHBOARD_HASH} className="btn-primary mt-5">Back to schedule</a></main>)}
       {scheduleAuditOpen ? <ScheduleAuditPage booking={detailBooking} loading={detailLoading} timezone={timezone} onClose={closeDetails} /> : null}
       {!pageOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {cloneSource && <div className="card flex flex-wrap items-center gap-3 border-blue-200 bg-blue-50 p-4">
