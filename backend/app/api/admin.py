@@ -47,8 +47,10 @@ from ..schemas import (
 )
 from ..security import (
     AdminPrincipal,
+    UserPrincipal,
     hash_secret,
     require_admin,
+    require_user,
 )
 from ..services import audit_service, booking_service, presenters, schedule_service, group_service, search_service
 from ..services.booking_service import Actor, BusinessRuleError
@@ -1138,10 +1140,12 @@ def read_audit(
     before_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
-    admin: AdminPrincipal = Depends(require_admin),
+    viewer: UserPrincipal = Depends(require_user),
 ) -> list[AuditEventOut]:
-    # Access is unchanged: Owner and Release Managers only (require_admin).
-    # The new filters only ever narrow what that role could already see.
+    # Central Audit is read-only for Management and also available to the
+    # Owner / Release Managers. No other admin routes are opened to Management.
+    if not viewer.is_admin and not group_service.is_management(db, viewer.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Central Audit access is restricted to Release Management and Management users.")
     # Discussion has its own UI; keep the audit trail focused on operational/admin changes.
     stmt = select(BookingAudit).where(
         BookingAudit.event_type.not_in(["COMMENT_ADDED", "INTERNAL_NOTE_ADDED"])

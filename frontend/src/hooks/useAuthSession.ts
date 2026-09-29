@@ -34,10 +34,15 @@ export function useAuthSession() {
     setUser(null)
   }, [])
 
+  const isManagement = user?.groups?.some((group) => group.group_type === 'MANAGEMENT') ?? false
+
   return {
     user,
     isAuthenticated: user !== null,
-    isAdmin: user?.role === 'ADMIN',
+    // Management membership is authoritative and always read-only, even if a
+    // stale legacy role still says ADMIN from an earlier RM assignment.
+    isAdmin: user?.role === 'ADMIN' && !isManagement,
+    isManagement,
     checking,
     signIn,
     signOut,

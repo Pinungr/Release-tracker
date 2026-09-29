@@ -7,6 +7,7 @@ interface WeeklyScheduleProps {
   schedule: Schedule | null
   loading: boolean
   isAdmin: boolean
+  readOnly?: boolean
   myBookingIds: Set<number>
   query: string
   filter: FilterKey
@@ -66,6 +67,7 @@ export function WeeklySchedule({
   schedule,
   loading,
   isAdmin,
+  readOnly = false,
   myBookingIds,
   query,
   filter,
@@ -113,6 +115,7 @@ export function WeeklySchedule({
           day={day}
           today={schedule.today}
           isAdmin={isAdmin}
+          readOnly={readOnly}
           myBookingIds={myBookingIds}
           visibleSlots={visibleByDay.get(day.day) ?? []}
           filtered={filtered}

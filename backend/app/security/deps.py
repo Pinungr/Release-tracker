@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import User
+from ..services import group_service
 from .tokens import decode_token
 
 #: Revoked token ids (logout). Process-local by design: the app is a single
@@ -123,12 +124,22 @@ def require_user(
     return user
 
 
-def optional_admin(user: UserPrincipal | None = Depends(optional_user)) -> UserPrincipal | None:
-    return user if user is not None and user.is_admin else None
+def optional_admin(
+    user: UserPrincipal | None = Depends(optional_user),
+    db: Session = Depends(get_db),
+) -> UserPrincipal | None:
+    # Management is always read-only. If a person previously held the legacy
+    # ADMIN role, Management membership still wins immediately.
+    if user is None or not user.is_admin or group_service.is_management(db, user.user_id):
+        return None
+    return user
 
 
-def require_admin(user: UserPrincipal = Depends(require_user)) -> UserPrincipal:
-    if not user.is_admin:
+def require_admin(
+    user: UserPrincipal = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> UserPrincipal:
+    if not user.is_admin or group_service.is_management(db, user.user_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator privileges are required.",

@@ -6,6 +6,7 @@ interface DayScheduleProps {
   day: DayView
   today: string
   isAdmin: boolean
+  readOnly?: boolean
   myBookingIds: Set<number>
   visibleSlots: SlotView[]
   filtered: boolean
@@ -22,6 +23,7 @@ export function DaySchedule({
   day,
   today,
   isAdmin,
+  readOnly = false,
   myBookingIds,
   visibleSlots,
   filtered,
@@ -152,6 +154,7 @@ export function DaySchedule({
               isHistorical={isHistorical}
               isMine={slot.booking ? myBookingIds.has(slot.booking.id) : false}
               isAdmin={isAdmin}
+              readOnly={readOnly}
               onBook={onBook}
               onOpenBooking={onOpenBooking}
               onToggleFreeze={onToggleFreeze}

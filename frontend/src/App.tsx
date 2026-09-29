@@ -89,6 +89,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const toast = useToast()
   const user = auth.user!
   const isMemberPool = user.groups?.some((group) => group.group_type === 'MEMBER_POOL') ?? false
+  const isManagement = auth.isManagement
 
   const [anchor, setAnchor] = useState(() => auth.isAdmin ? weekStart(toIsoDate(new Date())) : '')
   const { schedule, loading, error, refresh } = useSchedule(anchor)
@@ -204,6 +205,10 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }, [refresh, detailBooking])
 
   function startBooking(day: DayView, slot: SlotView) {
+    if (isManagement) {
+      toast.locked('Management access is read-only', 'Management users can search schedules and use Central Audit, but cannot create or modify PDS records.')
+      return
+    }
     if (!schedule || day.is_past || day.day <= schedule.today) {
       toast.locked('Date is read-only', 'Past and current deployment dates cannot be booked or modified by any user, including the Owner or Release Managers.')
       return
@@ -273,6 +278,10 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }
 
   function startEdit(booking: BookingDetail) {
+    if (isManagement) {
+      toast.locked('Management access is read-only', 'Management users can search schedules and use Central Audit, but cannot modify PDS records.')
+      return
+    }
     if (!booking.can_edit) {
       toast.locked(
         'This booking is locked',
@@ -335,6 +344,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         username={user.username}
         isAdmin={auth.isAdmin}
         isOwner={user.is_owner === true}
+        isManagement={isManagement}
         onProfile={() => setProfileOpen(true)}
         onAdminPanel={() => setAdminPanelOpen(true)}
         onLogout={() => void auth.signOut()}
@@ -353,7 +363,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
 
       {!pageOpen && <ScheduleSearch onOpen={openBooking} />}
       {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact the Release Management team to be added to the appropriate tenant group.</p><a href={DASHBOARD_HASH} className="btn-primary mt-5">Back to schedule</a></main>)}
-      {globalAuditOpen && (auth.isAdmin ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to the Owner and Release Managers.</p><a href={DASHBOARD_HASH} className="btn-primary mt-5">Back to schedule</a></main>)}
+      {globalAuditOpen && ((auth.isAdmin || isManagement) ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to Release Management and Management users.</p><a href={DASHBOARD_HASH} className="btn-primary mt-5">Back to schedule</a></main>)}
       {scheduleAuditOpen ? <ScheduleAuditPage booking={detailBooking} loading={detailLoading} timezone={timezone} onClose={closeDetails} /> : null}
       {!pageOpen && <main className="mx-auto w-full max-w-[88rem] flex-1 space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {cloneSource && <div className="card flex flex-wrap items-center gap-3 border-blue-200 bg-blue-50 p-4">
@@ -408,6 +418,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           schedule={schedule}
           loading={loading}
           isAdmin={auth.isAdmin}
+          readOnly={isManagement}
           myBookingIds={myBookingIds}
           query={query}
           filter={filter}
@@ -446,7 +457,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         isAdmin={auth.isAdmin}
         userId={user.id}
         timezone={timezone}
-        onClone={(source) => {
+        readOnly={isManagement}
+        onClone={isManagement ? undefined : (source) => {
           startClone(source)
           closeDetails()
         }}

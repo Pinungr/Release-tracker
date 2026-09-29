@@ -19,6 +19,7 @@ interface DeploymentSlotProps {
   slot: SlotView
   isMine: boolean
   isAdmin: boolean
+  readOnly?: boolean
   isHistorical: boolean
   onBook: (day: DayView, slot: SlotView) => void
   onOpenBooking: (bookingId: number, bookingReference?: string) => void
@@ -57,6 +58,7 @@ export function DeploymentSlot({
   slot,
   isMine,
   isAdmin,
+  readOnly = false,
   isHistorical,
   onBook,
   onOpenBooking,
@@ -64,7 +66,7 @@ export function DeploymentSlot({
 }: DeploymentSlotProps) {
   const booking = slot.booking
   // Normal board availability comes from the backend and is the same for Admin and users.
-  const canBook = booking === null && !isHistorical && slot.bookable
+  const canBook = booking === null && !readOnly && !isHistorical && slot.bookable
 
   return (
     <div
@@ -215,6 +217,8 @@ export function DeploymentSlot({
                 <Plus className="size-3.5" />
                 Book slot
               </button>
+            ) : readOnly && !isHistorical && slot.bookable ? (
+              <span className="badge bg-canvas text-ink-muted ring-1 ring-line">Read only</span>
             ) : (
               <span className="tooltip-host">
                 <span className="btn-secondary btn-sm cursor-not-allowed opacity-60">

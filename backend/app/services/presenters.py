@@ -99,13 +99,19 @@ def booking_detail(
     collaborator = user_id is not None and booking_service.user_is_collaborator(db, booking, user_id)
     assigned = user_id is not None and booking_service.user_is_assigned(booking, user_id)
     account = db.get(User, user_id) if user_id is not None else None
+    is_management = (
+        account is not None
+        and account.is_active
+        and group_service.is_management(db, account.id)
+    )
     is_release_manager = (
         account is not None
         and account.is_active
         and not account.is_owner
+        and not is_management
         and group_service.is_release_manager(db, account.id)
     )
-    can_edit = mutable and (is_admin or ((owner or collaborator) and not booking.is_emergency))
+    can_edit = (not is_management) and mutable and (is_admin or ((owner or collaborator) and not booking.is_emergency))
     from ..models import BookingAudit
     from sqlalchemy import select
     import json
@@ -152,9 +158,9 @@ def booking_detail(
         can_edit=can_edit,
         can_cancel=can_edit and booking.status != BookingStatus.COMPLETED.value,
         can_reschedule=can_edit and booking.status != BookingStatus.COMPLETED.value,
-        can_assign_rm=mutable and is_admin and booking.status != BookingStatus.COMPLETED.value,
-        can_assign_self=mutable and is_release_manager and (not assigned or len(booking.assignments) > 1) and booking.status != BookingStatus.COMPLETED.value,
-        can_start_work=mutable and assigned and is_release_manager and booking.status in {BookingStatus.BOOKED.value, BookingStatus.IN_PROGRESS.value},
+        can_assign_rm=(not is_management) and mutable and is_admin and booking.status != BookingStatus.COMPLETED.value,
+        can_assign_self=(not is_management) and mutable and is_release_manager and (not assigned or len(booking.assignments) > 1) and booking.status != BookingStatus.COMPLETED.value,
+        can_start_work=(not is_management) and mutable and assigned and is_release_manager and booking.status in {BookingStatus.BOOKED.value, BookingStatus.IN_PROGRESS.value},
         # Every signed-in user can read any change record, documents included.
         can_download_attachments=True,
         can_manage_attachments=can_edit,

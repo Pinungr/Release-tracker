@@ -8,6 +8,7 @@ interface AppHeaderProps {
   username: string
   isAdmin: boolean
   isOwner: boolean
+  isManagement?: boolean
   onProfile: () => void
   onAdminPanel: () => void
   onLogout: () => void
@@ -20,6 +21,7 @@ export function AppHeader({
   username,
   isAdmin,
   isOwner,
+  isManagement = false,
   onProfile,
   onAdminPanel,
   onLogout,
@@ -58,6 +60,16 @@ export function AppHeader({
               <span className="hidden sm:inline">{username}</span>
               <span className="sm:hidden">Profile</span>
             </button>
+
+            {isManagement ? (
+              <>
+                <a href="#/audit" className="btn-secondary">Central Audit</a>
+                <span className="hidden items-center gap-1.5 rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs font-semibold text-violet-700 sm:inline-flex">
+                  <Shield className="size-4" />
+                  MANAGEMENT · READ ONLY
+                </span>
+              </>
+            ) : null}
 
             {isAdmin ? (
               <>

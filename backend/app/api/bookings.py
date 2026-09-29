@@ -53,18 +53,27 @@ def _assert_can_view(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
 
 
+def _assert_not_management(
+    db: Session,
+    admin: AdminPrincipal | None,
+    user: UserPrincipal | None,
+) -> None:
+    principal = admin or user
+    if principal is not None and group_service.is_management(db, principal.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
+
+
 def _owner_actor(
     db: Session,
     booking: DeploymentBooking,
     admin: AdminPrincipal | None,
     user: UserPrincipal | None,
 ) -> Actor:
+    _assert_not_management(db, admin, user)
     if admin is not None:
         return Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-    if group_service.is_management(db, user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
     if booking.created_by_user_id != user.user_id and not booking_service.user_is_collaborator(db, booking, user.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not authorized to modify this booking.")
     return Actor(is_admin=False, requester_email=user.email, user_id=user.user_id)
@@ -86,6 +95,7 @@ async def create_booking(
     the browser and posting JSON directly.
     """
     enforce(request, "create-booking", limit=20, window_seconds=300)
+    _assert_not_management(db, admin, user)
     if admin is not None:
         actor = Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
     elif user is not None:
@@ -335,10 +345,9 @@ def collaborator_candidates(
     user: UserPrincipal | None = Depends(current_user),
 ) -> list[dict]:
     # Only the booking creator or an administrator manages delegation.
+    _assert_not_management(db, admin, user)
     if admin is None and (user is None or booking.created_by_user_id != user.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the booking owner can manage collaborators.")
-    if admin is None and user is not None and group_service.is_management(db, user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
     allowed_ids = group_service.tenant_ids_for_user(db, user.user_id) if user is not None else {booking.tenant_id}
     if admin is None and booking.tenant_id not in allowed_ids:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are no longer a member of this tenant group.")
@@ -372,10 +381,9 @@ def replace_collaborators(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
+    _assert_not_management(db, admin, user)
     if admin is None and (user is None or booking.created_by_user_id != user.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the booking owner can manage collaborators.")
-    if admin is None and user is not None and group_service.is_management(db, user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
     actor_id = admin.user_id if admin is not None else user.user_id  # type: ignore[union-attr]
     raw = payload.get("user_ids", [])
     if not isinstance(raw, list):
@@ -414,6 +422,7 @@ def start_work(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
+    _assert_not_management(db, admin, user)
     if admin is not None:
         actor = Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
     elif user is not None:
@@ -431,8 +440,7 @@ def start_work(
 
 
 def _assert_may_write_discussion(db: Session, admin: AdminPrincipal | None, user: UserPrincipal | None) -> None:
-    if admin is None and user is not None and group_service.is_management(db, user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
+    _assert_not_management(db, admin, user)
 
 
 class CommentCreate(BaseModel):

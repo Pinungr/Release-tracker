@@ -24,12 +24,13 @@ def _actor(
     admin: AdminPrincipal | None,
     user: UserPrincipal | None,
 ) -> Actor:
+    principal = admin or user
+    if principal is not None and group_service.is_management(db, principal.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
     if admin is not None:
         return Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-    if group_service.is_management(db, user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
     if booking.created_by_user_id != user.user_id and not booking_service.user_is_collaborator(db, booking, user.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not authorized to modify these documents.")
     if booking.status == BookingStatus.CANCELLED.value:

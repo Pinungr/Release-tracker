@@ -21,6 +21,7 @@ interface ChangeDetailsPageProps {
   loading: boolean
   settings: PublicSettings
   isAdmin: boolean
+  readOnly?: boolean
   timezone: string
   userId: number | null
   onEdit: (booking: BookingDetail) => void
@@ -44,6 +45,7 @@ export function ChangeDetailsPage({
   loading,
   settings,
   isAdmin,
+  readOnly = false,
   timezone,
   userId,
   onEdit,
@@ -233,7 +235,9 @@ export function ChangeDetailsPage({
           booking ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-ink-muted">
-                {hasLockReason && !canAct
+                {readOnly
+                  ? 'Management access is read-only. Use search and Audit to review PDS activity.'
+                  : hasLockReason && !canAct
                   ? 'Past, current and protected deployment dates are read-only for everyone, including the Owner and Release Managers.'
                   : isAdmin
                     ? 'Owner/Release Manager: actions are available only on editable future records.'
@@ -246,13 +250,13 @@ export function ChangeDetailsPage({
               {/* Owner and Release Managers get Edit | Reschedule | Cancel according to
                   record/date permissions. Start-work requires an explicit Release Manager assignment. */}
               <div className="flex flex-wrap gap-2">
-                {onClone && <button type="button" className="btn-secondary" onClick={() => onClone(booking)}>Clone schedule</button>}
+                {!readOnly && onClone && <button type="button" className="btn-secondary" onClick={() => onClone(booking)}>Clone schedule</button>}
                 <button type="button" className="btn-secondary" onClick={() => {
                   if (!navigator.clipboard) { toast.error('Copy unavailable', 'Select and copy the Schedule No. shown above.'); return }
                   void navigator.clipboard.writeText(booking.booking_reference).then(() => toast.success('Schedule No. copied')).catch(() => toast.error('Could not copy', 'Select and copy the Schedule No. shown above.'))
                 }}>Copy Schedule No.</button>
-                {ownsBooking && !booking.is_emergency ? <button type="button" className="btn-secondary" onClick={() => { setCollaboratorSelection(booking.collaborators.map((u) => u.user_id)); setCollaboratorOpen(true) }}>Collaborators</button> : null}
-                {canAct ? (
+                {!readOnly && ownsBooking && !booking.is_emergency ? <button type="button" className="btn-secondary" onClick={() => { setCollaboratorSelection(booking.collaborators.map((u) => u.user_id)); setCollaboratorOpen(true) }}>Collaborators</button> : null}
+                {!readOnly && canAct ? (
                   <>
                     <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
                       <Pencil className="size-4" />
@@ -439,7 +443,12 @@ export function ChangeDetailsPage({
                 onUpdated={() => onChanged()}
               />
             </section>
-            <div className="lg:col-span-2"><ChangeActivity key={booking.id} bookingId={booking.id} isAdmin={isAdmin} timezone={timezone} /></div>
+            <div className="lg:col-span-2">{readOnly ? (
+              <section className="card p-5">
+                <h3 className="text-sm font-semibold text-ink">Management read-only view</h3>
+                <p className="mt-1 text-sm text-ink-muted">Use schedule search and Audit to review activity. Comments and other schedule changes are disabled for Management users.</p>
+              </section>
+            ) : <ChangeActivity key={booking.id} bookingId={booking.id} isAdmin={isAdmin} timezone={timezone} />}</div>
           </div>
         )}
       </ChangePageShell>
