@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AdminGroupManager } from './components/AdminGroupManager'
 import { AuditPage } from './components/AuditPage'
-import { HistoryPage } from './components/HistoryPage'
 import { AdminPanel } from './components/AdminPanel'
 import { AppFooter } from './components/AppFooter'
 import { AppHeader } from './components/AppHeader'
@@ -9,6 +8,7 @@ import { ChangeDetailsPage } from './components/ChangeDetailsPage'
 import { ScheduleAuditPage } from './components/ScheduleAuditPage'
 import { BookingDrawer, type CreateTarget } from './components/BookingDrawer'
 import { Alert, Spinner } from './components/Icons'
+import { TenantUpcomingResults } from './components/TenantUpcomingResults'
 import { LandingBanner } from './components/LandingBanner'
 import { ProfileModal } from './components/ProfileModal'
 import { RequiredPasswordChangeScreen } from './components/RequiredPasswordChangeScreen'
@@ -23,7 +23,7 @@ import { useAuthSession } from './hooks/useAuthSession'
 import { useCloneMode } from './hooks/useCloneMode'
 import { useSchedule } from './hooks/useSchedule'
 import { api, ApiError } from './services/api'
-import type { BookingDetail, DayView, FilterKey, PublicSettings, SlotView } from './types'
+import type { BookingDetail, DayView, FilterKey, PublicSettings, SlotView, TenantOption, TenantUpcoming } from './types'
 import { addDays, toIsoDate, weekStart } from './utils/dates'
 
 /** Used only until the first schedule response arrives. */
@@ -85,6 +85,10 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const timezone = schedule?.timezone ?? 'Asia/Kolkata'
 
   const [query, setQuery] = useState('')
+  /** Chosen from the board search: shows this tenant's upcoming weeks instead of the calendar. */
+  const [tenantFocus, setTenantFocus] = useState<TenantOption | null>(null)
+  const [tenantUpcoming, setTenantUpcoming] = useState<TenantUpcoming | null>(null)
+  const [tenantError, setTenantError] = useState<string | null>(null)
   const [filter, setFilter] = useState<FilterKey>('ALL')
 
   const [createTarget, setCreateTarget] = useState<CreateTarget | null>(null)
@@ -123,7 +127,6 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const [route, setRoute] = useState(() => window.location.hash)
   const groupsOpen = /^#\/admin\/groups(?:\/|$)/.test(route)
   const globalAuditOpen = /^#\/audit\/?$/.test(route)
-  const historyOpen = /^#\/history\/?$/.test(route)
   const auditScheduleRoute = /^#\/audit\/([^/]+)\/?$/.exec(route)
   const legacyScheduleAuditRoute = /^#\/schedules\/([^/]+)\/audit\/?$/.exec(route)
   const scheduleRoute = /^#\/schedules\/([^/]+)\/?$/.exec(route)
@@ -136,7 +139,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const scheduleDetailOpen = Boolean(scheduleRoute)
   const legacyDetailRoute = /^#change\/(\d+)$/.exec(route)
   const detailOpen = scheduleDetailOpen || Boolean(legacyDetailRoute)
-  const pageOpen = groupsOpen || globalAuditOpen || historyOpen || detailOpen || scheduleAuditOpen || Boolean(legacyScheduleAuditRoute)
+  const pageOpen = groupsOpen || globalAuditOpen || detailOpen || scheduleAuditOpen || Boolean(legacyScheduleAuditRoute)
   const closeDetails = useCallback(() => { window.location.hash = '' }, [])
   const openBooking = useCallback((id: number, reference?: string) => {
     window.location.hash = reference ? `/schedules/${encodeURIComponent(reference)}` : `change/${id}`
@@ -275,6 +278,28 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
     setBookingDrawerOpen(true)
   }
 
+  // Reload the tenant's weeks when it changes and after any board refresh, so a
+  // booking made or moved elsewhere shows up without leaving this view.
+  useEffect(() => {
+    if (!tenantFocus) return
+    let active = true
+    setTenantError(null)
+    api.getTenantUpcoming(tenantFocus.id)
+      .then((result) => { if (active) setTenantUpcoming(result) })
+      .catch((caught) => {
+        if (active) setTenantError(caught instanceof ApiError ? caught.message : 'Could not load upcoming schedules.')
+      })
+    return () => { active = false }
+  }, [tenantFocus, schedule])
+
+  function leaveTenantView() {
+    if (!tenantFocus) return
+    setTenantFocus(null)
+    setTenantUpcoming(null)
+    setTenantError(null)
+    setQuery('')
+  }
+
   const visibleCount = useMemo(() => {
     if (!schedule || (!query.trim() && filter === 'ALL')) return null
     return schedule.days.reduce(
@@ -303,15 +328,14 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
             label={schedule?.week_label ?? '—'}
             loading={loading}
             isCurrentWeek={(schedule?.week_start ?? anchor) === weekStart(toIsoDate(new Date()))}
-            onPrevious={() => setAnchor(addDays(schedule?.week_start || anchor, -7))}
-            onNext={() => setAnchor(addDays(schedule?.week_start || anchor, 7))}
+            onPrevious={() => { leaveTenantView(); setAnchor(addDays(schedule?.week_start || anchor, -7)) }}
+            onNext={() => { leaveTenantView(); setAnchor(addDays(schedule?.week_start || anchor, 7)) }}
             onToday={() => setAnchor(weekStart(toIsoDate(new Date())))}
           />
         )}
       />
 
       {!pageOpen && <ScheduleSearch onOpen={openBooking} />}
-      {historyOpen ? <HistoryPage onOpen={openBooking} /> : null}
       {groupsOpen && (auth.isAdmin ? <AdminGroupManager isOwner={user.is_owner === true} route={route} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Group management is restricted</h1><p className="mt-2 text-sm text-ink-muted">Contact the Release Management team to be added to the appropriate tenant group.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
       {globalAuditOpen && (auth.isAdmin ? <AuditPage timezone={timezone} /> : <main className="mx-auto my-10 max-w-lg card p-8 text-center"><h1 className="text-xl font-semibold">Audit access is restricted</h1><p className="mt-2 text-sm text-ink-muted">The global audit trail is available to the Owner and Release Managers.</p><a href="#" className="btn-primary mt-5">Back to schedule</a></main>)}
       {scheduleAuditOpen ? <ScheduleAuditPage booking={detailBooking} loading={detailLoading} timezone={timezone} onClose={closeDetails} /> : null}
@@ -342,15 +366,29 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
 
         <ScheduleFilters
           query={query}
-          onQueryChange={setQuery}
+          onQueryChange={(next) => { setQuery(next); if (tenantFocus) setTenantFocus(null) }}
           filter={filter}
           onFilterChange={setFilter}
           technologies={settings.technologies}
           isAdmin={auth.isAdmin}
           resultCount={visibleCount}
+          onPickTenant={(tenant) => { setTenantFocus(tenant); setQuery(tenant.name) }}
+          tenantMode={tenantFocus !== null}
         />
 
-        <WeeklySchedule
+        {tenantFocus ? (
+          <section className="card p-4 sm:p-5" aria-label={`${tenantFocus.name} upcoming schedules`}>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-ink-muted">Only weeks with {tenantFocus.name}'s schedules are shown.</p>
+              <button type="button" className="btn-secondary btn-sm" onClick={leaveTenantView}>Back to calendar</button>
+            </div>
+            {tenantError ? <p role="alert" className="text-sm text-rose-600">{tenantError}</p> : null}
+            {!tenantUpcoming && !tenantError ? (
+              <p className="flex items-center gap-2 text-sm text-ink-muted"><Spinner className="size-4" /> Finding {tenantFocus.name}'s upcoming schedules…</p>
+            ) : null}
+            {tenantUpcoming ? <TenantUpcomingResults result={tenantUpcoming} onOpen={openBooking} /> : null}
+          </section>
+        ) : <WeeklySchedule
           schedule={schedule}
           loading={loading}
           isAdmin={auth.isAdmin}
@@ -362,7 +400,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onOpenBooking={openBooking}
           onToggleFreeze={(day, slot) => void toggleSlotFreeze(day, slot)}
           onAdjustCapacity={(day, delta) => void adjustDayCapacity(day, delta)}
-        />
+        />}
 
       </main>}
 

@@ -274,9 +274,10 @@ export const api = {
     request<TenantOption[]>(`/tenants/lookup?q=${encodeURIComponent(q)}`),
   getTenantUpcoming: (tenantId: number) =>
     request<TenantUpcoming>(`/bookings/upcoming?tenant_id=${tenantId}`),
-  getScheduleHistory: (filters: { tenantId?: number | null; window?: DateWindowValue; before?: { date: string; id: number }; limit?: number } = {}) => {
+  getScheduleHistory: (filters: { tenantId?: number | null; q?: string; window?: DateWindowValue; before?: { date: string; id: number }; limit?: number } = {}) => {
     const params = new URLSearchParams()
     if (filters.tenantId) params.set('tenant_id', String(filters.tenantId))
+    if (filters.q?.trim()) params.set('q', filters.q.trim())
     appendWindow(params, filters.window)
     if (filters.before) {
       params.set('before_date', filters.before.date)

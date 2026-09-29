@@ -196,21 +196,26 @@ def schedule_history(
     *,
     tenant_id: int | None,
     window: DateWindow,
+    reference: str | None = None,
     before: tuple[date, int] | None,
     limit: int,
 ) -> list[ScheduleListItem]:
     """Schedules of every status, newest deployment date first.
 
-    Without any date filter the history is the past: deployment dates up to
-    today. An explicit From/To range is honoured exactly, even into the future.
+    Without any date filter a tenant's history is the past: deployment dates up
+    to today. A Schedule No. search without dates covers every date, like the
+    plain number search. An explicit From/To range is honoured exactly, even
+    into the future.
     Paging is keyset on (deployment_date, id), matching the sort, so deep pages
     stay as cheap as the first.
     """
     stmt = select(DeploymentBooking)
     if tenant_id is not None:
         stmt = stmt.where(DeploymentBooking.tenant_id == tenant_id)
+    if reference:
+        stmt = stmt.where(DeploymentBooking.booking_reference.icontains(reference, autoescape=True))
     start, end = window.start, window.end
-    if start is None and end is None:
+    if start is None and end is None and not reference:
         end = today_local()
     if start is not None:
         stmt = stmt.where(DeploymentBooking.deployment_date >= start)

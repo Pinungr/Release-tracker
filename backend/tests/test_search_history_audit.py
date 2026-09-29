@@ -271,3 +271,15 @@ def test_audit_filters_do_not_open_the_audit_to_tenants(user, anon, ncap):
     for params in ({}, {"tenant_id": ncap}, {"days": 30}, {"date_from": "2026-09-01"}):
         assert user.get("/api/admin/audit", params=params).status_code == 403
         assert anon.get("/api/admin/audit", params=params).status_code == 401
+
+
+def test_history_schedule_number_search_combines_with_dates(db, user, ncap, abc):
+    today = today_local()
+    past = insert(db, ncap, "NCAP", today - timedelta(days=10), 1, status="COMPLETED")
+    future = insert(db, abc, "ABC", today + timedelta(days=20), 1)
+    # A number search without dates covers every date, past and future.
+    assert set(hist(user, q=past.booking_reference[:2])) >= {past.booking_reference, future.booking_reference}
+    assert hist(user, q=future.booking_reference) == [future.booking_reference]
+    # With a Days range it is narrowed to that period.
+    assert hist(user, q=future.booking_reference, days=30) == []
+    assert hist(user, q=past.booking_reference, days=30) == [past.booking_reference]

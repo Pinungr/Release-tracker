@@ -197,6 +197,7 @@ def tenant_upcoming_schedules(
 @router.get("/history", response_model=list[ScheduleListItem])
 def schedule_history(
     tenant_id: int | None = Query(default=None, ge=1),
+    q: str | None = Query(default=None, max_length=100),
     days: int | None = Query(default=None, ge=1, le=search_service.MAX_DAYS),
     date_from: date | None = None,
     date_to: date | None = None,
@@ -217,6 +218,7 @@ def schedule_history(
         db,
         tenant_id=tenant_id,
         window=search_service.date_window(days, date_from, date_to),
+        reference=(q or "").strip() or None,
         before=(before_date, before_id) if before_date is not None else None,
         limit=limit,
     )
