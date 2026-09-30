@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..models import AccessGroup, GroupMembership, GroupType, Tenant, User
+from . import audit_service
 
 SYSTEM_GROUPS = {
     GroupType.MEMBER_POOL.value: "Member Pool",
@@ -157,6 +158,7 @@ def reconcile_member_pool(db: Session, user_id: int, *, added_by_user_id: int | 
 
 
 def add_membership(db: Session, group: AccessGroup, user: User, *, actor_user_id: int | None = None) -> None:
+    old_role = user.role
     existing = db.scalars(select(GroupMembership).where(
         GroupMembership.group_id == group.id,
         GroupMembership.user_id == user.id,
@@ -168,9 +170,11 @@ def add_membership(db: Session, group: AccessGroup, user: User, *, actor_user_id
     # Keep the legacy role synchronized until all old role checks are removed.
     if group.group_type == GroupType.RELEASE_MANAGERS.value and not user.is_owner:
         user.role = "ADMIN"
+    _audit_role_change(db, user, old_role, actor_user_id)
 
 
 def remove_membership(db: Session, group: AccessGroup, user: User, *, actor_user_id: int | None = None) -> None:
+    old_role = user.role
     db.execute(delete(GroupMembership).where(
         GroupMembership.group_id == group.id,
         GroupMembership.user_id == user.id,
@@ -179,6 +183,23 @@ def remove_membership(db: Session, group: AccessGroup, user: User, *, actor_user
         user.role = "TENANT_USER"
     db.flush()
     reconcile_member_pool(db, user.id, added_by_user_id=actor_user_id)
+    _audit_role_change(db, user, old_role, actor_user_id)
+
+
+def _audit_role_change(db: Session, user: User, old_role: str, actor_user_id: int | None) -> None:
+    """Keep privilege changes auditable through both membership and legacy APIs."""
+    if user.role == old_role or actor_user_id is None:
+        return
+    actor = db.get(User, actor_user_id)
+    audit_service.record(
+        db,
+        event_type="USER_ROLE_UPDATED",
+        actor_type="ADMIN",
+        admin_username=actor.username if actor else None,
+        requester_email=user.email,
+        old_values={"role": old_role},
+        new_values={"role": user.role},
+    )
 
 
 def user_groups(db: Session, user_id: int) -> list[AccessGroup]:

@@ -8,6 +8,7 @@ vi.mock('../services/api', () => ({
   api: {
     searchSchedules: vi.fn(),
     getScheduleHistory: vi.fn(),
+    getTenantUpcoming: vi.fn(),
     lookupTenants: vi.fn(),
   },
   ApiError: class extends Error {},
@@ -23,6 +24,7 @@ const historyRow = {
 beforeEach(() => {
   vi.mocked(api.searchSchedules).mockResolvedValue([{ id: 4, booking_reference: 'pds-001', tenant_name: 'Tenant', deployment_date: '2026-01-01', status: 'COMPLETED', change_number: 'CHG-1' }] as never)
   vi.mocked(api.getScheduleHistory).mockResolvedValue([historyRow] as never)
+  vi.mocked(api.getTenantUpcoming).mockResolvedValue({ tenant_id: NCAP.id, tenant_name: NCAP.name, weeks: [], truncated: false })
   vi.mocked(api.lookupTenants).mockResolvedValue([NCAP])
 })
 afterEach(() => { cleanup(); vi.clearAllMocks() })
@@ -55,14 +57,14 @@ it('searches a tenant\'s history with a Days range from the same box', async () 
   expect(screen.getByRole('button', { name: /PDS-009/ })).toBeTruthy()
 })
 
-it('treats a tenant\'s exact name as choosing it', async () => {
+it('shows upcoming schedules when an exact tenant name is entered without dates', async () => {
   render(<ScheduleSearch onOpen={vi.fn()} />)
   fireEvent.change(box(), { target: { value: 'ncap' } })
   await waitFor(() => expect(api.lookupTenants).toHaveBeenCalledWith('ncap'))
   await new Promise((r) => setTimeout(r, 250))
   fireEvent.click(screen.getByRole('button', { name: 'Find schedule' }))
-  await waitFor(() => expect(api.getScheduleHistory).toHaveBeenCalled())
-  expect(vi.mocked(api.getScheduleHistory).mock.calls[0][0]).toMatchObject({ tenantId: 7 })
+  await waitFor(() => expect(api.getTenantUpcoming).toHaveBeenCalledWith(7))
+  expect(api.getScheduleHistory).not.toHaveBeenCalled()
   expect(api.searchSchedules).not.toHaveBeenCalled()
 })
 

@@ -6,18 +6,15 @@ from conftest import booking_payload, create_booking, promote_to_release_manager
 from app.models import DeploymentBooking
 
 
-def test_completion_requires_start_then_blocks_every_move(admin, user, other_user, tenant, next_monday):
+def test_admin_can_close_open_work_then_every_move_is_blocked(admin, user, other_user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
     bid = booking['id']
     rm_id = promote_to_release_manager(admin, other_user)
     assert admin.post(f'/api/admin/bookings/{bid}/assign-users', json={'user_ids': [rm_id]}).status_code == 200
-    for client in (admin, other_user):
-        denied = client.post(f'/api/admin/bookings/{bid}/status', json={'status': 'COMPLETED', 'override_reason': 'Cannot bypass start'})
-        assert denied.status_code == 400
-        assert 'Start the task' in denied.json()['detail']
-    assert other_user.post(f'/api/bookings/{bid}/start-work', json={'change_number': 'CHG-123'}).status_code == 200
     done = other_user.post(f'/api/admin/bookings/{bid}/status', json={'status': 'COMPLETED'})
     assert done.status_code == 200, done.text
+    assert done.json()['change_number'] is None
+    assert done.json()['work_started_at'] is None
     for client in (admin, user, other_user):
         detail = client.get(f'/api/bookings/{bid}').json()
         assert not detail['can_reschedule']
@@ -33,7 +30,7 @@ def test_completion_requires_start_then_blocks_every_move(admin, user, other_use
 
 
 @pytest.mark.parametrize('missing', ['change_number', 'work_started_at'])
-def test_incomplete_start_cannot_be_completed(admin, user, tenant, next_monday, db, missing):
+def test_admin_can_close_work_with_incomplete_start_details(admin, user, tenant, next_monday, db, missing):
     booking = create_booking(user, tenant, next_monday, 1)
     row = db.get(DeploymentBooking, booking['id'])
     row.status = 'IN_PROGRESS'
@@ -42,7 +39,9 @@ def test_incomplete_start_cannot_be_completed(admin, user, tenant, next_monday, 
     row.work_started_at = now_utc()
     setattr(row, missing, None)
     db.commit()
-    assert admin.post(f"/api/admin/bookings/{row.id}/status", json={'status': 'COMPLETED'}).status_code == 400
+    result = admin.post(f"/api/admin/bookings/{row.id}/status", json={'status': 'COMPLETED'})
+    assert result.status_code == 200, result.text
+    assert result.json()['status'] == 'COMPLETED'
 
 
 def _landing(client) -> dict:

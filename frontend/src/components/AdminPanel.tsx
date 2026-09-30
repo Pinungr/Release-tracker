@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '../services/api'
 import type {
   AdminSettings,
-  DocumentTypeConfig,
   Holiday,
   SlotConfig,
 } from '../types'
@@ -10,7 +9,8 @@ import { formatDate, formatSlotTime } from '../utils/dates'
 import { AdminTenantManager } from './AdminTenantManager'
 import { AdminUserManager } from './AdminUserManager'
 import { Drawer } from './Drawer'
-import { Calendar, Check, ChevronLeft, ChevronRight, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
+import { DocumentSettings } from './DocumentSettings'
+import { Calendar, Document, ChevronRight, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
 import { ConfirmationModal } from './Modal'
 import { useToast } from './ToastNotification'
@@ -29,7 +29,7 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'general', label: 'General', icon: <Settings className="size-4" /> },
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
-  { key: 'documents', label: 'Document uploads', icon: <Check className="size-4" /> },
+  { key: 'documents', label: 'Document uploads', icon: <Document className="size-4" /> },
 ]
 
 interface AdminPanelProps {
@@ -53,18 +53,20 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
       eyebrow={<span className="badge bg-brand-50 text-brand-700">{isOwner ? 'Owner' : 'Release Manager'}</span>}
       subtitle="Configuration applies immediately to the weekly board."
     >
-      <nav className="-mx-1 mb-5 flex gap-1 overflow-x-auto px-1 pb-1" aria-label="Release control sections">
-        <a href="#/admin/groups" onClick={onClose} className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-brand-600 hover:bg-brand-50"><Shield className="size-4" />Groups<ChevronRight className="size-3" /></a>
-        <a href="#/audit" onClick={onClose} className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-brand-600 hover:bg-brand-50"><History className="size-4" />Audit<ChevronRight className="size-3" /></a>
+      <div className="mb-3 flex justify-end gap-1">
+        <a href="#/admin/groups" onClick={onClose} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-ink-muted hover:bg-brand-50 hover:text-brand-700"><Shield className="size-3.5" />Groups<ChevronRight className="size-3" /></a>
+        <a href="#/audit" onClick={onClose} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-ink-muted hover:bg-brand-50 hover:text-brand-700"><History className="size-3.5" />Audit<ChevronRight className="size-3" /></a>
+      </div>
+      <nav className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-slate-100/80 p-1.5 sm:grid-cols-3" aria-label="Release control sections">
         {TABS.map((entry) => (
           <button
             key={entry.key}
             type="button"
             onClick={() => setTab(entry.key)}
             aria-current={tab === entry.key}
-            className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+            className={`flex min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors sm:text-sm ${
               tab === entry.key
-                ? 'bg-brand-600 text-white'
+                ? 'bg-white text-brand-700 shadow-sm ring-1 ring-slate-200/70'
                 : 'text-ink-muted hover:bg-canvas hover:text-ink'
             }`}
           >
@@ -205,7 +207,7 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             max={25}
             value={String(data.booking_freeze_dates)}
             onChange={(v) => setData({ ...data, booking_freeze_dates: Math.max(0, Number(v) || 0) })}
-            hint="Today and the configured upcoming valid deployment dates are frozen for everyone, including the Owner and Release Managers. Friday/Saturday and full-day holidays are skipped when counting."
+            hint="Scheduling on past dates and today stays protected. Today and the previous seven days can be unlocked for extra uploads; admins can close active records or reopen closed schedules at any age. Upcoming valid deployment dates are locked until explicitly unlocked. Friday/Saturday and full-day holidays are skipped when counting."
           />
           <TextField
             label="Maximum file size (MB)"
@@ -546,164 +548,6 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
         cancelLabel="Keep holiday"
         busy={busy}
       />
-    </SectionShell>
-  )
-}
-
-/* ---------------------- Document upload configuration ---------------------- */
-
-function DocumentSettings({ onChanged }: { onChanged: () => void }) {
-  const toast = useToast()
-  const { data, setData, error } = useAsyncSection(() => api.getDocumentTypes())
-  const [busyId, setBusyId] = useState<number | 'new' | null>(null)
-  const [names, setNames] = useState<Record<number, string>>({})
-  const [draft, setDraft] = useState({ label: '', description: '', is_required: false, allow_multiple: false })
-
-  async function run(id: number | 'new', action: () => Promise<DocumentTypeConfig[]>, message: string) {
-    setBusyId(id)
-    try {
-      setData(await action())
-      onChanged()
-      toast.success(message)
-      return true
-    } catch (caught) {
-      toast.error('Could not save', caught instanceof ApiError ? caught.message : '')
-      return false
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  function move(index: number, offset: number) {
-    if (!data) return
-    const ids = data.map((t) => t.id)
-    const [moved] = ids.splice(index, 1)
-    ids.splice(index + offset, 0, moved)
-    void run(moved, () => api.reorderDocumentTypes(ids), 'Document order updated.')
-  }
-
-  return (
-    <SectionShell
-      title="Document upload configuration"
-      description="Choose the documents offered when scheduling. Required types must be uploaded before a slot can be booked and must always keep at least one file. Disabling a type hides it from new uploads; files already uploaded stay available. Switching a type to Single file applies to new uploads only; schedules keep the files they already have."
-      error={error}
-      loading={!data}
-    >
-      {data ? (
-        <div className="space-y-3">
-          <ol className="space-y-2">
-            {data.map((type, index) => {
-              const busy = busyId === type.id
-              const name = names[type.id] ?? type.label
-              return (
-                <li key={type.id} className={`rounded-lg border p-3 ${type.is_active ? 'border-line bg-surface' : 'border-dashed border-line bg-canvas'}`}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="flex flex-col">
-                      <button type="button" className="btn-ghost btn-sm px-1 disabled:opacity-30" aria-label={`Move ${type.label} up`} disabled={index === 0 || busy} onClick={() => move(index, -1)}>
-                        <ChevronLeft className="size-3.5 rotate-90" />
-                      </button>
-                      <button type="button" className="btn-ghost btn-sm px-1 disabled:opacity-30" aria-label={`Move ${type.label} down`} disabled={index === data.length - 1 || busy} onClick={() => move(index, 1)}>
-                        <ChevronRight className="size-3.5 rotate-90" />
-                      </button>
-                    </div>
-                    <input
-                      className="field min-w-48 flex-1"
-                      aria-label={`Name of ${type.label}`}
-                      value={name}
-                      maxLength={120}
-                      onChange={(event) => setNames({ ...names, [type.id]: event.target.value })}
-                    />
-                    {name.trim() && name.trim() !== type.label ? (
-                      <button
-                        type="button"
-                        className="btn-secondary btn-sm"
-                        disabled={busy}
-                        onClick={() => void run(type.id, () => api.updateDocumentType(type.id, { label: name.trim() }), 'Document type renamed.').then((ok) => {
-                          if (ok) setNames(({ [type.id]: _, ...rest }) => rest)
-                        })}
-                      >
-                        Rename
-                      </button>
-                    ) : null}
-                    {busy ? <Spinner className="size-4" /> : null}
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span className="badge bg-canvas tnum text-ink-muted ring-1 ring-line">{type.key}</span>
-                    <select
-                      className="field w-auto py-1 text-xs"
-                      aria-label={`${type.label} requirement`}
-                      value={type.is_required ? 'required' : 'optional'}
-                      disabled={busy}
-                      onChange={(event) => void run(type.id, () => api.updateDocumentType(type.id, { is_required: event.target.value === 'required' }), 'Requirement updated.')}
-                    >
-                      <option value="required">Required</option>
-                      <option value="optional">Optional</option>
-                    </select>
-                    <select
-                      className="field w-auto py-1 text-xs"
-                      aria-label={`${type.label} file mode`}
-                      value={type.allow_multiple ? 'multiple' : 'single'}
-                      disabled={busy}
-                      onChange={(event) => void run(type.id, () => api.updateDocumentType(type.id, { allow_multiple: event.target.value === 'multiple' }), 'File mode updated.')}
-                    >
-                      <option value="single">Single file</option>
-                      <option value="multiple">Multiple files</option>
-                    </select>
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm"
-                      disabled={busy}
-                      onClick={() => void run(type.id, () => api.updateDocumentType(type.id, { is_active: !type.is_active }), type.is_active ? 'Document type disabled.' : 'Document type enabled.')}
-                    >
-                      {type.is_active ? 'Disable' : 'Enable'}
-                    </button>
-                    <span className="text-ink-muted">{type.file_count} uploaded file{type.file_count === 1 ? '' : 's'}</span>
-                    {!type.is_active ? <span className="badge bg-slate-100 text-slate-500">Disabled</span> : null}
-                    {!type.allow_multiple && (type.multi_file_schedules ?? 0) > 0 ? (
-                      <span className="basis-full text-amber-800">
-                        {type.multi_file_schedules} schedule{type.multi_file_schedules === 1 ? '' : 's'} kept the several files uploaded
-                        before this type became Single file. Their next upload replaces those files with one.
-                      </span>
-                    ) : null}
-                    {type.file_count === 0 ? (
-                      <button
-                        type="button"
-                        className="btn-ghost btn-sm ml-auto text-rose-600 hover:bg-rose-50"
-                        disabled={busy}
-                        aria-label={`Delete ${type.label}`}
-                        onClick={() => void run(type.id, () => api.deleteDocumentType(type.id), 'Document type deleted.')}
-                      >
-                        <Trash className="size-3.5" />
-                      </button>
-                    ) : null}
-                  </div>
-                </li>
-              )
-            })}
-          </ol>
-
-          <div className="rounded-lg border border-line p-3">
-            <p className="text-sm font-semibold text-ink">Add a document type</p>
-            <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <TextField label="Name" name="new-document-type" value={draft.label} onChange={(v) => setDraft({ ...draft, label: v })} maxLength={120} />
-              <TextField label="Description" name="new-document-description" value={draft.description} onChange={(v) => setDraft({ ...draft, description: v })} hint="Optional guidance shown to schedulers." maxLength={1000} />
-              <CheckboxField label="Required" name="new-document-required" checked={draft.is_required} onChange={(v) => setDraft({ ...draft, is_required: v })} />
-              <CheckboxField label="Allow multiple files" name="new-document-multiple" checked={draft.allow_multiple} onChange={(v) => setDraft({ ...draft, allow_multiple: v })} />
-            </div>
-            <button
-              type="button"
-              className="btn-primary mt-3"
-              disabled={busyId === 'new' || !draft.label.trim()}
-              onClick={() => void run('new', () => api.createDocumentType({ ...draft, label: draft.label.trim(), description: draft.description.trim() || null }), 'Document type added.').then((ok) => {
-                if (ok) setDraft({ label: '', description: '', is_required: false, allow_multiple: false })
-              })}
-            >
-              {busyId === 'new' ? <Spinner className="size-4" /> : <Plus className="size-4" />}
-              Add document type
-            </button>
-          </div>
-        </div>
-      ) : null}
     </SectionShell>
   )
 }

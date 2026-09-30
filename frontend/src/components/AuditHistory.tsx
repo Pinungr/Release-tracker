@@ -28,6 +28,7 @@ const EVENT_LABELS: Record<string, string> = {
   BOOKING_CANCELLED: 'Schedule cancelled',
   BOOKING_DELETED: 'Schedule deleted',
   BOOKING_STATUS_CHANGED: 'Status changed',
+  BOOKING_REOPENED: 'Schedule reopened',
   RM_USERS_ASSIGNED: 'Release Manager assigned',
   WORK_STARTED: 'Work started',
   CHANGE_NUMBER_UPDATED: 'Change Number updated',
@@ -119,7 +120,7 @@ function eventSummary(event: AuditEvent): string | null {
   if (event.event_type === 'CHANGE_NUMBER_UPDATED') {
     return `${valueText(oldValues.change_number)} → ${valueText(newValues.change_number)}`
   }
-  if (event.event_type === 'BOOKING_STATUS_CHANGED' || event.event_type === 'BOOKING_CANCELLED') {
+  if (event.event_type === 'BOOKING_STATUS_CHANGED' || event.event_type === 'BOOKING_CANCELLED' || event.event_type === 'BOOKING_REOPENED') {
     return `${valueText(oldValues.status)} → ${valueText(newValues.status)}`
   }
   if (event.event_type === 'BOOKING_RESCHEDULED' || event.event_type === 'SLOT_CHANGED') {

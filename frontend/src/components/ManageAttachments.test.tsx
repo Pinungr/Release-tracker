@@ -99,6 +99,27 @@ describe('Manage Attachments', () => {
     expect(screen.queryByLabelText('Select all')).toBeNull()
     expect(screen.getByRole('button', { name: 'Download rollback.sql' })).toBeTruthy()
   })
+
+  it('appends uploads on unlocked protected records while hiding replace and delete', async () => {
+    const existing = [file(9, 'IMPLEMENTATION_PLAN', 'plan.docx'), ...scripts]
+    const detail = booking(existing, { can_manage_attachments: false, can_upload_attachments: true, attachments_add_only: true })
+    vi.mocked(api.uploadAttachments).mockResolvedValue(detail)
+    show(detail)
+    expect(screen.getByText(/Additional uploads are unlocked; existing files cannot be replaced or deleted/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Replace|Remove|Delete selected/ })).toBeNull()
+    expect(screen.queryByLabelText('Select all')).toBeNull()
+    expect(screen.queryByTestId('upload-IMPLEMENTATION_PLAN')).toBeNull()
+    const files = [new File(['extra'], 'additional.sql')]
+    fireEvent.change(screen.getByTestId('upload-DBA_SCRIPT'), { target: { files } })
+    await waitFor(() => expect(api.uploadAttachments).toHaveBeenCalledWith(7, 'DBA_SCRIPT', files))
+    expect(screen.getByRole('button', { name: 'Download plan.docx' })).toBeTruthy()
+  })
+
+  it('offers an initial single-file upload on a protected record without replacing existing files', () => {
+    show(booking(scripts, { can_manage_attachments: false, can_upload_attachments: true, attachments_add_only: true }))
+    expect(screen.getByTestId('upload-IMPLEMENTATION_PLAN')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Replace/ })).toBeNull()
+  })
 })
 
 describe('automatic lock controls', () => {
@@ -108,10 +129,10 @@ describe('automatic lock controls', () => {
     manually_frozen: false, automatic_lock: true, lock_override: null, booking: null, unavailable_reason: 'Locked',
   } as unknown as SlotView
 
-  function slotRow(props: { isAdmin: boolean; readOnly?: boolean; slot?: SlotView }) {
+  function slotRow(props: { isAdmin: boolean; readOnly?: boolean; slot?: SlotView; isHistorical?: boolean }) {
     const onToggleLock = vi.fn()
     render(<DeploymentSlot day={day} slot={props.slot ?? slot} isMine={false} isAdmin={props.isAdmin} readOnly={props.readOnly}
-      isHistorical={false} onBook={vi.fn()} onOpenBooking={vi.fn()} onToggleFreeze={vi.fn()} onToggleLock={onToggleLock} />)
+      isHistorical={props.isHistorical ?? false} onBook={vi.fn()} onOpenBooking={vi.fn()} onToggleFreeze={vi.fn()} onToggleLock={onToggleLock} />)
     return onToggleLock
   }
 
@@ -131,5 +152,15 @@ describe('automatic lock controls', () => {
 
     slotRow({ isAdmin: true, readOnly: true })
     expect(screen.queryByRole('button', { name: /Unlock|Restore lock/ })).toBeNull()
+  })
+
+  it('offers only upload unlocking on recent historical slots and no unlocking outside the window', () => {
+    const onToggleLock = slotRow({ isAdmin: true, isHistorical: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock uploads' }))
+    expect(onToggleLock).toHaveBeenCalledWith(day, slot)
+    expect(screen.queryByRole('button', { name: /^Book$|Freeze/ })).toBeNull()
+    cleanup()
+    slotRow({ isAdmin: true, isHistorical: true, slot: { ...slot, automatic_lock: false } })
+    expect(screen.queryByRole('button', { name: /Unlock/ })).toBeNull()
   })
 })

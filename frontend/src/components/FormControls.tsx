@@ -22,7 +22,7 @@ function Wrapper({
     <div className={className}>
       <label htmlFor={name} className="field-label">
         {label}
-        {required ? <span className="ml-0.5 text-rose-500">*</span> : null}
+        {required ? <span aria-hidden="true" className="ml-0.5 text-rose-500">*</span> : null}
       </label>
       {children}
       {error ? (
@@ -77,6 +77,7 @@ export function TextField({
         disabled={disabled}
         min={min}
         max={max}
+        aria-required={base.required || undefined}
         aria-invalid={base.error ? true : undefined}
         aria-describedby={base.error ? `${base.name}-error` : undefined}
         className={`field ${base.error ? 'field-error' : ''}`}
@@ -108,6 +109,7 @@ export function TextArea({
         name={base.name}
         value={value}
         rows={rows}
+        aria-required={base.required || undefined}
         placeholder={placeholder}
         maxLength={maxLength}
         onChange={(event) => onChange(event.target.value)}
@@ -135,6 +137,7 @@ export function SelectField({ value, onChange, options, disabled, placeholder, .
         name={base.name}
         value={value}
         disabled={disabled}
+        aria-required={base.required || undefined}
         onChange={(event) => onChange(event.target.value)}
         aria-invalid={base.error ? true : undefined}
         className={`field ${base.error ? 'field-error' : ''}`}

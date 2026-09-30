@@ -182,6 +182,16 @@ def booking_detail(
         # Every signed-in user can read any change record, documents included.
         can_download_attachments=True,
         can_manage_attachments=permissions.can_manage_attachments,
+        can_upload_attachments=(
+            user_id is not None and not is_management
+            and (is_admin or permissions.access is not None)
+            and booking_service.attachment_upload_restriction(
+                db, booking, booking_service.Actor(is_admin=is_admin, user_id=user_id), app_settings
+            ) is None
+        ),
+        attachments_add_only=booking_service.is_current_or_past_deployment(booking.deployment_date),
+        can_close=user_id is not None and not is_management and booking_service.can_close_booking(booking, is_admin=is_admin),
+        can_reopen=user_id is not None and not is_management and booking_service.can_reopen_booking(booking, is_admin=is_admin),
         slot_label=slot_label,
         slot_time=slot_time,
     )
@@ -263,8 +273,8 @@ def schedule_response(
         on_holiday = plan.holiday is not None and plan.holiday.is_full_day
         if plan.holiday is not None:
             holiday_count += 1
-        # Inside the automatic window and still unlockable (past/current never are).
-        automatic_lock = plan.day > today and plan.day in automatic_freezes
+        # Recent dates unlock uploads only; their scheduling availability stays closed.
+        automatic_lock = booking_service.is_followup_date(plan.day, today=today) or (plan.day > today and plan.day in automatic_freezes)
         date_unlocked = automatic_lock and (plan.day, None) in overrides
 
         for slot in plan.slots:

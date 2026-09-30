@@ -23,10 +23,17 @@ def _attachment_actor(
     booking: DeploymentBooking,
     admin: AdminPrincipal | None,
     user: UserPrincipal | None,
+    *,
+    upload: bool = False,
 ) -> Actor:
-    """Attachment management follows the schedule-edit rules exactly."""
+    """Uploads may use a recent follow-up unlock; deletion follows scheduling protection."""
     actor = booking_service.schedule_actor(db, booking, admin=admin, user=user)
-    booking_service.assert_booking_mutable(db, booking, actor)
+    if upload:
+        error = booking_service.attachment_upload_restriction(db, booking, actor)
+        if error is not None:
+            raise error
+    else:
+        booking_service.assert_booking_mutable(db, booking, actor)
     return actor
 
 
@@ -42,12 +49,14 @@ def upload_attachment(
     """Upload one file, or several for a Multiple Files document type.
 
     Repeat the ``file`` field to send several files in one request. For a
-    Single File type the upload replaces the file already attached.
+    Single File type the upload normally replaces the file already attached;
+    protected-date follow-up uploads may only fill a missing type or append to
+    a Multiple Files type.
     """
     try:
-        actor = _attachment_actor(db, booking, admin, user)
+        actor = _attachment_actor(db, booking, admin, user, upload=True)
         doc_type = document_type_service.uploadable(db, category)
-        attachment_service.save_uploads(db, booking, doc_type, file, actor)
+        attachment_service.save_uploads(db, booking, doc_type, file, actor, append_only=booking_service.is_current_or_past_deployment(booking.deployment_date))
     finally:
         for upload in file:
             upload.file.close()
@@ -91,7 +100,8 @@ def download_attachment(
 ) -> FileResponse:
     # Reading a change record includes its documents, and every change record
     # is readable by any signed-in user. Files of since-disabled document types
-    # stay downloadable. Uploading and removing follow the schedule-edit rules.
+    # stay downloadable. Recent unlocks permit append-only uploads; removal
+    # continues to follow scheduling protection.
     if admin is None and user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
     attachment = booking_service.attachment_of(booking, attachment_id)

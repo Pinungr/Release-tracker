@@ -16,6 +16,7 @@ const EVENT_TYPES = [
   ['BOOKING_CANCELLED', 'Schedule cancelled'],
   ['BOOKING_DELETED', 'Schedule deleted'],
   ['BOOKING_STATUS_CHANGED', 'Status changed'],
+  ['BOOKING_REOPENED', 'Schedule reopened'],
   ['RM_USERS_ASSIGNED', 'Release Manager assigned'],
   ['WORK_STARTED', 'Work started'],
   ['CHANGE_NUMBER_UPDATED', 'Change Number updated'],

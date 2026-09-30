@@ -56,6 +56,8 @@ export function DocumentUploader({
   const [deleting, setDeleting] = useState(false)
   const inputs = useRef<Partial<Record<DocumentCategory, HTMLInputElement | null>>>({})
   const canManage = !readOnly && booking.can_manage_attachments
+  const canUpload = !readOnly && (booking.can_upload_attachments ?? booking.can_manage_attachments)
+  const addOnly = booking.attachments_add_only === true
 
   const activeKeys = new Set(settings.document_catalog.map((entry) => entry.category))
   const retired = booking.attachments.filter((a) => !activeKeys.has(a.category))
@@ -176,9 +178,13 @@ export function DocumentUploader({
 
   return (
     <div className="space-y-2">
+      {addOnly ? <p className="rounded-lg border border-brand-100 bg-brand-50 p-3 text-xs leading-5 text-brand-700">
+        Scheduling remains protected. {canUpload ? 'Additional uploads are unlocked; existing files cannot be replaced or deleted.' : 'The Owner or a Release Manager can unlock additional uploads for today and the previous seven days.'}
+      </p> : null}
       {settings.document_catalog.map((entry) => {
         const files = booking.attachments.filter((a) => a.category === entry.category)
         const uploading = busy === entry.category
+        const uploadAllowed = canUpload && (!addOnly || entry.multiple || files.length === 0)
         const protectLast = entry.required && files.length === 1
         const selectable = canManage && entry.multiple && files.length > 1
         const chosen = files.filter((f) => selected.has(f.id))
@@ -202,7 +208,7 @@ export function DocumentUploader({
               )}
               <span className="text-xs text-ink-muted">{entry.multiple ? 'Multiple files' : 'Single file'}</span>
 
-              {canManage ? (
+              {uploadAllowed ? (
                 <>
                   <input
                     ref={(node) => {

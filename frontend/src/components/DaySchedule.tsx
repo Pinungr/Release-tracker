@@ -36,7 +36,7 @@ export function DaySchedule({
   onAdjustCapacity,
 }: DayScheduleProps) {
   // Treat the API's authoritative `today` value as a second guard. This keeps
-  // historical actions hidden even if an older/mixed response contains a stale
+  // historical scheduling actions hidden even if an older response has a stale
   // `is_past` flag. Backend mutation endpoints still enforce the same rule.
   const isHistorical = day.is_past || day.day <= today
 
@@ -85,15 +85,17 @@ export function DaySchedule({
           <span className="tooltip-host">
             {day.date_unlocked ? (
               <span className="badge bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
-                <Unlock className="size-3" /> Unlocked
+                <Unlock className="size-3" /> {isHistorical ? 'Uploads unlocked' : 'Unlocked'}
               </span>
             ) : (
               <span className="badge bg-slate-100 text-slate-600 ring-1 ring-slate-200">
-                <Lock className="size-3" /> Automatic lock
+                <Lock className="size-3" /> {isHistorical ? 'Uploads locked' : 'Automatic lock'}
               </span>
             )}
             <span className="tooltip">
-              {day.date_unlocked
+              {isHistorical
+                ? 'Only additional document uploads can be unlocked for today and the previous seven days. Scheduling remains closed.'
+                : day.date_unlocked
                 ? 'The Owner or a Release Manager lifted the automatic lock for this whole date. Manual slot freezes still apply.'
                 : 'Inside the automatic lock window. Only the Owner or a Release Manager can unlock it.'}
             </span>
@@ -104,15 +106,15 @@ export function DaySchedule({
           Slots used: <span className="text-ink">{usage}</span>
         </span>
 
-        {isAdmin && !readOnly && !isHistorical && day.automatic_lock && onToggleLock ? (
+        {isAdmin && !readOnly && day.automatic_lock && onToggleLock ? (
           <button
             type="button"
             className="btn-secondary btn-sm"
             onClick={() => onToggleLock(day, null)}
-            title={day.date_unlocked ? 'Return this date to the automatic lock' : 'Lift the automatic lock for every slot and the emergency queue on this date'}
+            title={isHistorical ? 'Control additional document uploads only; scheduling remains closed' : day.date_unlocked ? 'Return this date to the automatic lock' : 'Lift the automatic lock for every slot and the emergency queue on this date'}
           >
             {day.date_unlocked ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}
-            {day.date_unlocked ? 'Restore lock' : 'Unlock date'}
+            {day.date_unlocked ? 'Restore lock' : isHistorical ? 'Unlock uploads for date' : 'Unlock date'}
           </button>
         ) : null}
 
@@ -151,7 +153,7 @@ export function DaySchedule({
           <span className="text-sm text-amber-800">
             {isAdmin
               ? isHistorical
-                ? 'This past/current date is read-only for everyone, including the Owner and Release Managers.'
+                ? 'Scheduling on this past/current date stays protected. Recent dates may unlock extra uploads; admins can close active records.'
                 : 'Normal deployment slots are unavailable. The separate emergency queue follows date protection.'
               : 'Holiday — RM team unavailable for normal deployments.'}
           </span>

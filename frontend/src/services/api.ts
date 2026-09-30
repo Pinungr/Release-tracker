@@ -307,6 +307,9 @@ export const api = {
       body: json({ status, override_reason: overrideReason ?? null }),
     }),
 
+  reopenBooking: (id: number) =>
+    request<BookingDetail>(`/admin/bookings/${id}/reopen`, { method: 'POST' }),
+
   lookupTenants: (q: string) =>
     request<TenantOption[]>(`/tenants/lookup?q=${encodeURIComponent(q)}`),
   getTenantUpcoming: (tenantId: number) =>

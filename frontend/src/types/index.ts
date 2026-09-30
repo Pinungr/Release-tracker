@@ -126,6 +126,10 @@ export interface BookingDetail extends BookingSummary {
   can_start_work: boolean
   can_download_attachments: boolean
   can_manage_attachments: boolean
+  can_upload_attachments?: boolean
+  attachments_add_only?: boolean
+  can_close?: boolean
+  can_reopen?: boolean
   can_manage_collaborators?: boolean
   slot_label: string
   slot_time: string

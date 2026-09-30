@@ -247,7 +247,8 @@ def test_a_slot_with_upcoming_changes_cannot_be_removed(admin, user, tenant, nex
 
 
 def test_admin_can_move_a_change_to_another_slot(admin, user, tenant, next_monday):
-    booking = create_booking(user, tenant, next_monday, 1)
+    # Optional verifier email is stored as an empty string and must remain optional when moving.
+    booking = create_booking(user, tenant, next_monday, 1, verifier_email=None)
     response = admin.post(
         f"/api/admin/bookings/{booking['id']}/move",
         json={
@@ -258,6 +259,10 @@ def test_admin_can_move_a_change_to_another_slot(admin, user, tenant, next_monda
     )
     assert response.status_code == 200, response.text
     assert response.json()["slot_number"] == 3
+    detail = admin.get(f"/api/bookings/{booking['id']}").json()
+    for permission in ("can_edit", "can_cancel", "can_reschedule", "can_manage_attachments", "can_assign_rm"):
+        assert response.json()[permission] is True
+        assert response.json()[permission] == detail[permission]
 
     audit = admin.get(f"/api/admin/audit?booking_id={booking['id']}").json()
     assert audit[0]["event_type"] == "SLOT_CHANGED"
@@ -271,6 +276,28 @@ def test_admin_cannot_move_a_change_onto_an_occupied_slot(admin, user, tenant, o
         json={"deployment_date": next_monday.isoformat(), "slot_number": 2},
     )
     assert response.status_code == 409
+
+
+def test_admin_status_response_preserves_actor_permissions(admin, tenant, next_monday):
+    booking = create_booking(admin, tenant, next_monday, 1)
+    response = admin.post(f"/api/admin/bookings/{booking['id']}/status", json={"status": "BOOKED"})
+    assert response.status_code == 200, response.text
+    assert response.json()["can_edit"] is True
+    assert response.json()["can_assign_rm"] is True
+
+
+def test_release_manager_group_changes_audit_both_promotion_and_demotion(admin, user):
+    target = _user_named(admin, "pinaki")
+    rm = next(group for group in admin.get("/api/admin/groups").json() if group["group_type"] == "RELEASE_MANAGERS")
+    endpoint = f"/api/admin/groups/{rm['id']}/members/{target['id']}"
+    assert admin.post(endpoint).status_code == 200
+    assert admin.delete(endpoint).status_code == 200
+    events = [event for event in admin.get("/api/admin/audit").json() if event["event_type"] == "USER_ROLE_UPDATED"]
+    assert len(events) == 2
+    assert events[0]["old_values"] == {"role": "ADMIN"}
+    assert events[0]["new_values"] == {"role": "TENANT_USER"}
+    assert events[1]["new_values"] == {"role": "ADMIN"}
+    assert all(event["admin_username"] == "testadmin" for event in events)
 
 
 
@@ -371,7 +398,9 @@ def test_past_booking_is_read_only_even_for_admin(
         f"/api/admin/bookings/{booking['id']}/status",
         json={"status": "COMPLETED", "override_reason": "historical test"},
     )
-    assert status_change.status_code == 423
+    assert status_change.status_code == 200
+    assert status_change.json()["status"] == "COMPLETED"
+    assert status_change.json()["can_edit"] is False
 
     cancel = admin.request("DELETE", f"/api/bookings/{booking['id']}", json={})
     assert cancel.status_code == 423

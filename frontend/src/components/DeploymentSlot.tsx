@@ -71,15 +71,15 @@ export function DeploymentSlot({
   const canBook = booking === null && !readOnly && !isHistorical && slot.bookable
   // A whole-date unlock is managed from the day header, not per slot.
   const lockControl =
-    isAdmin && !readOnly && !isHistorical && slot.automatic_lock && slot.lock_override !== 'DATE' && onToggleLock ? (
+    isAdmin && !readOnly && slot.automatic_lock && slot.lock_override !== 'DATE' && onToggleLock ? (
       <button
         type="button"
         onClick={() => onToggleLock(day, slot)}
         className="btn-secondary btn-sm"
-        title={slot.lock_override === 'SLOT' ? 'Return this slot to the automatic lock' : 'Lift the automatic lock for this slot only'}
+        title={isHistorical ? 'Control additional document uploads only; scheduling remains closed' : slot.lock_override === 'SLOT' ? 'Return this slot to the automatic lock' : 'Lift the automatic lock for this slot only'}
       >
         {slot.lock_override === 'SLOT' ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}
-        {slot.lock_override === 'SLOT' ? 'Restore lock' : 'Unlock'}
+        {slot.lock_override === 'SLOT' ? 'Restore lock' : isHistorical ? 'Unlock uploads' : 'Unlock'}
       </button>
     ) : null
 

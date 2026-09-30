@@ -50,7 +50,7 @@ it('shows Member Pool tenants but requires an explicit tenant selection', async 
   )
 
   await waitFor(() => expect(api.getActiveTenants).toHaveBeenCalled())
-  const tenantSelect = screen.getByLabelText('Tenant name') as HTMLSelectElement
+  const tenantSelect = screen.getByRole('combobox', { name: 'Tenant name' }) as HTMLSelectElement
   expect(tenantSelect.value).toBe('')
   expect(screen.getByRole('option', { name: 'EPCAT' })).toBeTruthy()
   expect(screen.getByRole('option', { name: 'Encounters' })).toBeTruthy()

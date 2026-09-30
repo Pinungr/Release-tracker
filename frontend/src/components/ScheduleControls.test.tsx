@@ -111,6 +111,19 @@ describe('day-level automatic lock control', () => {
     show(day, true, true)
     expect(screen.queryByRole('button', { name: /Unlock date|Restore lock/ })).toBeNull()
   })
+
+  it.each(['2026-09-30', '2026-09-23'])('unlocks uploads on %s while keeping scheduling and capacity protected', (date) => {
+    const recent = { ...day, day: date, is_today: date === '2026-09-30', is_past: date !== '2026-09-30' }
+    const onToggleLock = show(recent, true)
+    expect(screen.getByText('Uploads locked')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock uploads for date' }))
+    expect(onToggleLock).toHaveBeenCalledWith(recent, null)
+    expect(screen.queryByRole('button', { name: /Add a slot|Remove a slot|Schedule emergency/ })).toBeNull()
+    cleanup()
+    show({ ...recent, date_unlocked: true }, true)
+    expect(screen.getByText('Uploads unlocked')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Restore lock' })).toBeTruthy()
+  })
 })
 
 describe('document upload configuration', () => {
@@ -119,11 +132,11 @@ describe('document upload configuration', () => {
     { id: 2, key: 'DBA_SCRIPT', label: 'DBA Scripts', description: null, is_active: true, is_required: true, allow_multiple: false, display_order: 2, file_count: 9, multi_file_schedules: 2 },
   ]
 
-  async function open() {
-    vi.mocked(api.getDocumentTypes).mockResolvedValue(types)
+  async function open(configuredTypes = types) {
+    vi.mocked(api.getDocumentTypes).mockResolvedValue(configuredTypes)
     render(<ToastProvider><AdminPanel open onClose={vi.fn()} timezone="Asia/Kolkata" currentUserId={1} isOwner onChanged={vi.fn()} /></ToastProvider>)
     fireEvent.click(screen.getByRole('button', { name: /Document uploads/ }))
-    await screen.findByLabelText('Name of DBA Scripts')
+    await screen.findByRole('heading', { name: 'DBA Scripts' })
   }
 
   it('changes requirement, file mode and order through the API', async () => {
@@ -140,9 +153,53 @@ describe('document upload configuration', () => {
 
   it('warns that schedules keep files from before a switch to Single', async () => {
     await open()
-    expect(screen.getByText(/2 schedules kept the several files/)).toBeTruthy()
+    expect(screen.getByText(/2 schedules retain existing multiple files/)).toBeTruthy()
     // Types with uploaded files can only be disabled, never deleted.
     expect(screen.queryByRole('button', { name: 'Delete DBA Scripts' })).toBeNull()
+  })
+
+  it('creates a document type with the chosen requirement and file mode', async () => {
+    await open()
+    const added = { ...types[0], id: 3, label: 'Security approval', key: 'SECURITY_APPROVAL', file_count: 0, allow_multiple: true }
+    vi.mocked(api.createDocumentType).mockResolvedValue([...types, added])
+    fireEvent.click(screen.getByRole('button', { name: 'Add document type' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: ' Security approval ' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'Approved security review' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Required before booking' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Allow multiple files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create document type' }))
+    await waitFor(() => expect(api.createDocumentType).toHaveBeenCalledWith({ label: 'Security approval', description: 'Approved security review', is_required: true, allow_multiple: true }))
+    expect(await screen.findByRole('heading', { name: 'Security approval' })).toBeTruthy()
+    expect(screen.queryByRole('form', { name: 'Add a document type' })).toBeNull()
+  })
+
+  it('edits the name and guidance, then disables the type without removing its files', async () => {
+    await open()
+    const updated = { ...types[1], label: 'Database scripts', description: 'Include the rollback script.' }
+    vi.mocked(api.updateDocumentType).mockResolvedValue([types[0], updated])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit DBA Scripts' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: updated.label } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: updated.description } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(api.updateDocumentType).toHaveBeenCalledWith(2, { label: updated.label, description: updated.description }))
+    await screen.findByRole('heading', { name: updated.label })
+    vi.mocked(api.updateDocumentType).mockResolvedValue([types[0], { ...updated, is_active: false }])
+    fireEvent.click(screen.getByRole('switch', { name: 'Database scripts enabled' }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Database scripts enabled' }).getAttribute('aria-checked')).toBe('false'))
+    expect(api.updateDocumentType).toHaveBeenCalledWith(2, { is_active: false })
+    expect(screen.queryByRole('button', { name: 'Delete Database scripts' })).toBeNull()
+  })
+
+  it('requires confirmation before deleting an unused document type', async () => {
+    const unused = { ...types[1], file_count: 0 }
+    await open([types[0], unused])
+    vi.mocked(api.deleteDocumentType).mockResolvedValue([types[0]])
+    fireEvent.click(screen.getByRole('button', { name: 'Delete DBA Scripts' }))
+    expect(api.deleteDocumentType).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Delete document type?' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete document type' }))
+    await waitFor(() => expect(api.deleteDocumentType).toHaveBeenCalledWith(2))
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'DBA Scripts' })).toBeNull())
   })
 })
 

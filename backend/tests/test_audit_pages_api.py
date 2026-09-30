@@ -35,3 +35,22 @@ def test_global_audit_supports_search_filters_and_pagination(admin, tenant, next
     assert len(newest) == 1
     older = admin.get('/api/admin/audit', params={'limit': 10, 'before_id': newest[0]['id']}).json()
     assert all(row['id'] < newest[0]['id'] for row in older)
+
+
+def test_audit_pages_do_not_repeat_server_generated_timestamps(admin, tenant, next_monday):
+    create_booking(admin, tenant, next_monday, 1)
+    expected = [event['id'] for event in admin.get('/api/admin/audit', params={'limit': 500}).json()]
+    seen = []
+    cursor = None
+    # Walk every page, including events sharing a server-generated timestamp.
+    for _ in range(len(expected) + 1):
+        params = {'limit': 1}
+        if cursor is not None:
+            params['before_id'] = cursor
+        page = admin.get('/api/admin/audit', params=params).json()
+        if not page:
+            break
+        assert page[0]['id'] not in seen
+        seen.append(page[0]['id'])
+        cursor = page[0]['id']
+    assert seen == expected

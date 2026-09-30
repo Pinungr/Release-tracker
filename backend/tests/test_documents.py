@@ -266,7 +266,7 @@ def test_mandatory_document_set_is_configurable(admin, user, tenant, next_monday
     assert booking["documents"]["complete"] is True
 
 
-def test_completing_a_change_requires_the_mandatory_documents(admin, user, other_user, tenant, next_monday):
+def test_admin_closure_preserves_missing_document_readiness_and_audits_it(admin, user, other_user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
     # Supporting Documents becomes required after this schedule was created.
     supporting = next(t for t in admin.get("/api/admin/document-types").json() if t["key"] == "SUPPORTING_DOCUMENTS")
@@ -277,13 +277,10 @@ def test_completing_a_change_requires_the_mandatory_documents(admin, user, other
     assert admin.post(f"/api/admin/bookings/{booking['id']}/assign-users", json={"user_ids": [rm_id]}).status_code == 200
     assert other_user.post(f"/api/bookings/{booking['id']}/start-work", json={"change_number": "CHG-123"}).status_code == 200
 
-    blocked = admin.post(f"/api/admin/bookings/{booking['id']}/status", json={"status": "COMPLETED"})
-    assert blocked.status_code == 400
-    assert "Required deployment document missing" in blocked.json()["detail"]
-
-    forced = admin.post(
-        f"/api/admin/bookings/{booking['id']}/status",
-        json={"status": "COMPLETED", "override_reason": "Filed in the change record."},
-    )
-    assert forced.status_code == 200
-    assert forced.json()["status"] == "COMPLETED"
+    closed = admin.post(f"/api/admin/bookings/{booking['id']}/status", json={"status": "COMPLETED"})
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["status"] == "COMPLETED"
+    assert closed.json()["documents"]["complete"] is False
+    event = next(e for e in admin.get(f"/api/admin/audit?booking_id={booking['id']}").json() if e["event_type"] == "BOOKING_STATUS_CHANGED")
+    assert "missing documents" in event["override_reason"]
+    assert event["new_values"]["missing_documents"] == [supporting["label"]]

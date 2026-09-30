@@ -126,6 +126,9 @@ frontend's copies exist only for immediate feedback.
 | See a change | any | any |
 | Edit / reschedule / cancel a change | changes they scheduled, changes of their tenant group, and changes they collaborate on | any |
 | Upload/delete documents | the same changes, while editable | editable changes |
+| Append extra documents on today / previous seven calendar days | the same changes, after Admin/RM unlock; no replacement or deletion | after unlocking; completed records also supported |
+| Complete / Close an Open or In Progress change | ❌ | ✅ at any age, independently of date locks, assignment, Change No. and work start |
+| Reopen a completed/closed schedule | ❌ | ✅ at any age; restores its previous status and retains scheduling protection |
 | Download documents | any change, including read-only records and files of disabled document types | any |
 | Emergency changes | view only | create, edit, cancel |
 | Exceed the tenant weekly limit | ❌ | ✅ automatic administrator bypass, audited |
@@ -214,14 +217,29 @@ any slot unlocks on it, and restoring the date relocks every slot. Unlocking nev
 and unfreezing never unlocks it. Tenant users and collaborators can change a
 schedule only when it is unlocked *and* not frozen. Admins/RMs must unlock
 first, and may then still act on a frozen slot with an audited override.
-Past and current dates can never be unlocked.
+Scheduling on past and current dates stays protected. Today and the previous
+seven calendar days can use **Unlock uploads** for additional documents only.
+Existing files cannot be replaced or deleted, and restoring the lock blocks new
+uploads again. Dates older than seven days cannot unlock uploads; an expired
+override has no effect and can still be removed. Comments remain append-only on
+protected records without requiring an unlock. Admin/RM can close an Open or In
+Progress record at any age without unlocking it. Admin/RM can also use
+**Reopen schedule** on a completed/closed record at any age. It restores Open
+or In Progress from the latest closure audit, retaining Change No., work start,
+assignments, documents, comments and the full audit history. Older records without
+a valid closure audit restore In Progress when work details exist, otherwise
+Open. Reopening does not lift date locks, unlock uploads or change the slot/date.
+Cancelled records cannot be reopened. Management remains read-only.
 
 **Document upload types are configured, not hard-coded.** Admin → Document
 uploads lets Admin/RM add, rename, enable/disable, reorder and mark each type
 Required/Optional and Single/Multiple files. The backend enforces it: a Single
 File upload replaces the existing file, Multiple Files types accept several
 files per upload and more later, and each file is stored, listed, downloaded
-and deleted on its own (individually or as a selection). The last file of a
+and deleted on its own (individually or as a selection) while editable. A recent
+follow-up unlock only appends evidence: an existing Single File cannot be
+replaced; use a Multiple Files type for extra evidence. A missing Single File
+can be uploaded once. The last file of a
 Required type cannot be deleted; upload a replacement instead. A type that has
 uploaded files can only be disabled, never deleted, so historical documents
 stay visible and downloadable. Switching a type from Multiple to Single applies
@@ -235,7 +253,10 @@ booking creation/update or `/admin/bookings/{id}/move` requires
 holidays, manual freezes or disabled capacity. Normal rescheduling never uses
 this override. Missing and occupied slots cannot be overridden. The separate Admin emergency queue remains available on holidays and can be used through the explicit Admin emergency workflow; the normal weekly board remains Sunday through Thursday. All booking
 operations, including emergency operations, RM assignment/work, status changes
-and attachments, respect past/current/automatic date protection.
+and attachment replacement/deletion, respect past/current/automatic date
+protection. Recent append-only uploads use the scoped unlock above. Admin/RM
+closure bypasses date protection and starting-work prerequisites; missing
+required documents remain visible in readiness and are recorded in the audit.
 
 **Jira is optional by default** (`jira_required_at_booking: false` in Admin
 Booking Rules). Supply it at booking if available; an administrator can require
@@ -485,7 +506,7 @@ Demo sign-in: **`demo.user` / `DemoPass!2026`**.
 4. Before confirming the slot, attach every required deployment document. The booking is created only after the mandatory files are accepted by the backend.
 5. Your own changes are badged **My booking**; the **My changes** card filters
    the board to them.
-6. Past dates and the current date are permanently read-only for everyone, including administrators. Admin → General controls how many **upcoming valid deployment dates** are also automatically frozen; Friday/Saturday and full-day holidays are skipped while counting. Those automatic date freezes cannot be bypassed by Admin. Manual per-slot freezes remain available for normal users, with Admin override outside the automatic protected-date window.
+6. Scheduling on past dates and the current date is protected for everyone, including administrators. Admin → General controls how many **upcoming valid deployment dates** are automatically locked; Friday/Saturday and full-day holidays are skipped while counting. An Admin/RM must explicitly unlock an upcoming date or slot before changing a booking inside this window. Today and the previous seven calendar days can be unlocked for extra document uploads only; existing files cannot be replaced or deleted. Comments stay available without unlocking. Admin/RM can close Open or In Progress records and reopen completed/closed records at any age; reopening retains date protection. Manual per-slot freezes are separate: unlocking does not unfreeze a slot, and unfreezing does not unlock it.
 7. If an administrator assigns you to a booked change as an RM user, it appears in **My changes**. You can open it and **Start work** by entering the separate **Change No.**; assignment does not give you ownership/edit/cancel rights.
 8. **Profile** shows your account and lets you change your password.
 
@@ -615,7 +636,7 @@ cd backend && .venv/Scripts/python -m pytest
 * 2 normal changes per tenant per week — shared across users, independent per
   tenant, resets weekly, freed by cancellation, overridable by an admin *with
   an audited reason*
-* past/current dates plus the configured upcoming valid deployment dates are hard-frozen for booking/edit/cancel for everyone, including administrators; separate manual slot freezes still block normal users and remain admin-overridable outside that automatic date window
+* past/current scheduling stays protected for everyone. Admin/RM can unlock today and the previous seven calendar days for append-only uploads, close active records or reopen closed schedules at any age. Reopening retains all date protection. Comments remain available on protected records. The configured upcoming valid deployment dates block booking/edit/cancel until an Admin/RM explicitly unlocks the date or slot. Separate manual slot freezes still apply after unlocking, and Admin manual overrides require the normal explicit override flow.
 * multiple emergency changes on one date, admin-only, consuming neither slots
   nor quota; tenant users are refused
 * holidays block normal slots and can keep or close the emergency queue;
@@ -754,6 +775,7 @@ documentation: `/docs`.
 | `POST` | `/admin/bookings/{id}/assign-users` | Assign one or more active RM users |
 | `POST` | `/admin/bookings/{id}/move` | Move to another date/slot (emergency changes) |
 | `POST` | `/admin/bookings/{id}/status` | Set BOOKED, COMPLETED or CANCELLED |
+| `POST` | `/admin/bookings/{id}/reopen` | Admin/RM: restore a completed/closed record to its previous Open/In Progress state, audited; date locks remain |
 | `GET` | `/admin/audit` | Audit history |
 
 Assigned RM users use `POST /bookings/{id}/start-work` with a required `change_number`. Jira No. remains unchanged and separate.
@@ -779,10 +801,10 @@ Assigned RM users use `POST /bookings/{id}/start-work` with a required `change_n
 
 ### Task completion and calendar availability (24 September 2026)
 
-- An assigned Release Manager must start work with a nonblank Change No. before an Owner or Release Manager can use **Complete / Close**. Completion requires an in-progress task and a recorded work start; a document override cannot bypass these prerequisites.
-- Completed/closed tasks cannot be rescheduled through the picker, admin move action, or booking edit endpoint, and cannot be reopened by changing their status or starting work again.
+- An Owner or Release Manager can **Complete / Close** an Open or In Progress task at any age, including locked dates, without assignment, a Change No. or a recorded work start. Required documents remain reflected in readiness; any missing paperwork is recorded in the closure audit. Starting work still requires an assigned Release Manager and a nonblank Change No.
+- Completed/closed tasks cannot be rescheduled through the picker, admin move action, or booking edit endpoint. Admin/RM must use **Reopen schedule** to restore the status before closure; setting an arbitrary status or starting work does not reopen it. Reopening works at any age, retains evidence and history, and leaves scheduling subject to the existing date and slot rules.
 - Slot colours: **green** = available; **blue** = booked and not frozen; **grey** = frozen/unavailable; **amber** = holiday/RM team unavailable; **purple** = completed/closed. Ownership remains a separate “My booking” badge. Holiday colouring takes precedence on a holiday; the booking's status badge still shows its lifecycle status.
-- Tenant login opens the earliest week containing a bookable normal slot within the next **60 days**, using the server's local date and existing availability rules. If none is found, a clear message asks the tenant to contact a Release Manager or browse later weeks. The tenant is selected when booking, so its weekly cap is checked during booking. Manual navigation remains available; refresh stays on the displayed week. Owner/Release Manager login keeps the current week.
+- Tenant login opens the nearest deployment week, including a fully booked week, and points to the earliest bookable normal slot within the next **60 days**. If none is found, a clear message asks the tenant to contact a Release Manager or browse later weeks. The tenant is selected when booking, so its weekly cap is checked during booking. Manual navigation remains available; refresh stays on the displayed week. Owner/Release Manager login keeps the current week.
 - Existing date protection, weekly limits and emergency permissions still apply. No database migration or new runtime dependency is needed for this update.
 
 ### Dedicated Change Details page
@@ -804,7 +826,7 @@ rejects requests containing multiple assignees. Existing schedules with multiple
 legacy assignees are reduced to the selected person on their next reassignment;
 historical records are not rewritten. The protected Owner may assign work but
 cannot be assigned.
-Completed changes cannot be reassigned, restarted or rescheduled. Existing date
+Completed changes cannot be reassigned, restarted or rescheduled until an Admin/RM explicitly reopens them. Existing date
 freeze rules still apply to assignments and workflow actions.
 
 Booking owners can post public comments on their own changes; Owner/Release

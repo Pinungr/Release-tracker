@@ -75,6 +75,14 @@ def run():
             booking = response.json()['booking']
             assert booking['jira_number'] is None and booking['slot_time'] == '09:00 PM - 05:00 AM'
             path = f"/api/bookings/{booking['id']}"
+            # Admin mutation responses must preserve the signed-in actor's permissions.
+            move = client.post(f"/api/admin/bookings/{booking['id']}/move", json={
+                'deployment_date': str(source + timedelta(days=2)), 'slot_number': 2,
+            })
+            assert move.status_code == 200, move.text
+            assert move.json()['can_edit'] and move.json()['can_manage_attachments']
+            status = client.post(f"/api/admin/bookings/{booking['id']}/status", json={'status': 'BOOKED'})
+            assert status.status_code == 200 and status.json()['can_assign_rm'], status.text
             holiday = source + timedelta(days=1)
             assert client.post('/api/admin/holidays', json={'holiday_date': str(holiday), 'name': 'Smoke holiday', 'is_full_day': True}).status_code == 201
             options = client.get(path + '/reschedule-options?limit=100').json()
@@ -93,7 +101,88 @@ def run():
             assert retained['status'] == 'CANCELLED' and len(retained['attachments']) == 5
             events = client.get(f"/api/admin/audit?booking_id={booking['id']}").json()
             assert {'BOOKING_CREATED', 'BOOKING_RESCHEDULED', 'BOOKING_CANCELLED'} <= {e['event_type'] for e in events}
-            print('PASS: production Docker startup, PostgreSQL readiness, SPA, auth, optional Jira, overnight timing, normal availability, invalid API destinations, reschedule, cancellation and audit retention.')
+            registered = client.post('/api/auth/register', json={
+                'full_name': 'Smoke RM', 'username': 'smokerm', 'email': 'smokerm@example.com',
+                'password': password, 'confirm_password': password,
+            })
+            assert registered.status_code == 201, registered.text
+            user_id = registered.json()['user']['id']
+            for role in ('ADMIN', 'TENANT_USER'):
+                changed = client.patch(f'/api/admin/users/{user_id}/role', json={'role': role})
+                assert changed.status_code == 200, changed.text
+            role_events = client.get('/api/admin/audit', params={'event_type': 'USER_ROLE_UPDATED'}).json()
+            assert len(role_events) == 2
+            assert role_events[0]['old_values'] == {'role': 'ADMIN'}
+            assert role_events[0]['new_values'] == {'role': 'TENANT_USER'}
+            assert role_events[1]['new_values'] == {'role': 'ADMIN'}
+
+            # Seed a booking made earlier, then follow up through public APIs.
+            historical = client.post('/api/bookings', data={'payload': json.dumps(payload)}, files=files)
+            assert historical.status_code == 201, historical.text
+            historical_id = historical.json()['booking']['id']
+            seed_history = (
+                'from app.database import SessionLocal; '
+                'from app.models import DeploymentBooking; '
+                'from app.utils.dates import today_local; '
+                'from datetime import timedelta; '
+                'db=SessionLocal(); '
+                f'row=db.get(DeploymentBooking, {historical_id}); '
+                'row.deployment_date=today_local()-timedelta(days=7); '
+                'db.commit(); db.close()'
+            )
+            docker('exec', app, 'python', '-c', seed_history)
+            history_path = f'/api/bookings/{historical_id}'
+            history_day = str(today - timedelta(days=7))
+            unlocked = client.post('/api/admin/lock-overrides', json={'override_date': history_day})
+            assert unlocked.status_code == 201, unlocked.text
+            detail = client.get(history_path).json()
+            assert detail['can_upload_attachments'] and detail['attachments_add_only'] and detail['can_close']
+            assert not detail['can_edit'] and not detail['can_manage_attachments']
+            appended = client.post(history_path + '/attachments', data={'category': 'SUPPORTING_DOCUMENTS'},
+                                   files=[('file', ('extra.txt', b'follow-up evidence'))])
+            assert appended.status_code == 200 and len(appended.json()['attachments']) == 6, appended.text
+            replaced = client.post(history_path + '/attachments', data={'category': 'TEST_RESULTS'},
+                                   files=[('file', ('replacement.txt', b'must not replace'))])
+            assert replaced.status_code == 423, replaced.text
+            assert client.request('DELETE', history_path, json={}).status_code == 423
+            assert client.post(history_path + '/comments', json={'body': 'Production follow-up.'}).status_code == 201
+            assert client.delete(f'/api/admin/lock-overrides/{history_day}').status_code == 204
+            closed = client.post(f'/api/admin/bookings/{historical_id}/status', json={'status': 'COMPLETED'})
+            assert closed.status_code == 200 and closed.json()['status'] == 'COMPLETED', closed.text
+            assert closed.json()['change_number'] is None and closed.json()['work_started_at'] is None
+            assert len(closed.json()['attachments']) == 6
+            assert closed.json()['can_reopen']
+            reopened = client.post(f'/api/admin/bookings/{historical_id}/reopen')
+            assert reopened.status_code == 200 and reopened.json()['status'] == 'BOOKED', reopened.text
+            assert not reopened.json()['can_edit'] and not reopened.json()['can_reopen']
+            assert not reopened.json()['can_upload_attachments']
+            assert len(reopened.json()['attachments']) == 6
+            assert reopened.json()['deployment_date'] == history_day
+            assert client.request('DELETE', history_path, json={}).status_code == 423
+            assert client.post(f'/api/admin/bookings/{historical_id}/reopen').status_code == 400
+            history_events = client.get('/api/admin/audit', params={'booking_id': historical_id, 'event_type': 'BOOKING_REOPENED'}).json()
+            assert len(history_events) == 1
+            assert history_events[0]['old_values']['status'] == 'COMPLETED'
+            assert history_events[0]['new_values']['status'] == 'BOOKED'
+
+            # Verify the timestamp/id cursor against production PostgreSQL too.
+            expected = [event['id'] for event in client.get('/api/admin/audit', params={'limit': 500}).json()]
+            seen, cursor = [], None
+            for _ in range(len(expected) + 1):
+                params = {'limit': 2}
+                if cursor is not None:
+                    params['before_id'] = cursor
+                page = client.get('/api/admin/audit', params=params).json()
+                if not page:
+                    break
+                seen.extend(event['id'] for event in page)
+                cursor = page[-1]['id']
+            assert seen == expected, 'Audit pagination skipped or repeated events'
+            print('PASS: production Docker startup, PostgreSQL readiness, SPA, auth, optional Jira/verifier email, overnight timing, normal availability, invalid API destinations, admin response permissions, reschedule, cancellation, role-change audit, recent append-only unlocks, protected scheduling, historical closure/reopening and complete audit pagination.')
+    except Exception:
+        logs = subprocess.run(['docker', 'logs', '--tail', '100', app], capture_output=True, text=True)
+        print((logs.stdout + logs.stderr).replace(password, '<redacted>'))
+        raise
     finally:
         # Exact unique test container names only; never touch existing app volumes.
         for name in (app, pg):

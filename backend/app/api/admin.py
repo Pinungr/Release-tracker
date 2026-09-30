@@ -960,7 +960,7 @@ def move_booking(
         requester_email=booking.requester_email,
         requester_phone=booking.requester_phone,
         verifier_name=booking.verifier_name,
-        verifier_email=booking.verifier_email,
+        verifier_email=booking.verifier_email or None,
         git_repository=booking.git_repository,
         implementation_summary=booking.implementation_summary,
         deployment_description=booking.deployment_description,
@@ -977,7 +977,7 @@ def move_booking(
         override_reason=payload.override_reason,
     )
     booking = booking_service.update_booking(db, booking, update, _actor(admin))
-    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
+    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True, user_id=admin.user_id)
 
 
 
@@ -989,7 +989,6 @@ def set_status(
     db: Session = Depends(get_db),
     admin: AdminPrincipal = Depends(require_admin),
 ) -> BookingDetail:
-    booking_service.assert_booking_mutable(db, booking, _actor(admin))
     try:
         new_status = BookingStatus(payload.status)
     except ValueError:
@@ -1001,22 +1000,23 @@ def set_status(
         raise BusinessRuleError(
             "Only BOOKED, COMPLETED and CANCELLED can be set from the admin panel."
         )
+    if new_status is not BookingStatus.COMPLETED:
+        booking_service.assert_booking_mutable(db, booking, _actor(admin))
     if booking.status == BookingStatus.COMPLETED.value:
-        raise BusinessRuleError("A completed/closed task cannot be reopened or cancelled.")
+        raise BusinessRuleError("Use Reopen to restore a closed schedule to its previous status. Closed schedules cannot be cancelled.")
     if new_status is BookingStatus.BOOKED and booking.status != BookingStatus.BOOKED.value:
         raise BusinessRuleError("A started task cannot be reset to booked.")
     if new_status is BookingStatus.CANCELLED:
         booking_service.cancel_booking(db, booking, _actor(admin), payload.override_reason)
-        return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
+        return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True, user_id=admin.user_id)
     if new_status is BookingStatus.COMPLETED:
-        if (booking.status != BookingStatus.IN_PROGRESS.value
-                or booking.work_started_at is None
-                or not (booking.change_number or "").strip()):
-            raise BusinessRuleError("Start the task and provide a Change No. before completing/closing it.")
-        # A deployment cannot be signed off with required paperwork missing,
-        # unless an administrator records a reason for the exception.
-        if not (payload.override_reason or "").strip():
-            booking_service.assert_documents_complete(db, booking)
+        if not booking_service.can_close_booking(booking, is_admin=True):
+            raise BusinessRuleError("Only open or in-progress bookings can be completed/closed.")
+        # Closure is independent of scheduling locks and starting work. Preserve
+        # document readiness and explicitly audit any missing required evidence.
+        readiness = booking_service.document_readiness(booking, document_type_service.active_types(db))
+        if not readiness.complete and not (payload.override_reason or "").strip():
+            payload.override_reason = ("Administrator closure with missing documents: " + ", ".join(readiness.missing_labels))[:500]
     old = booking.status
     booking.status = new_status.value
     if new_status is BookingStatus.CANCELLED and booking.cancelled_at is None:
@@ -1030,10 +1030,24 @@ def set_status(
         admin_username=admin.username,
         override_reason=payload.override_reason,
         old_values={"status": old},
-        new_values={"status": booking.status},
+        new_values={
+            "status": booking.status,
+            **({"documents_complete": readiness.complete, "missing_documents": readiness.missing_labels} if new_status is BookingStatus.COMPLETED else {}),
+        },
     )
     db.commit()
-    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True)
+    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True, user_id=admin.user_id)
+
+
+@router.post("/bookings/{booking_id}/reopen", response_model=BookingDetail)
+def reopen_booking(
+    booking: DeploymentBooking = Depends(get_booking),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> BookingDetail:
+    """Admin/RM may reopen a closed record at any age; scheduling locks remain."""
+    booking = booking_service.reopen_booking(db, booking, _actor(admin))
+    return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=True, user_id=admin.user_id)
 
 
 
@@ -1161,14 +1175,15 @@ def unlock_automatic_lock(
 ) -> LockOverrideOut:
     """Unlock an automatically locked date (all slots) or one slot on it.
 
-    This is an exception to the automatic upcoming-date lock only. Manual
+    Upcoming unlocks lift scheduling protection. Today and the previous seven
+    days allow additional document uploads only; scheduling remains closed. Manual
     Freeze is untouched: a frozen slot stays frozen for tenant users and
     collaborators until it is unfrozen separately. A whole-date unlock absorbs
     any slot unlocks on that date, so one Restore Lock returns the whole date
     to the automatic lock.
     """
     day, slot_number = payload.override_date, payload.slot_number
-    booking_service.assert_day_not_past(day)
+    booking_service.assert_unlockable_date(day)
     if not booking_service.is_date_automatically_frozen(db, day):
         raise HTTPException(status.HTTP_409_CONFLICT, "This date is not automatically locked.")
     if slot_number is not None and schedule_service.find_slot(db, day, slot_number) is None:
@@ -1200,6 +1215,7 @@ def unlock_automatic_lock(
             "slot_number": slot_number if slot_number is not None else "All slots and emergency queue",
             "unlocked_by": admin.username,
             "manually_frozen": booking_service.is_slot_manually_frozen(db, day, slot_number),
+            "scope": "ADDITIONAL_UPLOADS" if booking_service.is_current_or_past_deployment(day) else "SCHEDULING",
             **({"replaced_slot_unlocks": [o.slot_number for o in absorbed]} if absorbed else {}),
         },
     )
@@ -1219,7 +1235,7 @@ def restore_automatic_lock(
     Without ``slot_number`` every unlock on the date is removed, including any
     slot-level ones, so no slot is left open after restoring the date.
     """
-    booking_service.assert_day_not_past(override_date)
+    # An expired follow-up unlock can still be revoked; it never reopens scheduling.
     row = _override_row(db, override_date, slot_number)
     slot_rows = _slot_overrides_on(db, override_date) if slot_number is None else []
     if row is None and not slot_rows:
@@ -1377,9 +1393,12 @@ def read_audit(
         cursor = db.get(BookingAudit, before_id)
         if cursor is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid audit pagination cursor.")
+        # Compare the stored values directly. SQLite server defaults omit
+        # fractional seconds, while bound Python datetimes include them.
+        cursor_time = select(BookingAudit.created_at).where(BookingAudit.id == cursor.id).scalar_subquery()
         stmt = stmt.where(or_(
-            BookingAudit.created_at < cursor.created_at,
-            (BookingAudit.created_at == cursor.created_at) & (BookingAudit.id < cursor.id),
+            BookingAudit.created_at < cursor_time,
+            (BookingAudit.created_at == cursor_time) & (BookingAudit.id < cursor.id),
         ))
     if event_type:
         stmt = stmt.where(BookingAudit.event_type == event_type.strip().upper())

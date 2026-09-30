@@ -94,7 +94,7 @@ def test_direct_reschedule_rejects_invalid_target(admin, user, tenant, db, as_ad
     ("CURRENT_DATE", TODAY), ("PAST_DATE", TODAY - timedelta(days=1)),
     ("AUTOMATIC_DATE_FREEZE", TODAY + timedelta(days=1)),
 ])
-def test_all_booking_modifications_respect_date_protection(admin, user, other_user, tenant, db, reason, target):
+def test_scheduling_modifications_respect_date_protection_but_admin_can_close(admin, user, other_user, tenant, db, reason, target):
     from conftest import promote_to_release_manager
 
     booking = create_booking(user, tenant, SOURCE, 1)
@@ -115,8 +115,8 @@ def test_all_booking_modifications_respect_date_protection(admin, user, other_us
         assert client.get(path + '/reschedule-options').json() == []
         assert client.post(path + '/attachments', data={'category': 'SUPPORTING_DOCUMENTS'}, files={'file': ('note.txt', b'note')}).status_code == 423
         assert client.delete(path + f"/attachments/{booking['attachments'][0]['id']}").status_code == 423
-    for suffix, payload in [('assign-users', {'user_ids': [rm_id]}), ('status', {'status': 'COMPLETED'})]:
-        assert admin.post(f"/api/admin/bookings/{booking['id']}/{suffix}", json=payload).status_code == 423
+    assert admin.post(f"/api/admin/bookings/{booking['id']}/assign-users", json={'user_ids': [rm_id]}).status_code == 423
+    assert admin.post(f"/api/admin/bookings/{booking['id']}/status", json={'status': 'CANCELLED'}).status_code == 423
     for client in (admin, other_user):
         assert client.post(path + '/start-work', json={'change_number': 'CHG12345'}).status_code == 423
     rm_detail = other_user.get(path).json()
@@ -124,6 +124,11 @@ def test_all_booking_modifications_respect_date_protection(admin, user, other_us
     attachment_path = path + f"/attachments/{booking['attachments'][0]['id']}"
     assert other_user.get(attachment_path + '/download').status_code == 200
     assert other_user.delete(attachment_path).status_code == 423
+    assert rm_detail['can_close']
+    closed = admin.post(f"/api/admin/bookings/{booking['id']}/status", json={'status': 'COMPLETED'})
+    assert closed.status_code == 200, closed.text
+    assert closed.json()['status'] == 'COMPLETED'
+    assert not closed.json()['can_close']
 
 
 def test_explicit_override_is_separate_and_audited(admin, user, tenant):

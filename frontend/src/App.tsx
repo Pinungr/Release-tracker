@@ -209,7 +209,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
       return
     }
     if (!schedule || day.is_past || day.day <= schedule.today) {
-      toast.locked('Date is read-only', 'Past and current deployment dates cannot be booked or modified by any user, including the Owner or Release Managers.')
+      toast.locked('Scheduling is protected', 'New bookings and scheduling changes are blocked on past and current deployment dates, including for the Owner and Release Managers.')
       return
     }
     setEditBooking(null)
@@ -241,19 +241,20 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
    * when slot is null. Manual freeze is a separate control and is untouched.
    */
   async function toggleAutomaticLock(day: DayView, slot: SlotView | null) {
-    if (!auth.isAdmin || !schedule || day.is_past || day.day <= schedule.today) return
+    if (!auth.isAdmin || !schedule || !day.automatic_lock) return
+    const followupOnly = day.day <= schedule.today
     const slotNumber = slot ? slot.slot_number : null
     const unlocked = slot ? slot.lock_override === 'SLOT' : day.date_unlocked === true
     const where = slot ? `Slot ${slot.slot_number}` : `${day.weekday} ${day.date_label}`
     try {
       if (unlocked) {
         await api.restoreAutomaticLock(day.day, slotNumber)
-        toast.locked(`${where} locked again`, 'The automatic lock applies again.')
+        toast.locked(`${where} locked again`, followupOnly ? 'Additional uploads are locked again. Scheduling remains protected.' : 'The automatic lock applies again.')
       } else {
         await api.unlockAutomaticLock(day.day, slotNumber)
         toast.success(
-          `${where} unlocked`,
-          slot?.manually_frozen
+          `${where} ${followupOnly ? 'uploads unlocked' : 'unlocked'}`,
+          followupOnly ? 'Additional files can be uploaded. Scheduling and existing files remain protected.' : slot?.manually_frozen
             ? 'The slot is still manually frozen. Unfreeze it to let tenant users and collaborators make changes.'
             : 'Tenant users and collaborators can make their normal changes unless a slot is manually frozen.',
         )

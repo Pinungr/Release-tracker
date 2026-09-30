@@ -74,8 +74,8 @@ export function ChangeDetailsPage({
   const hasLockReason = booking !== null && booking.lock_reason !== 'NONE'
   const isAssigned = booking !== null && userId !== null && booking.assigned_users.some((u) => u.user_id === userId)
   const lockMessages = {
-    CURRENT_DATE: 'This booking is locked because deployments scheduled for today are read-only.',
-    PAST_DATE: 'This booking is historical and cannot be modified.',
+    CURRENT_DATE: 'Scheduling for today is protected. Additional uploads may be unlocked; existing files remain protected.',
+    PAST_DATE: 'Scheduling on this historical record is protected. Additional uploads may be unlocked within seven days.',
     AUTOMATIC_DATE_FREEZE: 'This deployment date is inside the automatic lock window. The Owner or a Release Manager can unlock it.',
     MANUAL_SLOT_FREEZE: 'This slot was manually frozen by the Owner or a Release Manager.',
     NONE: '',
@@ -133,7 +133,7 @@ export function ChangeDetailsPage({
   }
 
   async function markCompleted() {
-    if (!booking || !isAdmin || !booking.can_edit || (booking.status !== 'IN_PROGRESS' || !booking.work_started_at || !booking.change_number?.trim())) return
+    if (!booking || readOnly || !isAdmin || !booking.can_close) return
     setBusy(true)
     try {
       await api.setBookingStatus(booking.id, 'COMPLETED')
@@ -141,6 +141,20 @@ export function ChangeDetailsPage({
       onChanged()
     } catch (error) {
       toast.error('Could not update the status', error instanceof ApiError ? error.message : 'Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reopenBooking() {
+    if (!booking || readOnly || !isAdmin || !booking.can_reopen) return
+    setBusy(true)
+    try {
+      await api.reopenBooking(booking.id)
+      toast.success('Schedule reopened.', booking.booking_reference)
+      onChanged()
+    } catch (error) {
+      toast.error('Could not reopen the schedule', error instanceof ApiError ? error.message : 'Please try again.')
     } finally {
       setBusy(false)
     }
@@ -238,12 +252,14 @@ export function ChangeDetailsPage({
               <p className="text-xs text-ink-muted">
                 {readOnly
                   ? 'Management access is read-only. Use search and Audit to review PDS activity.'
+                  : booking.attachments_add_only
+                  ? 'Scheduling stays protected. Recent dates may be unlocked for additional uploads. Admin can close active records and reopen closed schedules at any age.'
                   : hasLockReason && !canAct
                   ? isAdmin
                     ? 'Locked. Unlock the automatic lock (and unfreeze the slot if needed) from the weekly board to make changes.'
                     : 'Locked. Changes are possible again once the Owner or a Release Manager unlocks it and the slot is not frozen.'
                   : isAdmin
-                    ? 'Owner/Release Manager: actions are available only on editable future records.'
+                    ? 'Owner/Release Manager: scheduling actions follow date protection; close active records or reopen closed schedules at any age.'
                     : booking?.access_basis === 'SCHEDULER'
                     ? 'You scheduled this change.'
                     : booking?.access_basis === 'TENANT_MEMBER'
@@ -263,6 +279,16 @@ export function ChangeDetailsPage({
                   void navigator.clipboard.writeText(booking.booking_reference).then(() => toast.success('Schedule No. copied')).catch(() => toast.error('Could not copy', 'Select and copy the Schedule No. shown above.'))
                 }}>Copy Schedule No.</button>
                 {!readOnly && canManageCollaborators ? <button type="button" className="btn-secondary" onClick={() => { setCollaboratorSelection(booking.collaborators.map((u) => u.user_id)); setCollaboratorOpen(true) }}>Collaborators</button> : null}
+                {!readOnly && isAdmin && booking.can_close ? (
+                  <button type="button" className="btn-secondary" disabled={busy} onClick={() => void markCompleted()}>
+                    Complete / Close
+                  </button>
+                ) : null}
+                {!readOnly && isAdmin && booking.can_reopen ? (
+                  <button type="button" className="btn-secondary" disabled={busy} onClick={() => void reopenBooking()}>
+                    Reopen schedule
+                  </button>
+                ) : null}
                 {!readOnly && canAct ? (
                   <>
                     <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
@@ -277,11 +303,6 @@ export function ChangeDetailsPage({
                       <Calendar className="size-4" />
                       Reschedule
                     </button> : null}
-                    {isAdmin && booking.status === 'IN_PROGRESS' && booking.work_started_at && booking.change_number?.trim() ? (
-                      <button type="button" className="btn-secondary" disabled={busy} onClick={() => void markCompleted()}>
-                        Complete / Close
-                      </button>
-                    ) : null}
                     {booking.can_cancel ? <button
                       type="button"
                       className="btn-danger"
@@ -292,7 +313,7 @@ export function ChangeDetailsPage({
                     </button> : null}
                   </>
                 ) : (
-                  <span className="badge bg-canvas text-ink-muted ring-1 ring-line">View only</span>
+                  <span className="badge bg-canvas text-ink-muted ring-1 ring-line">{!readOnly && (booking.attachments_add_only || booking.can_close || booking.can_reopen) ? 'Scheduling protected' : 'View only'}</span>
                 )}
               </div>
             </div>
@@ -418,7 +439,7 @@ export function ChangeDetailsPage({
             <aside className="space-y-5">
               <section className="card space-y-3 p-5">
                 <h2 className="text-sm font-bold text-ink">Workflow</h2>
-                <p className="text-sm text-ink-muted">Assign Release Manager → Start work with Change No. → Complete / Close</p>
+                <p className="text-sm text-ink-muted">Assign a Release Manager and record the Change No. when work starts. An admin can close active records or reopen a closed schedule at any time. Reopening restores its previous status.</p>
                 <BookingStatusBadge status={booking.status} />
                 <p className="text-sm"><strong>Assigned to:</strong> {booking.assigned_users.map(u => u.full_name).join(', ') || 'Not assigned'}</p>
                 <p className="text-xs text-ink-muted">Started: {booking.work_started_at ? formatTimestamp(booking.work_started_at, timezone) : 'Not started'}</p>

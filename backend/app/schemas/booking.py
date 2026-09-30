@@ -214,6 +214,10 @@ class BookingDetail(BookingSummary):
     can_start_work: bool
     can_download_attachments: bool
     can_manage_attachments: bool
+    can_upload_attachments: bool = False
+    attachments_add_only: bool = False
+    can_close: bool = False
+    can_reopen: bool = False
     can_manage_collaborators: bool = False
     slot_label: str
     slot_time: str

@@ -4,7 +4,7 @@ This module is the single source of truth for:
   * normal slot existence / enablement / holiday blocking
   * emergency-change access (administrators only, queued per date)
   * per-tenant weekly limits with a global fallback (and audited admin override)
-  * permanent past/current date locking
+  * protected past/current scheduling, with recent append-only document follow-up
   * the automatic upcoming-date lock, Admin/RM unlock overrides and manual slot freezes
   * document readiness
   * who may modify a schedule (``schedule_actor`` / ``schedule_permissions``)
@@ -15,6 +15,7 @@ Management is read-only. The API layer never re-implements any of these rules.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 
@@ -93,8 +94,10 @@ def next_booking_reference(db: Session, day: date) -> str:
 # --------------------------------------------------------------------------- #
 
 PAST_CURRENT_READ_ONLY_MESSAGE = (
-    "Past and current deployment dates are read-only and cannot be modified."
+    "Scheduling on past and current deployment dates is read-only. "
+    "Recent dates may be unlocked for additional documents only."
 )
+FOLLOWUP_DAYS = 7
 AUTOMATIC_FREEZE_MESSAGE = (
     "This deployment date is inside the configured upcoming-date freeze window."
 )
@@ -106,7 +109,7 @@ def is_current_or_past_deployment(day: date) -> bool:
 
 
 def assert_day_not_past(day: date) -> None:
-    """Compatibility name: past *and current* dates are permanently read-only."""
+    """Compatibility name: scheduling on past *and current* dates is protected."""
     if is_current_or_past_deployment(day):
         raise BusinessRuleError(PAST_CURRENT_READ_ONLY_MESSAGE, status.HTTP_423_LOCKED)
 
@@ -207,8 +210,8 @@ def is_schedule_locked(
 ) -> bool:
     """Automatic Lock, after any Admin/RM unlock override.
 
-    Past and current dates are permanently read-only and can never be
-    unlocked. Inside the automatic upcoming-date window a date or slot is
+    Scheduling on past and current dates is protected regardless of upload
+    unlocks. Inside the automatic upcoming-date window a date or slot is
     locked unless an administrator explicitly unlocked it. Manual Freeze is a
     separate control and is not considered here.
     """
@@ -283,8 +286,8 @@ def schedule_restriction(
     past/current dates, cancellation, completion, the Automatic Lock (unless
     an Admin/RM unlocked it), Manual Freeze and the emergency queue.
     Administrators may still act on a manually frozen slot (audited as an
-    override) and on a completed record; nobody may act inside the Automatic
-    Lock until it has been unlocked.
+    override) and on a completed record. Scheduling changes inside the Automatic
+    Lock require an unlock; closure and append-only follow-up have separate rules.
     """
     app_settings = app_settings or get_app_settings(db)
     state = booking_lock_reason(db, booking, app_settings)
@@ -319,6 +322,96 @@ def assert_booking_mutable(
     error = schedule_restriction(db, booking, actor, app_settings)
     if error is not None:
         raise error
+
+
+def is_followup_date(day: date, *, today: date | None = None) -> bool:
+    """Today and the previous seven calendar days support append-only uploads."""
+    today = today or today_local()
+    return today - timedelta(days=FOLLOWUP_DAYS) <= day <= today
+
+
+def assert_unlockable_date(day: date) -> None:
+    if day < today_local() - timedelta(days=FOLLOWUP_DAYS):
+        raise BusinessRuleError(
+            "Dates older than seven days are read-only for document uploads and cannot be unlocked.",
+            status.HTTP_423_LOCKED,
+        )
+
+
+def attachment_upload_restriction(
+    db: Session, booking: DeploymentBooking, actor: "Actor", app_settings: AppSettings | None = None
+) -> BusinessRuleError | None:
+    """Recent unlocks permit new evidence, without granting scheduling or deletion rights."""
+    if booking.deployment_date > today_local():
+        return schedule_restriction(db, booking, actor, app_settings)
+    if not is_followup_date(booking.deployment_date):
+        return BusinessRuleError("Additional documents can only be uploaded for today and the previous seven days.", status.HTTP_423_LOCKED)
+    if booking.status == BookingStatus.CANCELLED.value:
+        return BusinessRuleError(CANCELLED_READ_ONLY_MESSAGE)
+    if not actor.is_admin and booking.is_emergency:
+        return BusinessRuleError("Emergency documents can only be uploaded by an administrator.", status.HTTP_403_FORBIDDEN)
+    if not actor.is_admin and booking.status == BookingStatus.COMPLETED.value:
+        return BusinessRuleError(COMPLETED_READ_ONLY_MESSAGE)
+    slot = None if booking.is_emergency else booking.slot_number
+    if not has_unlock_override(db, booking.deployment_date, slot):
+        return BusinessRuleError("The Owner or a Release Manager must unlock additional uploads for this date or slot first.", status.HTTP_423_LOCKED)
+    if not actor.is_admin and is_slot_manually_frozen(db, booking.deployment_date, slot):
+        return BusinessRuleError(MANUAL_FREEZE_MESSAGE, status.HTTP_423_LOCKED)
+    return None
+
+
+def can_close_booking(booking: DeploymentBooking, *, is_admin: bool) -> bool:
+    """Administrators can close open/in-progress records independently of date locks."""
+    return is_admin and booking.status in {BookingStatus.BOOKED.value, BookingStatus.IN_PROGRESS.value}
+
+
+def can_reopen_booking(booking: DeploymentBooking, *, is_admin: bool) -> bool:
+    """Reopening changes lifecycle state only, independently of scheduling locks."""
+    return is_admin and booking.status == BookingStatus.COMPLETED.value
+
+
+def reopen_booking(db: Session, booking: DeploymentBooking, actor: "Actor") -> DeploymentBooking:
+    """Restore the state before the latest closure, preserving work and evidence."""
+    if not actor.is_admin:
+        raise BusinessRuleError("Only the Owner or a Release Manager can reopen a schedule.", status.HTTP_403_FORBIDDEN)
+    # Serialize repeated requests so a second click cannot reopen an already-open
+    # record or append a duplicate reopen event in PostgreSQL.
+    db.refresh(booking, attribute_names=["status"], with_for_update=True)
+    if not can_reopen_booking(booking, is_admin=True):
+        raise BusinessRuleError("Only completed/closed schedules can be reopened.")
+    closure = db.scalar(
+        select(BookingAudit)
+        .where(BookingAudit.booking_id == booking.id, BookingAudit.event_type == "BOOKING_STATUS_CHANGED")
+        .order_by(BookingAudit.id.desc())
+        .limit(1)
+    )
+    restored = None
+    if closure is not None:
+        try:
+            old_values = json.loads(closure.old_values or "{}")
+            new_values = json.loads(closure.new_values or "{}")
+        except (TypeError, ValueError):
+            old_values = new_values = {}
+        if isinstance(old_values, dict) and isinstance(new_values, dict) and new_values.get("status") == BookingStatus.COMPLETED.value:
+            previous = old_values.get("status")
+            if isinstance(previous, str) and previous in {BookingStatus.BOOKED.value, BookingStatus.IN_PROGRESS.value}:
+                restored = previous
+    # Older/imported records may lack a closure audit. Existing work details are
+    # retained and indicate In Progress; otherwise restore Open (BOOKED).
+    if restored is None:
+        restored = BookingStatus.IN_PROGRESS.value if booking.work_started_at is not None or (booking.change_number or "").strip() else BookingStatus.BOOKED.value
+    booking.status = restored
+    audit_service.record(
+        db,
+        event_type="BOOKING_REOPENED",
+        booking=booking,
+        actor_type="ADMIN",
+        admin_username=actor.admin_username,
+        old_values={"status": BookingStatus.COMPLETED.value},
+        new_values={"status": restored},
+    )
+    db.commit()
+    return booking
 
 
 def admin_freeze_override_reason(db: Session, booking: DeploymentBooking, actor: "Actor", supplied: str | None) -> str | None:

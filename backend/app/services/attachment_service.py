@@ -72,15 +72,22 @@ def save_uploads(
     actor: Actor,
     *,
     commit: bool = True,
+    append_only: bool = False,
 ) -> list[BookingAttachment]:
     """Store every file or none of them.
 
-    For a Single File type the upload replaces whatever is attached, so there
-    is never more than one active file for that type on the schedule.
+    A Single File upload normally replaces existing files. Append-only follow-up
+    uploads refuse replacement and preserve all original evidence.
     """
     uploads = [u for u in uploads if u is not None]
     if not uploads:
         raise BusinessRuleError("No file was supplied.")
+    if append_only and not doc_type.allow_multiple and any(a.category == doc_type.key for a in booking.attachments):
+        raise BusinessRuleError(
+            "Existing documents on protected dates cannot be replaced. "
+            "Add extra evidence using a document type that allows multiple files.",
+            status.HTTP_423_LOCKED,
+        )
     if not doc_type.allow_multiple and len(uploads) > 1:
         raise BusinessRuleError(
             f"“{doc_type.label}” accepts a single file. Select one file.",
