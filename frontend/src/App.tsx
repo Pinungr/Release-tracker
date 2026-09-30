@@ -33,7 +33,6 @@ const FALLBACK_SETTINGS: PublicSettings = {
   booking_freeze_dates: 2,
   jira_required_at_booking: false,
   max_file_size_mb: 20,
-  mandatory_documents: [],
   document_catalog: [],
   technologies: ['Databricks', 'AzDF', 'Database', 'Application', 'Infrastructure', 'Other'],
 }
@@ -238,6 +237,34 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }
 
   /**
+   * Admin/RM exception to the automatic lock for one slot, or the whole date
+   * when slot is null. Manual freeze is a separate control and is untouched.
+   */
+  async function toggleAutomaticLock(day: DayView, slot: SlotView | null) {
+    if (!auth.isAdmin || !schedule || day.is_past || day.day <= schedule.today) return
+    const slotNumber = slot ? slot.slot_number : null
+    const unlocked = slot ? slot.lock_override === 'SLOT' : day.date_unlocked === true
+    const where = slot ? `Slot ${slot.slot_number}` : `${day.weekday} ${day.date_label}`
+    try {
+      if (unlocked) {
+        await api.restoreAutomaticLock(day.day, slotNumber)
+        toast.locked(`${where} locked again`, 'The automatic lock applies again.')
+      } else {
+        await api.unlockAutomaticLock(day.day, slotNumber)
+        toast.success(
+          `${where} unlocked`,
+          slot?.manually_frozen
+            ? 'The slot is still manually frozen. Unfreeze it to let tenant users and collaborators make changes.'
+            : 'Tenant users and collaborators can make their normal changes unless a slot is manually frozen.',
+        )
+      }
+      refreshAll()
+    } catch (caught) {
+      toast.error(unlocked ? 'Could not restore the lock' : 'Could not unlock', caught instanceof ApiError ? caught.message : '')
+    }
+  }
+
+  /**
    * Adds or removes one normal deployment slot on a single date. The default
    * count in Booking Rules still governs every other date.
    */
@@ -282,17 +309,17 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
       toast.locked('Management access is read-only', 'Management users can search schedules and use Central Audit, but cannot modify PDS records.')
       return
     }
+    // can_edit comes from the backend's schedule-access rules (scheduler,
+    // tenant group, collaborators, Admin/RM) plus lock/freeze/date checks.
     if (!booking.can_edit) {
       toast.locked(
-        'This booking is locked',
+        'This booking cannot be edited',
         booking.is_past
           ? 'Past deployment records cannot be edited by any user, including the Owner or Release Managers.'
-          : 'This booking is inside a protected date or slot freeze window.',
+          : booking.lock_reason !== 'NONE'
+            ? 'This booking is inside a locked date or a frozen slot.'
+            : 'Only its tenant group, scheduler, collaborators or a Release Manager can edit it.',
       )
-      return
-    }
-    if (!auth.isAdmin && booking.created_by_user_id !== user.id) {
-      toast.error('You are not authorized to edit this change record.')
       return
     }
     // Hand over from the details drawer to the edit drawer rather than
@@ -426,6 +453,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onBookEmergency={startEmergencyBooking}
           onOpenBooking={openBooking}
           onToggleFreeze={(day, slot) => void toggleSlotFreeze(day, slot)}
+          onToggleLock={(day, slot) => void toggleAutomaticLock(day, slot)}
           onAdjustCapacity={(day, delta) => void adjustDayCapacity(day, delta)}
         />}
 

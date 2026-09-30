@@ -23,7 +23,6 @@ const settings: PublicSettings = {
   booking_freeze_dates: 2,
   jira_required_at_booking: false,
   max_file_size_mb: 20,
-  mandatory_documents: [],
   technologies: ['Application'],
   document_catalog: [],
 }

@@ -1,7 +1,8 @@
 """Deployment document upload, readiness, and authenticated authorization.
 
-Access is decided by created_by_user_id or the ADMIN role — there is no PIN,
-no manage token and no unauthenticated path to a stored file.
+Access follows the schedule-edit rules (scheduler, tenant group, collaborators,
+Admin/RM) — there is no PIN, no manage token and no unauthenticated path to a
+stored file.
 """
 from __future__ import annotations
 
@@ -212,20 +213,31 @@ def test_any_user_can_download_but_only_the_owner_can_change_documents(
 
 def test_owner_can_delete_their_own_document(user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
-    uploaded = _upload(user, booking["id"], "TEST_RESULTS", "results.pdf").json()
+    uploaded = _upload(user, booking["id"], "SUPPORTING_DOCUMENTS", "notes.pdf").json()
     attachment_id = next(
-        a["id"] for a in uploaded["attachments"] if a["category"] == "TEST_RESULTS"
+        a["id"] for a in uploaded["attachments"] if a["category"] == "SUPPORTING_DOCUMENTS"
     )
     response = user.delete(f"/api/bookings/{booking['id']}/attachments/{attachment_id}")
     assert response.status_code == 200
-    assert all(a["category"] != "TEST_RESULTS" for a in response.json()["attachments"])
+    assert all(a["category"] != "SUPPORTING_DOCUMENTS" for a in response.json()["attachments"])
+
+
+def test_the_last_file_of_a_required_document_cannot_be_deleted(admin, user, tenant, next_monday):
+    booking = create_booking(user, tenant, next_monday, 1)
+    results = next(a for a in booking["attachments"] if a["category"] == "TEST_RESULTS")
+    for client in (user, admin):
+        blocked = client.delete(f"/api/bookings/{booking['id']}/attachments/{results['id']}")
+        assert blocked.status_code == 409
+        assert "required" in blocked.json()["detail"].lower()
+    # Replacing a Single File document in one upload is the supported path.
+    assert _upload(user, booking["id"], "TEST_RESULTS", "results-v2.pdf").status_code == 200
 
 
 def test_locked_owner_cannot_delete_documents_but_admin_can(admin, user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
-    uploaded = _upload(user, booking["id"], "TEST_RESULTS", "results.pdf").json()
+    uploaded = _upload(user, booking["id"], "SUPPORTING_DOCUMENTS", "notes.pdf").json()
     attachment_id = next(
-        a["id"] for a in uploaded["attachments"] if a["category"] == "TEST_RESULTS"
+        a["id"] for a in uploaded["attachments"] if a["category"] == "SUPPORTING_DOCUMENTS"
     )
     frozen = admin.post(
         "/api/admin/slot-freezes",
@@ -238,13 +250,17 @@ def test_locked_owner_cannot_delete_documents_but_admin_can(admin, user, tenant,
 
     allowed = admin.delete(f"/api/bookings/{booking['id']}/attachments/{attachment_id}")
     assert allowed.status_code == 200
-    assert all(a["category"] != "TEST_RESULTS" for a in allowed.json()["attachments"])
+    assert all(a["category"] != "SUPPORTING_DOCUMENTS" for a in allowed.json()["attachments"])
 
 
 
 
 def test_mandatory_document_set_is_configurable(admin, user, tenant, next_monday):
-    admin.put("/api/admin/settings", json={"mandatory_documents": ["IMPLEMENTATION_PLAN"]})
+    for doc_type in admin.get("/api/admin/document-types").json():
+        if doc_type["key"] != "IMPLEMENTATION_PLAN":
+            assert admin.put(
+                f"/api/admin/document-types/{doc_type['id']}", json={"is_required": False}
+            ).status_code == 200
     booking = create_booking(user, tenant, next_monday, 1)
     assert booking["documents"]["total_required"] == 1
     assert booking["documents"]["complete"] is True
@@ -252,11 +268,9 @@ def test_mandatory_document_set_is_configurable(admin, user, tenant, next_monday
 
 def test_completing_a_change_requires_the_mandatory_documents(admin, user, other_user, tenant, next_monday):
     booking = create_booking(user, tenant, next_monday, 1)
-    implementation = next(
-        a for a in booking["attachments"] if a["category"] == "IMPLEMENTATION_PLAN"
-    )
-    removed = user.delete(f"/api/bookings/{booking['id']}/attachments/{implementation['id']}")
-    assert removed.status_code == 200
+    # Supporting Documents becomes required after this schedule was created.
+    supporting = next(t for t in admin.get("/api/admin/document-types").json() if t["key"] == "SUPPORTING_DOCUMENTS")
+    assert admin.put(f"/api/admin/document-types/{supporting['id']}", json={"is_required": True}).status_code == 200
 
     from conftest import promote_to_release_manager
     rm_id = promote_to_release_manager(admin, other_user)

@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from ..models import DocumentCategory, Technology
+from ..models import Technology
 
 _HTTP_URL = re.compile(r"^https?://[^\s/$.?#].[^\s]*$", re.IGNORECASE)
 _SCP_GIT = re.compile(r"^(git|ssh)://[^\s]+$|^[\w.-]+@[\w.-]+:[\w./~-]+$", re.IGNORECASE)
@@ -95,22 +95,33 @@ class BookingCancel(BaseModel):
     override_reason: str | None = Field(default=None, max_length=500)
 
 
+class CollaboratorsUpdate(BaseModel):
+    user_ids: list[int] = Field(default_factory=list, max_length=50)
+
+
+class AttachmentBulkDelete(BaseModel):
+    attachment_ids: list[int] = Field(min_length=1, max_length=200)
+
+
 class AttachmentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    category: DocumentCategory
+    #: Key of the configured document type (may be a since-disabled type).
+    category: str
     category_label: str
     original_filename: str
     size_bytes: int
     content_type: str | None
     uploaded_at: datetime
+    uploaded_by: str | None = None
 
 
 class DocumentStatus(BaseModel):
-    category: DocumentCategory
+    category: str
     label: str
     required: bool
+    multiple: bool = False
     provided: bool
     file_count: int
 
@@ -162,6 +173,8 @@ class BookingSummary(BaseModel):
     is_past: bool
     lock_reason: Literal["CURRENT_DATE", "PAST_DATE", "AUTOMATIC_DATE_FREEZE", "MANUAL_SLOT_FREEZE", "NONE"]
     is_locked: bool
+    #: True while an Admin/RM unlock lifts the automatic lock for this record.
+    lock_overridden: bool = False
     documents: DocumentReadiness
     created_at: datetime
     updated_at: datetime
@@ -190,6 +203,9 @@ class BookingDetail(BookingSummary):
     cancelled_by_user_id: int | None
     attachments: list[AttachmentOut]
     collaborators: list[AssignedUserOut] = []
+    #: Why the caller may change this schedule when not an administrator:
+    #: SCHEDULER, TENANT_MEMBER or COLLABORATOR.
+    access_basis: str | None = None
     can_edit: bool
     can_cancel: bool
     can_reschedule: bool
@@ -198,6 +214,7 @@ class BookingDetail(BookingSummary):
     can_start_work: bool
     can_download_attachments: bool
     can_manage_attachments: bool
+    can_manage_collaborators: bool = False
     slot_label: str
     slot_time: str
 
@@ -216,6 +233,7 @@ class AuditEventOut(BaseModel):
     actor_type: Literal["USER", "ADMIN", "SYSTEM"]
     requester_email: str | None
     admin_username: str | None
+    actor_access: str | None = None
     override_reason: str | None
     old_values: dict | None
     new_values: dict | None
@@ -235,6 +253,10 @@ class SlotView(BaseModel):
     state: Literal["AVAILABLE", "BOOKED", "HOLIDAY", "DISABLED"]
     bookable: bool
     manually_frozen: bool = False
+    #: The date is inside the automatic upcoming-date lock window.
+    automatic_lock: bool = False
+    #: Which Admin/RM unlock currently lifts that lock for this slot, if any.
+    lock_override: Literal["DATE", "SLOT"] | None = None
     booking: BookingSummary | None
 
 
@@ -277,6 +299,9 @@ class DayView(BaseModel):
     regular_slots_total: int
     regular_slots_used: int
     slots: list[SlotView]
+    automatic_lock: bool = False
+    #: An Admin/RM unlocked the whole date (every slot and the emergency queue).
+    date_unlocked: bool = False
     #: Emergency changes are an admin-only queue on the date, not a slot.
     emergency_open: bool
     emergency_closed_reason: str | None
@@ -325,7 +350,8 @@ class PublicSettings(BaseModel):
     booking_freeze_dates: int
     jira_required_at_booking: bool
     max_file_size_mb: int
-    mandatory_documents: list[str]
+    #: Active document types in display order; ``required`` is the only
+    #: source of which documents are mandatory.
     document_catalog: list[dict]
     technologies: list[str]
 

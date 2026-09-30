@@ -7,7 +7,7 @@ import { DocumentUploader } from './DocumentUploader'
 import { ChangePageShell } from './ChangePageShell'
 import { ChangeActivity } from './ChangeActivity'
 import { SchedulePageNav } from './SchedulePageNav'
-import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Spinner, Trash, User } from './Icons'
+import { Alert, Calendar, Clock, Link as LinkIcon, Lock, Pencil, Spinner, Trash, Unlock, User } from './Icons'
 import { ConfirmationModal, Modal } from './Modal'
 import { RescheduleModal } from './RescheduleModal'
 import { ReleaseManagerAssignee } from './ReleaseManagerAssignee'
@@ -69,14 +69,14 @@ export function ChangeDetailsPage({
   const [collaboratorSelection, setCollaboratorSelection] = useState<number[]>([])
   const [collaboratorBusy, setCollaboratorBusy] = useState(false)
 
-  const ownsBooking = booking !== null && userId === booking.created_by_user_id
+  const canManageCollaborators = booking?.can_manage_collaborators ?? false
   const canAct = booking?.can_edit ?? false
   const hasLockReason = booking !== null && booking.lock_reason !== 'NONE'
   const isAssigned = booking !== null && userId !== null && booking.assigned_users.some((u) => u.user_id === userId)
   const lockMessages = {
     CURRENT_DATE: 'This booking is locked because deployments scheduled for today are read-only.',
     PAST_DATE: 'This booking is historical and cannot be modified.',
-    AUTOMATIC_DATE_FREEZE: 'This deployment date is inside the protected scheduling window.',
+    AUTOMATIC_DATE_FREEZE: 'This deployment date is inside the automatic lock window. The Owner or a Release Manager can unlock it.',
     MANUAL_SLOT_FREEZE: 'This slot was manually frozen by the Owner or a Release Manager.',
     NONE: '',
   }
@@ -87,18 +87,19 @@ export function ChangeDetailsPage({
   }, [booking?.id, booking?.change_number, open])
 
   useEffect(() => {
-    if (!collaboratorOpen || !booking || !ownsBooking) return
+    if (!collaboratorOpen || !booking || !canManageCollaborators) return
     const timer = window.setTimeout(() => {
-      void api.getCollaboratorCandidates(booking.id, collaboratorSearch).then((rows) => {
-        setCollaboratorCandidates(rows)
-        setCollaboratorSelection((current) => current.length ? current : booking.collaborators.map((u) => u.user_id))
-      }).catch(() => setCollaboratorCandidates([]))
+      // Searching only refreshes the candidate list. The selection is set
+      // once when the modal opens, so unticking everyone is never undone.
+      void api.getCollaboratorCandidates(booking.id, collaboratorSearch)
+        .then(setCollaboratorCandidates)
+        .catch(() => setCollaboratorCandidates([]))
     }, 150)
     return () => window.clearTimeout(timer)
-  }, [collaboratorOpen, collaboratorSearch, booking?.id, booking?.collaborators, ownsBooking])
+  }, [collaboratorOpen, collaboratorSearch, booking?.id, canManageCollaborators])
 
   async function saveCollaborators() {
-    if (!booking || !ownsBooking) return
+    if (!booking || !canManageCollaborators) return
     setCollaboratorBusy(true)
     try {
       await api.setCollaborators(booking.id, collaboratorSelection)
@@ -238,14 +239,20 @@ export function ChangeDetailsPage({
                 {readOnly
                   ? 'Management access is read-only. Use search and Audit to review PDS activity.'
                   : hasLockReason && !canAct
-                  ? 'Past, current and protected deployment dates are read-only for everyone, including the Owner and Release Managers.'
+                  ? isAdmin
+                    ? 'Locked. Unlock the automatic lock (and unfreeze the slot if needed) from the weekly board to make changes.'
+                    : 'Locked. Changes are possible again once the Owner or a Release Manager unlocks it and the slot is not frozen.'
                   : isAdmin
                     ? 'Owner/Release Manager: actions are available only on editable future records.'
-                    : ownsBooking
-                    ? 'Verified as the booking owner for this session.'
-                    : isAssigned
-                      ? 'Assigned Release Manager: authorized documents are available to download; work actions depend on date protection.'
-                      : 'Read-only: you can view, clone and comment on this schedule. Only the booking owner or a Release Manager can change it.'}
+                    : booking?.access_basis === 'SCHEDULER'
+                    ? 'You scheduled this change.'
+                    : booking?.access_basis === 'TENANT_MEMBER'
+                      ? `You can change this schedule as a member of ${booking.tenant_name}.`
+                      : booking?.access_basis === 'COLLABORATOR'
+                        ? 'You can change this schedule as a collaborator.'
+                        : isAssigned
+                          ? 'Assigned Release Manager: authorized documents are available to download; work actions depend on date protection.'
+                          : 'Read-only: you can view, clone and comment on this schedule. Only its tenant group, scheduler, collaborators or a Release Manager can change it.'}
               </p>
               {/* Owner and Release Managers get Edit | Reschedule | Cancel according to
                   record/date permissions. Start-work requires an explicit Release Manager assignment. */}
@@ -255,7 +262,7 @@ export function ChangeDetailsPage({
                   if (!navigator.clipboard) { toast.error('Copy unavailable', 'Select and copy the Schedule No. shown above.'); return }
                   void navigator.clipboard.writeText(booking.booking_reference).then(() => toast.success('Schedule No. copied')).catch(() => toast.error('Could not copy', 'Select and copy the Schedule No. shown above.'))
                 }}>Copy Schedule No.</button>
-                {!readOnly && ownsBooking && !booking.is_emergency ? <button type="button" className="btn-secondary" onClick={() => { setCollaboratorSelection(booking.collaborators.map((u) => u.user_id)); setCollaboratorOpen(true) }}>Collaborators</button> : null}
+                {!readOnly && canManageCollaborators ? <button type="button" className="btn-secondary" onClick={() => { setCollaboratorSelection(booking.collaborators.map((u) => u.user_id)); setCollaboratorOpen(true) }}>Collaborators</button> : null}
                 {!readOnly && canAct ? (
                   <>
                     <button type="button" className="btn-primary" onClick={() => onEdit(booking)}>
@@ -299,6 +306,18 @@ export function ChangeDetailsPage({
           </div>
         ) : (
           <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(18rem,1fr)]">
+            {booking.lock_overridden && booking.status !== 'CANCELLED' ? (
+              <div className="lg:col-span-2 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                <Unlock className="mt-0.5 size-5 shrink-0 text-emerald-600" />
+                <div>
+                  <p className="text-sm font-semibold text-ink">Automatic lock lifted</p>
+                  <p className="mt-0.5 text-sm text-ink-muted">
+                    The Owner or a Release Manager unlocked this date/slot. Manual freeze rules still apply.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
             {hasLockReason && booking.status !== 'CANCELLED' ? (
               <div className="lg:col-span-2 flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <Lock className="mt-0.5 size-5 shrink-0 text-slate-500" />
@@ -437,9 +456,8 @@ export function ChangeDetailsPage({
               <DocumentUploader
                 booking={booking}
                 settings={settings}
-                isAdmin={isAdmin}
-                canManage={booking.can_manage_attachments}
-                readOnly={!booking.can_manage_attachments}
+                timezone={timezone}
+                readOnly={readOnly}
                 onUpdated={() => onChanged()}
               />
             </section>
@@ -489,12 +507,12 @@ export function ChangeDetailsPage({
         </Modal>
       ) : null}
 
-      {booking && ownsBooking ? (
+      {booking && canManageCollaborators ? (
         <Modal
           open={collaboratorOpen}
           onClose={() => setCollaboratorOpen(false)}
           title="Booking collaborators"
-          description={`Choose colleagues from ${booking.tenant_name}. Collaborators can edit, reschedule, cancel and manage documents under the same booking rules as you.`}
+          description={`Add people from the Member Pool. Collaborators can edit, reschedule, cancel and manage documents under the same rules as you; members of ${booking.tenant_name} already have this access.`}
           size="md"
           footer={
             <div className="flex justify-end gap-2">
@@ -506,7 +524,7 @@ export function ChangeDetailsPage({
             </div>
           }
         >
-          <label className="field-label" htmlFor="collaborator-search">Search same-tenant colleagues</label>
+          <label className="field-label" htmlFor="collaborator-search">Search the Member Pool</label>
           <input id="collaborator-search" className="field" value={collaboratorSearch} onChange={(event) => setCollaboratorSearch(event.target.value)} placeholder="Name, username or email" />
           <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
             {collaboratorCandidates.map((candidate) => (
@@ -519,9 +537,9 @@ export function ChangeDetailsPage({
                 <span><span className="font-medium text-ink">{candidate.full_name}</span><span className="ml-2 text-xs text-ink-muted">@{candidate.username}</span></span>
               </label>
             ))}
-            {!collaboratorCandidates.length ? <p className="py-5 text-center text-sm text-ink-muted">No eligible colleagues found in this tenant group.</p> : null}
+            {!collaboratorCandidates.length ? <p className="py-5 text-center text-sm text-ink-muted">No matching Member Pool users.</p> : null}
           </div>
-          <p className="mt-3 text-xs text-ink-muted">Only the booking creator can add or remove collaborators. Collaborators cannot delegate access onward.</p>
+          <p className="mt-3 text-xs text-ink-muted">Only the original scheduler (or a Release Manager) can add or remove collaborators. Removing someone ends their access immediately; collaborators cannot delegate access onward.</p>
         </Modal>
       ) : null}
 

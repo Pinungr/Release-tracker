@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '../services/api'
 import type {
   AdminSettings,
-  DocumentCategory,
+  DocumentTypeConfig,
   Holiday,
   SlotConfig,
 } from '../types'
@@ -10,7 +10,7 @@ import { formatDate, formatSlotTime } from '../utils/dates'
 import { AdminTenantManager } from './AdminTenantManager'
 import { AdminUserManager } from './AdminUserManager'
 import { Drawer } from './Drawer'
-import { Calendar, Check, ChevronRight, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
+import { Calendar, Check, ChevronLeft, ChevronRight, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
 import { ConfirmationModal } from './Modal'
 import { useToast } from './ToastNotification'
@@ -29,17 +29,8 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'general', label: 'General', icon: <Settings className="size-4" /> },
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
-  { key: 'documents', label: 'Documents', icon: <Check className="size-4" /> },
+  { key: 'documents', label: 'Document uploads', icon: <Check className="size-4" /> },
 ]
-
-const DOCUMENT_LABELS: Record<DocumentCategory, string> = {
-  TEST_RESULTS: 'Non-Production Test Result',
-  INVENTORY: 'Inventory File',
-  IMPLEMENTATION_PLAN: 'Implementation Document',
-  VALIDATION_PLAN: 'Validation Plan',
-  DBA_SCRIPT: 'DBA Script',
-  SUPPORTING_DOCUMENTS: 'Supporting Documents',
-}
 
 interface AdminPanelProps {
   open: boolean
@@ -559,64 +550,158 @@ function HolidayManager({ onChanged }: { onChanged: () => void }) {
   )
 }
 
-/* --------------------------- Document settings --------------------------- */
+/* ---------------------- Document upload configuration ---------------------- */
 
 function DocumentSettings({ onChanged }: { onChanged: () => void }) {
   const toast = useToast()
-  const { data, setData, error } = useAsyncSection(() => api.getSettings())
-  const [busy, setBusy] = useState(false)
+  const { data, setData, error } = useAsyncSection(() => api.getDocumentTypes())
+  const [busyId, setBusyId] = useState<number | 'new' | null>(null)
+  const [names, setNames] = useState<Record<number, string>>({})
+  const [draft, setDraft] = useState({ label: '', description: '', is_required: false, allow_multiple: false })
 
-  async function save(mandatory: DocumentCategory[]) {
-    setBusy(true)
+  async function run(id: number | 'new', action: () => Promise<DocumentTypeConfig[]>, message: string) {
+    setBusyId(id)
     try {
-      const updated = await api.updateSettings({ mandatory_documents: mandatory })
-      setData(updated)
+      setData(await action())
       onChanged()
-      toast.success('Document requirements updated.')
+      toast.success(message)
+      return true
     } catch (caught) {
       toast.error('Could not save', caught instanceof ApiError ? caught.message : '')
+      return false
     } finally {
-      setBusy(false)
+      setBusyId(null)
     }
+  }
+
+  function move(index: number, offset: number) {
+    if (!data) return
+    const ids = data.map((t) => t.id)
+    const [moved] = ids.splice(index, 1)
+    ids.splice(index + offset, 0, moved)
+    void run(moved, () => api.reorderDocumentTypes(ids), 'Document order updated.')
   }
 
   return (
     <SectionShell
-      title="Document settings"
-      description="Choose which document categories are mandatory. Readiness on the board is calculated from this list."
+      title="Document upload configuration"
+      description="Choose the documents offered when scheduling. Required types must be uploaded before a slot can be booked and must always keep at least one file. Disabling a type hides it from new uploads; files already uploaded stay available. Switching a type to Single file applies to new uploads only; schedules keep the files they already have."
       error={error}
       loading={!data}
     >
       {data ? (
         <div className="space-y-3">
-          {(Object.keys(DOCUMENT_LABELS) as DocumentCategory[]).map((category) => (
-            <CheckboxField
-              key={category}
-              label={DOCUMENT_LABELS[category]}
-              name={`mandatory-${category}`}
-              checked={data.mandatory_documents.includes(category)}
-              onChange={(checked) => {
-                const next = checked
-                  ? [...data.mandatory_documents, category]
-                  : data.mandatory_documents.filter((c) => c !== category)
-                setData({ ...data, mandatory_documents: next })
-              }}
-              hint={
-                category === 'SUPPORTING_DOCUMENTS'
-                  ? 'Accepts multiple files.'
-                  : undefined
-              }
-            />
-          ))}
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={busy}
-            onClick={() => void save(data.mandatory_documents)}
-          >
-            {busy ? <Spinner className="size-4" /> : null}
-            Save document requirements
-          </button>
+          <ol className="space-y-2">
+            {data.map((type, index) => {
+              const busy = busyId === type.id
+              const name = names[type.id] ?? type.label
+              return (
+                <li key={type.id} className={`rounded-lg border p-3 ${type.is_active ? 'border-line bg-surface' : 'border-dashed border-line bg-canvas'}`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-col">
+                      <button type="button" className="btn-ghost btn-sm px-1 disabled:opacity-30" aria-label={`Move ${type.label} up`} disabled={index === 0 || busy} onClick={() => move(index, -1)}>
+                        <ChevronLeft className="size-3.5 rotate-90" />
+                      </button>
+                      <button type="button" className="btn-ghost btn-sm px-1 disabled:opacity-30" aria-label={`Move ${type.label} down`} disabled={index === data.length - 1 || busy} onClick={() => move(index, 1)}>
+                        <ChevronRight className="size-3.5 rotate-90" />
+                      </button>
+                    </div>
+                    <input
+                      className="field min-w-48 flex-1"
+                      aria-label={`Name of ${type.label}`}
+                      value={name}
+                      maxLength={120}
+                      onChange={(event) => setNames({ ...names, [type.id]: event.target.value })}
+                    />
+                    {name.trim() && name.trim() !== type.label ? (
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        disabled={busy}
+                        onClick={() => void run(type.id, () => api.updateDocumentType(type.id, { label: name.trim() }), 'Document type renamed.').then((ok) => {
+                          if (ok) setNames(({ [type.id]: _, ...rest }) => rest)
+                        })}
+                      >
+                        Rename
+                      </button>
+                    ) : null}
+                    {busy ? <Spinner className="size-4" /> : null}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="badge bg-canvas tnum text-ink-muted ring-1 ring-line">{type.key}</span>
+                    <select
+                      className="field w-auto py-1 text-xs"
+                      aria-label={`${type.label} requirement`}
+                      value={type.is_required ? 'required' : 'optional'}
+                      disabled={busy}
+                      onChange={(event) => void run(type.id, () => api.updateDocumentType(type.id, { is_required: event.target.value === 'required' }), 'Requirement updated.')}
+                    >
+                      <option value="required">Required</option>
+                      <option value="optional">Optional</option>
+                    </select>
+                    <select
+                      className="field w-auto py-1 text-xs"
+                      aria-label={`${type.label} file mode`}
+                      value={type.allow_multiple ? 'multiple' : 'single'}
+                      disabled={busy}
+                      onChange={(event) => void run(type.id, () => api.updateDocumentType(type.id, { allow_multiple: event.target.value === 'multiple' }), 'File mode updated.')}
+                    >
+                      <option value="single">Single file</option>
+                      <option value="multiple">Multiple files</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      disabled={busy}
+                      onClick={() => void run(type.id, () => api.updateDocumentType(type.id, { is_active: !type.is_active }), type.is_active ? 'Document type disabled.' : 'Document type enabled.')}
+                    >
+                      {type.is_active ? 'Disable' : 'Enable'}
+                    </button>
+                    <span className="text-ink-muted">{type.file_count} uploaded file{type.file_count === 1 ? '' : 's'}</span>
+                    {!type.is_active ? <span className="badge bg-slate-100 text-slate-500">Disabled</span> : null}
+                    {!type.allow_multiple && (type.multi_file_schedules ?? 0) > 0 ? (
+                      <span className="basis-full text-amber-800">
+                        {type.multi_file_schedules} schedule{type.multi_file_schedules === 1 ? '' : 's'} kept the several files uploaded
+                        before this type became Single file. Their next upload replaces those files with one.
+                      </span>
+                    ) : null}
+                    {type.file_count === 0 ? (
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm ml-auto text-rose-600 hover:bg-rose-50"
+                        disabled={busy}
+                        aria-label={`Delete ${type.label}`}
+                        onClick={() => void run(type.id, () => api.deleteDocumentType(type.id), 'Document type deleted.')}
+                      >
+                        <Trash className="size-3.5" />
+                      </button>
+                    ) : null}
+                  </div>
+                </li>
+              )
+            })}
+          </ol>
+
+          <div className="rounded-lg border border-line p-3">
+            <p className="text-sm font-semibold text-ink">Add a document type</p>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+              <TextField label="Name" name="new-document-type" value={draft.label} onChange={(v) => setDraft({ ...draft, label: v })} maxLength={120} />
+              <TextField label="Description" name="new-document-description" value={draft.description} onChange={(v) => setDraft({ ...draft, description: v })} hint="Optional guidance shown to schedulers." maxLength={1000} />
+              <CheckboxField label="Required" name="new-document-required" checked={draft.is_required} onChange={(v) => setDraft({ ...draft, is_required: v })} />
+              <CheckboxField label="Allow multiple files" name="new-document-multiple" checked={draft.allow_multiple} onChange={(v) => setDraft({ ...draft, allow_multiple: v })} />
+            </div>
+            <button
+              type="button"
+              className="btn-primary mt-3"
+              disabled={busyId === 'new' || !draft.label.trim()}
+              onClick={() => void run('new', () => api.createDocumentType({ ...draft, label: draft.label.trim(), description: draft.description.trim() || null }), 'Document type added.').then((ok) => {
+                if (ok) setDraft({ label: '', description: '', is_required: false, allow_multiple: false })
+              })}
+            >
+              {busyId === 'new' ? <Spinner className="size-4" /> : <Plus className="size-4" />}
+              Add document type
+            </button>
+          </div>
         </div>
       ) : null}
     </SectionShell>

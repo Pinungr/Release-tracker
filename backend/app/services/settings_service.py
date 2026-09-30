@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import ApplicationSetting, DocumentCategory
+from ..models import ApplicationSetting
 
 DEFAULTS: dict[str, object] = {
     "regular_slots_per_day": 4,
@@ -15,18 +15,12 @@ DEFAULTS: dict[str, object] = {
     "booking_freeze_dates": 2,
     "jira_required_at_booking": False,
     "max_file_size_mb": 20,
-    "mandatory_documents": [
-        DocumentCategory.TEST_RESULTS.value,
-        DocumentCategory.INVENTORY.value,
-        DocumentCategory.IMPLEMENTATION_PLAN.value,
-        DocumentCategory.VALIDATION_PLAN.value,
-        DocumentCategory.DBA_SCRIPT.value,
-    ],
 }
 
 INT_KEYS = {"regular_slots_per_day", "weekly_booking_limit", "booking_freeze_dates", "max_file_size_mb"}
 BOOL_KEYS = {"jira_required_at_booking"}
-LIST_KEYS = {"mandatory_documents"}
+#: Required/optional documents moved to the document_types table.
+LIST_KEYS: set[str] = set()
 
 LIMITS = {
     "regular_slots_per_day": (1, 12),
@@ -43,7 +37,6 @@ class AppSettings:
     booking_freeze_dates: int
     jira_required_at_booking: bool
     max_file_size_mb: int
-    mandatory_documents: list[str]
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -91,9 +84,6 @@ def update_settings(db: Session, changes: dict[str, object]) -> AppSettings:
         if key in LIMITS:
             low, high = LIMITS[key]
             value = max(low, min(high, int(value)))
-        if key == "mandatory_documents":
-            valid = {c.value for c in DocumentCategory}
-            value = [v for v in value if v in valid]  # type: ignore[union-attr]
         row = db.get(ApplicationSetting, key)
         if row is None:
             db.add(ApplicationSetting(key=key, value=_encode(key, value)))

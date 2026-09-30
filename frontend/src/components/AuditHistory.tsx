@@ -32,9 +32,24 @@ const EVENT_LABELS: Record<string, string> = {
   WORK_STARTED: 'Work started',
   CHANGE_NUMBER_UPDATED: 'Change Number updated',
   DOCUMENT_ADDED: 'Document uploaded',
+  DOCUMENT_REPLACED: 'Document replaced',
   DOCUMENT_DELETED: 'Document removed',
+  DOCUMENTS_DELETED: 'Selected documents removed',
+  COLLABORATOR_ADDED: 'Collaborator added',
+  COLLABORATOR_REMOVED: 'Collaborator removed',
   SLOT_MANUALLY_FROZEN: 'Slot frozen',
   SLOT_MANUALLY_UNFROZEN: 'Slot unfrozen',
+  AUTOMATIC_LOCK_UNLOCKED: 'Automatic lock unlocked',
+  AUTOMATIC_LOCK_RESTORED: 'Automatic lock restored',
+  DOCUMENT_TYPE_CREATED: 'Document type created',
+  DOCUMENT_TYPE_RENAMED: 'Document type renamed',
+  DOCUMENT_TYPE_UPDATED: 'Document type description updated',
+  DOCUMENT_TYPE_ENABLED: 'Document type enabled',
+  DOCUMENT_TYPE_DISABLED: 'Document type disabled',
+  DOCUMENT_TYPE_DELETED: 'Document type deleted',
+  DOCUMENT_TYPES_REORDERED: 'Document types reordered',
+  DOCUMENT_TYPE_REQUIREMENT_CHANGED: 'Document requirement changed',
+  DOCUMENT_TYPE_FILE_MODE_CHANGED: 'Document file mode changed',
   SLOT_CONFIG_UPDATED: 'Slot configuration updated',
   SETTINGS_UPDATED: 'Settings updated',
   HOLIDAY_CREATED: 'Holiday created',
@@ -46,6 +61,13 @@ const EVENT_LABELS: Record<string, string> = {
 }
 
 const hiddenKey = (key: string) => /pass|secret|token|hash/i.test(key)
+
+/** Why a non-admin was allowed to act on the schedule. */
+const ACCESS_LABELS: Record<string, string> = {
+  SCHEDULER: 'as scheduler',
+  TENANT_MEMBER: 'as tenant group member',
+  COLLABORATOR: 'as collaborator',
+}
 
 function valueText(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
@@ -67,6 +89,29 @@ function eventSummary(event: AuditEvent): string | null {
   }
   if (event.event_type === 'DOCUMENT_DELETED') {
     return `${valueText(oldValues.filename)} · ${valueText(oldValues.category)}`
+  }
+  if (event.event_type === 'DOCUMENT_REPLACED') {
+    return `${valueText(oldValues.filename)} → ${valueText(newValues.filename)} · ${valueText(newValues.category)}`
+  }
+  if (event.event_type === 'DOCUMENTS_DELETED') {
+    return valueText(oldValues.files)
+  }
+  if (event.event_type === 'COLLABORATOR_ADDED') return valueText(newValues.collaborator)
+  if (event.event_type === 'COLLABORATOR_REMOVED') return valueText(oldValues.collaborator)
+  if (event.event_type === 'AUTOMATIC_LOCK_UNLOCKED') {
+    return `${valueText(newValues.deployment_date)} · slot ${valueText(newValues.slot_number)}`
+  }
+  if (event.event_type === 'AUTOMATIC_LOCK_RESTORED') {
+    return `${valueText(oldValues.deployment_date)} · slot ${valueText(oldValues.slot_number)}`
+  }
+  if (event.event_type === 'DOCUMENT_TYPE_REQUIREMENT_CHANGED') {
+    return `${valueText(newValues.document_type)}: ${valueText(oldValues.requirement)} → ${valueText(newValues.requirement)}`
+  }
+  if (event.event_type === 'DOCUMENT_TYPE_FILE_MODE_CHANGED') {
+    return `${valueText(newValues.document_type)}: ${valueText(oldValues.file_mode)} → ${valueText(newValues.file_mode)}`
+  }
+  if (event.event_type === 'DOCUMENT_TYPE_RENAMED') {
+    return `${valueText(oldValues.label)} → ${valueText(newValues.label)}`
   }
   if (event.event_type === 'WORK_STARTED') {
     return `Change No. ${valueText(newValues.change_number)}`
@@ -230,6 +275,9 @@ export function AuditHistory({
                   {event.actor_type === 'ADMIN' ? <Shield className="size-3.5" /> : <User className="size-3.5" />}
                   <span className="font-medium text-ink">{actor}</span>
                   <span>· {titleCase(event.actor_type)}</span>
+                  {event.actor_access && ACCESS_LABELS[event.actor_access] ? (
+                    <span>· {ACCESS_LABELS[event.actor_access]}</span>
+                  ) : null}
                 </p>
 
                 {event.override_reason ? (

@@ -15,6 +15,8 @@ interface WeeklyScheduleProps {
   onBookEmergency: (day: DayView) => void
   onOpenBooking: (bookingId: number, bookingReference?: string) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
+  /** Admin/RM Unlock / Restore Lock of the automatic lock; a null slot means the whole date. */
+  onToggleLock?: (day: DayView, slot: SlotView | null) => void
   onAdjustCapacity: (day: DayView, delta: 1 | -1) => void
 }
 
@@ -75,6 +77,7 @@ export function WeeklySchedule({
   onBookEmergency,
   onOpenBooking,
   onToggleFreeze,
+  onToggleLock,
   onAdjustCapacity,
 }: WeeklyScheduleProps) {
   const visibleByDay = useMemo(() => {
@@ -123,6 +126,7 @@ export function WeeklySchedule({
           onBookEmergency={onBookEmergency}
           onOpenBooking={onOpenBooking}
           onToggleFreeze={onToggleFreeze}
+          onToggleLock={onToggleLock}
           onAdjustCapacity={onAdjustCapacity}
         />
       ))}

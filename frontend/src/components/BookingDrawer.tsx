@@ -55,7 +55,6 @@ export function BookingDrawer({
   open,
   onClose,
   settings,
-  isAdmin,
   isMemberPool = false,
   createTarget,
   editBooking,
@@ -318,7 +317,7 @@ export function BookingDrawer({
 
           <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             <Alert className="mt-0.5 size-4 shrink-0" />
-            <span>Your authenticated account owns this change record and controls future edits and documents.</span>
+            <span>You are the scheduler of this change record. Your tenant group, any collaborators you add and Release Managers can also update it and its documents.</span>
           </p>
 
           <div>
@@ -326,8 +325,6 @@ export function BookingDrawer({
             <DocumentUploader
               booking={created.booking}
               settings={settings}
-              isAdmin={isAdmin}
-              canManage={!isAdmin}
               onUpdated={(updated) => {
                 setCreated({ ...created, booking: updated })
                 onSaved()

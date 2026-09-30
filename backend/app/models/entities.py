@@ -58,28 +58,6 @@ ACTIVE_STATUSES = (
 )
 
 
-class DocumentCategory(str, enum.Enum):
-    TEST_RESULTS = "TEST_RESULTS"
-    INVENTORY = "INVENTORY"
-    IMPLEMENTATION_PLAN = "IMPLEMENTATION_PLAN"
-    VALIDATION_PLAN = "VALIDATION_PLAN"
-    DBA_SCRIPT = "DBA_SCRIPT"
-    SUPPORTING_DOCUMENTS = "SUPPORTING_DOCUMENTS"
-
-
-DOCUMENT_LABELS: dict[str, str] = {
-    DocumentCategory.TEST_RESULTS.value: "Non-Production Test Result",
-    DocumentCategory.INVENTORY.value: "Inventory File",
-    DocumentCategory.IMPLEMENTATION_PLAN.value: "Implementation Document",
-    DocumentCategory.VALIDATION_PLAN.value: "Validation Plan",
-    DocumentCategory.DBA_SCRIPT.value: "DBA Script",
-    DocumentCategory.SUPPORTING_DOCUMENTS.value: "Supporting Documents",
-}
-
-#: Categories that accept more than one file.
-MULTI_FILE_CATEGORIES = {DocumentCategory.SUPPORTING_DOCUMENTS.value}
-
-
 class Technology(str, enum.Enum):
     DATABRICKS = "Databricks"
     AZDF = "AzDF"
@@ -395,6 +373,59 @@ class SlotFreeze(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
+class AutomaticLockOverride(Base):
+    """Admin/RM exception to the automatic upcoming-date lock.
+
+    ``slot_number`` NULL unlocks the whole date (every slot and the emergency
+    queue); otherwise only that one normal slot. Manual slot freezes are a
+    separate control and are never touched by an override.
+    """
+
+    __tablename__ = "automatic_lock_overrides"
+    __table_args__ = (
+        UniqueConstraint("override_date", "slot_number", name="uq_lock_override_date_slot"),
+        Index("ix_lock_override_date", "override_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    override_date: Mapped[date] = mapped_column(Date, nullable=False)
+    slot_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class DocumentType(Base):
+    """Admin/RM-configured document upload option.
+
+    ``key`` is immutable and is what ``booking_attachments.category`` stores,
+    so renaming, disabling or reordering never orphans an uploaded file.
+    """
+
+    __tablename__ = "document_types"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_multiple: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class DailySlotCapacity(Base):
     """How many normal deployment slots one specific date carries.
 
@@ -450,6 +481,9 @@ class BookingAudit(Base):
     actor_type: Mapped[str] = mapped_column(String(16), nullable=False)  # USER | ADMIN | SYSTEM
     requester_email: Mapped[str | None] = mapped_column(String(180), nullable=True)
     admin_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Why a non-admin actor was allowed to act: SCHEDULER, TENANT_MEMBER or
+    # COLLABORATOR. NULL for administrators, system events and older rows.
+    actor_access: Mapped[str | None] = mapped_column(String(24), nullable=True)
     override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     old_values: Mapped[str | None] = mapped_column(Text, nullable=True)
     new_values: Mapped[str | None] = mapped_column(Text, nullable=True)

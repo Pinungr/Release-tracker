@@ -1,8 +1,7 @@
 from .entities import (
     ACTIVE_STATUSES,
-    DOCUMENT_LABELS,
-    MULTI_FILE_CATEGORIES,
     AccessGroup,
+    AutomaticLockOverride,
     ApplicationSetting,
     BookingCollaborator,
     BookingAssignment,
@@ -12,7 +11,7 @@ from .entities import (
     DailySlotCapacity,
     DeploymentBooking,
     DeploymentSlotConfiguration,
-    DocumentCategory,
+    DocumentType,
     GroupMembership,
     GroupType,
     Holiday,
@@ -24,9 +23,8 @@ from .entities import (
 
 __all__ = [
     "ACTIVE_STATUSES",
-    "DOCUMENT_LABELS",
-    "MULTI_FILE_CATEGORIES",
     "AccessGroup",
+    "AutomaticLockOverride",
     "ApplicationSetting",
     "BookingCollaborator",
     "BookingAssignment",
@@ -36,7 +34,7 @@ __all__ = [
     "DailySlotCapacity",
     "DeploymentBooking",
     "DeploymentSlotConfiguration",
-    "DocumentCategory",
+    "DocumentType",
     "GroupMembership",
     "GroupType",
     "Holiday",

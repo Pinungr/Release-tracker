@@ -17,6 +17,7 @@ from ..database import get_db
 from ..models import (
     ACTIVE_STATUSES,
     AccessGroup,
+    AutomaticLockOverride,
     BookingAudit,
     BookingStatus,
     DailySlotCapacity,
@@ -34,8 +35,14 @@ from ..schemas import (
     AuditEventOut,
     BookingDetail,
     DaySlotCapacityOut,
+    DocumentTypeCreate,
+    DocumentTypeOrder,
+    DocumentTypeOut,
+    DocumentTypeUpdate,
     HolidayIn,
     HolidayOut,
+    LockOverrideOut,
+    LockOverrideRequest,
     MoveBookingRequest,
     SettingsOut,
     SettingsUpdate,
@@ -52,7 +59,7 @@ from ..security import (
     require_admin,
     require_user,
 )
-from ..services import audit_service, booking_service, presenters, schedule_service, group_service, search_service
+from ..services import audit_service, booking_service, document_type_service, presenters, schedule_service, group_service, search_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
 from ..services.bootstrap import ensure_regular_slot_count
@@ -623,8 +630,6 @@ def write_settings(
 ) -> SettingsOut:
     before = presenters.settings_out(db)
     changes = payload.model_dump(exclude_none=True)
-    if "mandatory_documents" in changes:
-        changes["mandatory_documents"] = [c.value for c in payload.mandatory_documents or []]
     update_settings(db, changes)
     if "regular_slots_per_day" in changes:
         ensure_regular_slot_count(db, int(changes["regular_slots_per_day"]))
@@ -1120,6 +1125,215 @@ def unfreeze_slot(
     )
     db.delete(row)
     db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Automatic lock overrides (Unlock / Restore Lock)
+# --------------------------------------------------------------------------- #
+
+
+def _override_row(db: Session, day: date, slot_number: int | None) -> AutomaticLockOverride | None:
+    stmt = select(AutomaticLockOverride).where(AutomaticLockOverride.override_date == day)
+    stmt = stmt.where(
+        AutomaticLockOverride.slot_number.is_(None) if slot_number is None
+        else AutomaticLockOverride.slot_number == slot_number
+    )
+    return db.scalars(stmt).first()
+
+
+def _slot_overrides_on(db: Session, day: date) -> list[AutomaticLockOverride]:
+    return list(db.scalars(
+        select(AutomaticLockOverride)
+        .where(AutomaticLockOverride.override_date == day, AutomaticLockOverride.slot_number.is_not(None))
+        .order_by(AutomaticLockOverride.slot_number)
+    ).all())
+
+
+def _override_audit_booking(db: Session, day: date, slot_number: int | None) -> DeploymentBooking | None:
+    return _booking_in_slot(db, day, slot_number) if slot_number is not None else None
+
+
+@router.post("/lock-overrides", response_model=LockOverrideOut, status_code=status.HTTP_201_CREATED)
+def unlock_automatic_lock(
+    payload: LockOverrideRequest,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> LockOverrideOut:
+    """Unlock an automatically locked date (all slots) or one slot on it.
+
+    This is an exception to the automatic upcoming-date lock only. Manual
+    Freeze is untouched: a frozen slot stays frozen for tenant users and
+    collaborators until it is unfrozen separately. A whole-date unlock absorbs
+    any slot unlocks on that date, so one Restore Lock returns the whole date
+    to the automatic lock.
+    """
+    day, slot_number = payload.override_date, payload.slot_number
+    booking_service.assert_day_not_past(day)
+    if not booking_service.is_date_automatically_frozen(db, day):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This date is not automatically locked.")
+    if slot_number is not None and schedule_service.find_slot(db, day, slot_number) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected deployment slot does not exist.")
+    if _override_row(db, day, None) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This whole date is already unlocked.")
+    if _override_row(db, day, slot_number) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This slot is already unlocked.")
+    absorbed = _slot_overrides_on(db, day) if slot_number is None else []
+    for existing in absorbed:
+        db.delete(existing)
+    row = AutomaticLockOverride(
+        override_date=day,
+        slot_number=slot_number,
+        reason=(payload.reason or "").strip() or None,
+        created_by_user_id=admin.user_id,
+    )
+    db.add(row)
+    db.flush()
+    audit_service.record(
+        db,
+        event_type="AUTOMATIC_LOCK_UNLOCKED",
+        booking=_override_audit_booking(db, day, slot_number),
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        override_reason=row.reason,
+        new_values={
+            "deployment_date": day,
+            "slot_number": slot_number if slot_number is not None else "All slots and emergency queue",
+            "unlocked_by": admin.username,
+            "manually_frozen": booking_service.is_slot_manually_frozen(db, day, slot_number),
+            **({"replaced_slot_unlocks": [o.slot_number for o in absorbed]} if absorbed else {}),
+        },
+    )
+    db.commit()
+    return LockOverrideOut.model_validate(row)
+
+
+@router.delete("/lock-overrides/{override_date}", status_code=status.HTTP_204_NO_CONTENT)
+def restore_automatic_lock(
+    override_date: date,
+    slot_number: int | None = Query(default=None, ge=1, le=50),
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> None:
+    """Remove an unlock so the date/slot follows the automatic lock again.
+
+    Without ``slot_number`` every unlock on the date is removed, including any
+    slot-level ones, so no slot is left open after restoring the date.
+    """
+    booking_service.assert_day_not_past(override_date)
+    row = _override_row(db, override_date, slot_number)
+    slot_rows = _slot_overrides_on(db, override_date) if slot_number is None else []
+    if row is None and not slot_rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "There is no unlock to restore here.")
+    audit_service.record(
+        db,
+        event_type="AUTOMATIC_LOCK_RESTORED",
+        booking=_override_audit_booking(db, override_date, slot_number),
+        actor_type="ADMIN",
+        admin_username=admin.username,
+        old_values={
+            "deployment_date": override_date,
+            "slot_number": slot_number if slot_number is not None else "All slots and emergency queue",
+            "unlock_reason": row.reason if row is not None else None,
+            **({"slot_unlocks_removed": [o.slot_number for o in slot_rows]} if slot_rows else {}),
+        },
+        new_values={"restored_by": admin.username},
+    )
+    for stale in ([row] if row is not None else []) + slot_rows:
+        db.delete(stale)
+    db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Document upload configuration
+# --------------------------------------------------------------------------- #
+
+
+def _document_types_out(db: Session) -> list[DocumentTypeOut]:
+    counts = document_type_service.usage_counts(db)
+    multi = document_type_service.multi_file_schedule_counts(db)
+    return [
+        DocumentTypeOut.model_validate(t).model_copy(
+            update={"file_count": counts.get(t.key, 0), "multi_file_schedules": multi.get(t.key, 0)}
+        )
+        for t in document_type_service.all_types(db)
+    ]
+
+
+def _document_type(db: Session, type_id: int):
+    from ..models import DocumentType
+
+    doc_type = db.get(DocumentType, type_id)
+    if doc_type is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document type not found.")
+    return doc_type
+
+
+@router.get("/document-types", response_model=list[DocumentTypeOut])
+def list_document_types(
+    db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)
+) -> list[DocumentTypeOut]:
+    return _document_types_out(db)
+
+
+@router.post("/document-types", response_model=list[DocumentTypeOut], status_code=status.HTTP_201_CREATED)
+def create_document_type(
+    payload: DocumentTypeCreate,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> list[DocumentTypeOut]:
+    document_type_service.create(
+        db,
+        label=payload.label,
+        description=payload.description,
+        is_required=payload.is_required,
+        allow_multiple=payload.allow_multiple,
+        is_active=payload.is_active,
+        key=payload.key,
+        user_id=admin.user_id,
+        admin_username=admin.username,
+    )
+    db.commit()
+    return _document_types_out(db)
+
+
+@router.put("/document-types/order", response_model=list[DocumentTypeOut])
+def reorder_document_types(
+    payload: DocumentTypeOrder,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> list[DocumentTypeOut]:
+    document_type_service.reorder(db, payload.ids, user_id=admin.user_id, admin_username=admin.username)
+    db.commit()
+    return _document_types_out(db)
+
+
+@router.put("/document-types/{type_id}", response_model=list[DocumentTypeOut])
+def update_document_type(
+    type_id: int,
+    payload: DocumentTypeUpdate,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> list[DocumentTypeOut]:
+    document_type_service.update(
+        db,
+        _document_type(db, type_id),
+        payload.model_dump(exclude_unset=True),
+        user_id=admin.user_id,
+        admin_username=admin.username,
+    )
+    db.commit()
+    return _document_types_out(db)
+
+
+@router.delete("/document-types/{type_id}", response_model=list[DocumentTypeOut])
+def delete_document_type(
+    type_id: int,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> list[DocumentTypeOut]:
+    document_type_service.delete(db, _document_type(db, type_id), admin_username=admin.username)
+    db.commit()
+    return _document_types_out(db)
 
 
 # --------------------------------------------------------------------------- #

@@ -18,6 +18,7 @@ import type {
   BookingSummary,
   DaySlotCapacity,
   DocumentCategory,
+  DocumentTypeConfig,
   Holiday,
   ManagedUser,
   Schedule,
@@ -193,10 +194,11 @@ export const api = {
       body: json({ change_number }),
     }),
 
-  uploadAttachment: (id: number, category: DocumentCategory, file: File) => {
+  /** One file, or several for a Multiple Files type. A Single File upload replaces the current file. */
+  uploadAttachments: (id: number, category: DocumentCategory, files: File[]) => {
     const form = new FormData()
     form.append('category', category)
-    form.append('file', file)
+    for (const file of files) form.append('file', file)
     return request<BookingDetail>(`/bookings/${id}/attachments`, { method: 'POST', body: form })
   },
 
@@ -204,6 +206,12 @@ export const api = {
     request<BookingDetail>(`/bookings/${id}/attachments/${attachmentId}`, {
       method: 'DELETE',
       body: '{}',
+    }),
+
+  deleteAttachments: (id: number, attachmentIds: number[]) =>
+    request<BookingDetail>(`/bookings/${id}/attachments/bulk-delete`, {
+      method: 'POST',
+      body: json({ attachment_ids: attachmentIds }),
     }),
 
   downloadAttachment: (id: number, attachmentId: number, filename: string) =>
@@ -248,6 +256,35 @@ export const api = {
 
   unfreezeSlot: (freeze_date: string, slot_number: number) =>
     request<void>(`/admin/slot-freezes/${freeze_date}/${slot_number}`, { method: 'DELETE' }),
+
+  /** Admin/RM exception to the automatic lock; a null slot unlocks the whole date. */
+  unlockAutomaticLock: (override_date: string, slot_number: number | null, reason?: string) =>
+    request<{ id: number; override_date: string; slot_number: number | null; reason: string | null }>(
+      '/admin/lock-overrides',
+      { method: 'POST', body: json({ override_date, slot_number, reason: reason || null }) },
+    ),
+
+  restoreAutomaticLock: (override_date: string, slot_number: number | null) =>
+    request<void>(
+      `/admin/lock-overrides/${override_date}${slot_number !== null ? `?slot_number=${slot_number}` : ''}`,
+      { method: 'DELETE' },
+    ),
+
+  getDocumentTypes: () => request<DocumentTypeConfig[]>('/admin/document-types'),
+
+  createDocumentType: (payload: { label: string; description?: string | null; is_required: boolean; allow_multiple: boolean }) =>
+    request<DocumentTypeConfig[]>('/admin/document-types', { method: 'POST', body: json(payload) }),
+
+  updateDocumentType: (
+    id: number,
+    payload: Partial<Pick<DocumentTypeConfig, 'label' | 'description' | 'is_active' | 'is_required' | 'allow_multiple'>>,
+  ) => request<DocumentTypeConfig[]>(`/admin/document-types/${id}`, { method: 'PUT', body: json(payload) }),
+
+  reorderDocumentTypes: (ids: number[]) =>
+    request<DocumentTypeConfig[]>('/admin/document-types/order', { method: 'PUT', body: json({ ids }) }),
+
+  deleteDocumentType: (id: number) =>
+    request<DocumentTypeConfig[]>(`/admin/document-types/${id}`, { method: 'DELETE' }),
 
   moveBooking: (id: number, payload: Record<string, unknown>) =>
     request<BookingDetail>(`/admin/bookings/${id}/move`, { method: 'POST', body: json(payload) }),

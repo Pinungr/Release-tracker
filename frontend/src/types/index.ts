@@ -1,12 +1,7 @@
 /** Mirrors the FastAPI response schemas. Nothing here is hard-coded data. */
 
-export type DocumentCategory =
-  | 'TEST_RESULTS'
-  | 'INVENTORY'
-  | 'IMPLEMENTATION_PLAN'
-  | 'VALIDATION_PLAN'
-  | 'DBA_SCRIPT'
-  | 'SUPPORTING_DOCUMENTS'
+/** Key of an Admin/RM-configured document type (see DocumentTypeConfig). */
+export type DocumentCategory = string
 
 export type SlotState =
   | 'AVAILABLE'
@@ -29,6 +24,7 @@ export interface DocumentStatus {
   category: DocumentCategory
   label: string
   required: boolean
+  multiple?: boolean
   provided: boolean
   file_count: number
 }
@@ -50,6 +46,7 @@ export interface Attachment {
   size_bytes: number
   content_type: string | null
   uploaded_at: string
+  uploaded_by?: string | null
 }
 
 export interface AssignedUser {
@@ -83,6 +80,8 @@ export interface BookingSummary {
   is_past: boolean
   lock_reason: 'CURRENT_DATE' | 'PAST_DATE' | 'AUTOMATIC_DATE_FREEZE' | 'MANUAL_SLOT_FREEZE' | 'NONE'
   is_locked: boolean
+  /** An Admin/RM unlock currently lifts the automatic lock for this record. */
+  lock_overridden?: boolean
   documents: DocumentReadiness
   created_at: string
   updated_at: string
@@ -117,6 +116,8 @@ export interface BookingDetail extends BookingSummary {
   cancelled_by_user_id: number | null
   attachments: Attachment[]
   collaborators: AssignedUser[]
+  /** Why a non-admin caller may change this schedule. */
+  access_basis?: 'SCHEDULER' | 'TENANT_MEMBER' | 'COLLABORATOR' | null
   can_edit: boolean
   can_cancel: boolean
   can_reschedule: boolean
@@ -125,6 +126,7 @@ export interface BookingDetail extends BookingSummary {
   can_start_work: boolean
   can_download_attachments: boolean
   can_manage_attachments: boolean
+  can_manage_collaborators?: boolean
   slot_label: string
   slot_time: string
 }
@@ -145,6 +147,10 @@ export interface SlotView {
   state: SlotState
   bookable: boolean
   manually_frozen: boolean
+  /** The date is inside the automatic upcoming-date lock window. */
+  automatic_lock?: boolean
+  /** Which Admin/RM unlock lifts the automatic lock for this slot, if any. */
+  lock_override?: 'DATE' | 'SLOT' | null
   booking: BookingSummary | null
 }
 
@@ -187,6 +193,9 @@ export interface DayView {
   regular_slots_total: number
   regular_slots_used: number
   slots: SlotView[]
+  automatic_lock?: boolean
+  /** An Admin/RM unlocked the whole date (every slot and the emergency queue). */
+  date_unlocked?: boolean
   /** Emergency changes are an admin-only queue on the date, not a slot. */
   emergency_open: boolean
   emergency_closed_reason: string | null
@@ -205,8 +214,25 @@ export interface ScheduleSummary {
 export interface DocumentCatalogEntry {
   category: DocumentCategory
   label: string
+  description?: string | null
   required: boolean
   multiple: boolean
+}
+
+/** A document upload option as Admin/RM configure it. */
+export interface DocumentTypeConfig {
+  id: number
+  key: string
+  label: string
+  description: string | null
+  is_active: boolean
+  is_required: boolean
+  allow_multiple: boolean
+  display_order: number
+  /** Uploaded files referencing this type; such a type can only be disabled. */
+  file_count: number
+  /** Schedules holding more than one file of this type (kept as they are after a switch to Single). */
+  multi_file_schedules?: number
 }
 
 export interface PublicSettings {
@@ -215,7 +241,7 @@ export interface PublicSettings {
   booking_freeze_dates: number
   jira_required_at_booking: boolean
   max_file_size_mb: number
-  mandatory_documents: DocumentCategory[]
+  /** Active document types; `required` is the only source of mandatory documents. */
   document_catalog: DocumentCatalogEntry[]
   technologies: string[]
 }
@@ -323,7 +349,6 @@ export interface AdminSettings {
   booking_freeze_dates: number
   jira_required_at_booking: boolean
   max_file_size_mb: number
-  mandatory_documents: DocumentCategory[]
 }
 
 export interface SlotConfig {
@@ -344,6 +369,7 @@ export interface AuditEvent {
   actor_type: 'USER' | 'ADMIN' | 'SYSTEM'
   requester_email: string | null
   admin_username: string | null
+  actor_access?: 'SCHEDULER' | 'TENANT_MEMBER' | 'COLLABORATOR' | null
   override_reason: string | null
   old_values: Record<string, unknown> | null
   new_values: Record<string, unknown> | null

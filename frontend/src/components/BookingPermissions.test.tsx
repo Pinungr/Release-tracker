@@ -44,7 +44,7 @@ describe('authoritative booking permissions', () => {
   it.each([
     ['CURRENT_DATE', 'This booking is locked because deployments scheduled for today are read-only.'],
     ['PAST_DATE', 'This booking is historical and cannot be modified.'],
-    ['AUTOMATIC_DATE_FREEZE', 'This deployment date is inside the protected scheduling window.'],
+    ['AUTOMATIC_DATE_FREEZE', 'This deployment date is inside the automatic lock window. The Owner or a Release Manager can unlock it.'],
     ['MANUAL_SLOT_FREEZE', 'This slot was manually frozen by the Owner or a Release Manager.'],
   ] as const)('hides modification controls and explains %s for Admin', (reason, message) => {
     show(booking({ lock_reason: reason, is_past: reason === 'PAST_DATE', is_locked: true, can_edit: false, can_cancel: false,

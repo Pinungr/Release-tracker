@@ -24,6 +24,7 @@ interface DeploymentSlotProps {
   onBook: (day: DayView, slot: SlotView) => void
   onOpenBooking: (bookingId: number, bookingReference?: string) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
+  onToggleLock?: (day: DayView, slot: SlotView | null) => void
 }
 
 export function edgeFor(slot: SlotView, holiday: boolean, isHistorical: boolean): string {
@@ -63,10 +64,24 @@ export function DeploymentSlot({
   onBook,
   onOpenBooking,
   onToggleFreeze,
+  onToggleLock,
 }: DeploymentSlotProps) {
   const booking = slot.booking
   // Normal board availability comes from the backend and is the same for Admin and users.
   const canBook = booking === null && !readOnly && !isHistorical && slot.bookable
+  // A whole-date unlock is managed from the day header, not per slot.
+  const lockControl =
+    isAdmin && !readOnly && !isHistorical && slot.automatic_lock && slot.lock_override !== 'DATE' && onToggleLock ? (
+      <button
+        type="button"
+        onClick={() => onToggleLock(day, slot)}
+        className="btn-secondary btn-sm"
+        title={slot.lock_override === 'SLOT' ? 'Return this slot to the automatic lock' : 'Lift the automatic lock for this slot only'}
+      >
+        {slot.lock_override === 'SLOT' ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}
+        {slot.lock_override === 'SLOT' ? 'Restore lock' : 'Unlock'}
+      </button>
+    ) : null
 
   return (
     <div
@@ -163,6 +178,7 @@ export function DeploymentSlot({
             {booking.is_locked && booking.status !== 'CANCELLED' && !booking.is_emergency ? (
               <LockBadge />
             ) : null}
+            {lockControl}
             {isAdmin && !isHistorical ? (
               <button
                 type="button"
@@ -197,6 +213,7 @@ export function DeploymentSlot({
           </Cell>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 lg:col-span-2 lg:mt-0 lg:justify-end">
+            {lockControl}
             {isAdmin && !isHistorical ? (
               <button
                 type="button"

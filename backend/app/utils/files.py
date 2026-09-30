@@ -31,6 +31,8 @@ ALLOWED_EXTENSIONS = {
     ".jpeg",
 }
 
+#: Folders of the originally hard-coded categories, kept so existing files
+#: resolve. Document types added later use their key (see ``category_folder``).
 CATEGORY_FOLDERS = {
     "TEST_RESULTS": "test-results",
     "INVENTORY": "inventory",
@@ -41,6 +43,7 @@ CATEGORY_FOLDERS = {
 }
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+_CATEGORY_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,39}$")
 
 
 def storage_root() -> Path:
@@ -72,10 +75,17 @@ def build_stored_name(raw: str) -> str:
     return f"{uuid.uuid4().hex}{extension_of(raw)}"
 
 
-def attachment_dir(booking_id: int, category: str) -> Path:
+def category_folder(category: str) -> str:
     folder = CATEGORY_FOLDERS.get(category)
-    if folder is None:
+    if folder is not None:
+        return folder
+    if not _CATEGORY_KEY.match(category or ""):
         raise ValueError(f"Unknown document category: {category}")
+    return category.lower().replace("_", "-")
+
+
+def attachment_dir(booking_id: int, category: str) -> Path:
+    folder = category_folder(category)
     target = (storage_root() / str(int(booking_id)) / folder).resolve()
     _assert_inside(target)
     target.mkdir(parents=True, exist_ok=True)

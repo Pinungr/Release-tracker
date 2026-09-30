@@ -123,12 +123,14 @@ frontend's copies exist only for immediate feedback.
 | Sign up | self-service | promoted by the owner |
 | See the weekly board | ✅ | ✅ |
 | Schedule a normal change | ✅ | ✅ |
-| See / edit / cancel a change | own changes; assigned RM users can view and start work | any |
-| Upload/delete documents | own editable changes | editable changes |
-| Download documents | own changes and assigned RM changes, including read-only records | any |
+| See a change | any | any |
+| Edit / reschedule / cancel a change | changes they scheduled, changes of their tenant group, and changes they collaborate on | any |
+| Upload/delete documents | the same changes, while editable | editable changes |
+| Download documents | any change, including read-only records and files of disabled document types | any |
 | Emergency changes | view only | create, edit, cancel |
 | Exceed the tenant weekly limit | ❌ | ✅ automatic administrator bypass, audited |
-| Book/edit/cancel inside the automatic protected date window | ❌ | ❌ |
+| Book/edit/cancel inside the automatic lock window | only after an Admin/RM unlocks it, and only if the slot is not manually frozen | only after unlocking it |
+| Unlock / Restore Lock the automatic lock | ❌ | ✅ audited |
 | Users, tenants, holidays, slots, settings, audit | ❌ | ✅ |
 
 Everyone uses **one login**. There is no separate administrator sign-in and no
@@ -170,7 +172,7 @@ always exists.
 | Normal changes per **tenant** per week | 2 | Admin → General |
 | Booking/edit freeze | Today + next 2 valid deployment dates | Admin → General; manual per-slot freeze also available |
 | Maximum upload size | 20 MB per file | Admin → General |
-| Mandatory documents | Test result, inventory, implementation document, validation plan, DBA script | Admin → Documents |
+| Document upload types | Test result, inventory, implementation document, validation plan, DBA script (required, single file); supporting documents (optional, multiple files) | Admin → Document uploads |
 | Working week | Sunday–Thursday for normal deployment slots; Friday/Saturday skipped | fixed |
 | Timezone | Asia/Kolkata | `TIMEZONE` |
 
@@ -190,6 +192,42 @@ above the date capacity, and occupied slots. Results are ordered by date and
 slot number. The backend revalidates the destination on every reschedule POST.
 Tenant weekly limits still apply to normal users; Admin weekly-limit bypasses
 remain audited.
+
+**Who may change a schedule.** The backend decides this in one place
+(`booking_service.schedule_actor` / `schedule_permissions`): Admins and Release
+Managers; the original scheduler; any active member of the schedule's tenant
+group; and collaborators the scheduler added from the Member Pool. All of them
+remain subject to the date rules, cancellation, the automatic lock and Manual
+Freeze. A completed/closed schedule is read-only for everyone except
+Admin/RM, and nobody can cancel or reschedule it. Collaborators can be added
+or removed only by the scheduler or an Admin/RM, and not on cancelled,
+past/current or emergency records. Management is always read-only. Removing a collaborator or
+leaving the tenant group ends that access on the next request. Audit events
+record the person who acted and why they were allowed (scheduler, tenant group
+member or collaborator).
+
+**Automatic lock vs. Manual Freeze.** The automatic lock (today plus the next
+configured deployment dates) and Manual Freeze are independent controls. An
+Admin/RM can **Unlock** one slot or a whole date inside the automatic window
+and later **Restore Lock**; both are audited. Unlocking a whole date absorbs
+any slot unlocks on it, and restoring the date relocks every slot. Unlocking never unfreezes a slot
+and unfreezing never unlocks it. Tenant users and collaborators can change a
+schedule only when it is unlocked *and* not frozen. Admins/RMs must unlock
+first, and may then still act on a frozen slot with an audited override.
+Past and current dates can never be unlocked.
+
+**Document upload types are configured, not hard-coded.** Admin → Document
+uploads lets Admin/RM add, rename, enable/disable, reorder and mark each type
+Required/Optional and Single/Multiple files. The backend enforces it: a Single
+File upload replaces the existing file, Multiple Files types accept several
+files per upload and more later, and each file is stored, listed, downloaded
+and deleted on its own (individually or as a selection). The last file of a
+Required type cannot be deleted; upload a replacement instead. A type that has
+uploaded files can only be disabled, never deleted, so historical documents
+stay visible and downloadable. Switching a type from Multiple to Single applies
+to new uploads only: schedules keep the files they already have (Admin →
+Document uploads shows how many), and their next upload replaces those files
+with one.
 
 **Manual Admin overrides are explicit.** For exceptional API operations, normal
 booking creation/update or `/admin/bookings/{id}/move` requires

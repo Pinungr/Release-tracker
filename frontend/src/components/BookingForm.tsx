@@ -321,7 +321,7 @@ export function BookingForm({
         <section className="border-t border-line pt-5">
           <h3 className="text-sm font-semibold text-ink">Deployment documents</h3>
           <p className="mt-0.5 mb-3 text-xs text-ink-muted">
-            Upload every document marked Required before the slot can be booked. Supporting documents can be added now or later.
+            Upload every document marked Required before the slot can be booked. Optional documents can be added now or later.
           </p>
           <div className="space-y-3">
             {settings.document_catalog.map((entry) => {

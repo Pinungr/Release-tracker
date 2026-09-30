@@ -1,6 +1,6 @@
 import type { DayView, SlotView } from '../types'
 import { DeploymentSlot, SLOT_GRID } from './DeploymentSlot'
-import { Minus, Plus, Sun } from './Icons'
+import { Lock, Minus, Plus, Sun, Unlock } from './Icons'
 
 interface DayScheduleProps {
   day: DayView
@@ -14,6 +14,7 @@ interface DayScheduleProps {
   onBookEmergency: (day: DayView) => void
   onOpenBooking: (bookingId: number, bookingReference?: string) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
+  onToggleLock?: (day: DayView, slot: SlotView | null) => void
   onAdjustCapacity: (day: DayView, delta: 1 | -1) => void
 }
 
@@ -31,6 +32,7 @@ export function DaySchedule({
   onBookEmergency,
   onOpenBooking,
   onToggleFreeze,
+  onToggleLock,
   onAdjustCapacity,
 }: DayScheduleProps) {
   // Treat the API's authoritative `today` value as a second guard. This keeps
@@ -79,9 +81,40 @@ export function DaySchedule({
           </span>
         ) : null}
 
+        {day.automatic_lock ? (
+          <span className="tooltip-host">
+            {day.date_unlocked ? (
+              <span className="badge bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
+                <Unlock className="size-3" /> Unlocked
+              </span>
+            ) : (
+              <span className="badge bg-slate-100 text-slate-600 ring-1 ring-slate-200">
+                <Lock className="size-3" /> Automatic lock
+              </span>
+            )}
+            <span className="tooltip">
+              {day.date_unlocked
+                ? 'The Owner or a Release Manager lifted the automatic lock for this whole date. Manual slot freezes still apply.'
+                : 'Inside the automatic lock window. Only the Owner or a Release Manager can unlock it.'}
+            </span>
+          </span>
+        ) : null}
+
         <span className="ml-auto text-xs font-semibold tnum text-ink-muted">
           Slots used: <span className="text-ink">{usage}</span>
         </span>
+
+        {isAdmin && !readOnly && !isHistorical && day.automatic_lock && onToggleLock ? (
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => onToggleLock(day, null)}
+            title={day.date_unlocked ? 'Return this date to the automatic lock' : 'Lift the automatic lock for every slot and the emergency queue on this date'}
+          >
+            {day.date_unlocked ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}
+            {day.date_unlocked ? 'Restore lock' : 'Unlock date'}
+          </button>
+        ) : null}
 
         {/* Normal slot capacity for this one date. Emergency changes have
             their own queue below and are never affected by these. */}
@@ -158,6 +191,7 @@ export function DaySchedule({
               onBook={onBook}
               onOpenBooking={onOpenBooking}
               onToggleFreeze={onToggleFreeze}
+              onToggleLock={onToggleLock}
             />
           ))
         )}

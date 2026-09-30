@@ -6,8 +6,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..models import DocumentCategory
-
 
 class SettingsOut(BaseModel):
     regular_slots_per_day: int
@@ -15,7 +13,6 @@ class SettingsOut(BaseModel):
     booking_freeze_dates: int
     jira_required_at_booking: bool
     max_file_size_mb: int
-    mandatory_documents: list[str]
 
 
 class SettingsUpdate(BaseModel):
@@ -24,7 +21,6 @@ class SettingsUpdate(BaseModel):
     booking_freeze_dates: int | None = Field(default=None, ge=0, le=25)
     jira_required_at_booking: bool | None = None
     max_file_size_mb: int | None = Field(default=None, ge=1, le=200)
-    mandatory_documents: list[DocumentCategory] | None = None
 
 
 class SlotConfigIn(BaseModel):
@@ -113,3 +109,63 @@ class SlotFreezeOut(BaseModel):
     freeze_date: date
     slot_number: int
     note: str | None
+
+
+class LockOverrideRequest(BaseModel):
+    override_date: date
+    #: Omit to unlock the whole date (every slot and the emergency queue).
+    slot_number: int | None = Field(default=None, ge=1, le=50)
+    reason: Annotated[str | None, Field(default=None, max_length=255)] = None
+
+
+class LockOverrideOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    override_date: date
+    slot_number: int | None
+    reason: str | None
+
+
+class DocumentTypeCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    label: Annotated[str, Field(min_length=1, max_length=120)]
+    #: Optional stable identifier; derived from the label when omitted.
+    key: Annotated[str | None, Field(default=None, max_length=40)] = None
+    description: Annotated[str | None, Field(default=None, max_length=1000)] = None
+    is_required: bool = False
+    allow_multiple: bool = False
+    is_active: bool = True
+
+
+class DocumentTypeUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    label: Annotated[str | None, Field(default=None, min_length=1, max_length=120)] = None
+    description: Annotated[str | None, Field(default=None, max_length=1000)] = None
+    is_required: bool | None = None
+    allow_multiple: bool | None = None
+    is_active: bool | None = None
+
+
+class DocumentTypeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    key: str
+    label: str
+    description: str | None
+    is_active: bool
+    is_required: bool
+    allow_multiple: bool
+    display_order: int
+    #: Uploaded files that reference this type (such a type can only be disabled).
+    file_count: int = 0
+    #: Schedules holding more than one file of this type. For a Single File
+    #: type these predate a Multiple -> Single switch and are kept as they are.
+    multi_file_schedules: int = 0
+
+
+class DocumentTypeOrder(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=200)

@@ -13,7 +13,7 @@ from pydantic import ValidationError as PydanticValidationError
 from fastapi.exceptions import RequestValidationError
 
 from ..database import get_db
-from ..models import DeploymentBooking, DocumentCategory, BookingAudit, BookingCollaborator, User
+from ..models import AccessGroup, DeploymentBooking, BookingAudit, BookingCollaborator, GroupMembership, GroupType, User
 from ..schemas import (
     BookingCancel,
     BookingCreate,
@@ -21,13 +21,14 @@ from ..schemas import (
     BookingDetail,
     BookingSummary,
     BookingUpdate,
+    CollaboratorsUpdate,
     RescheduleRequest,
     SlotOptionOut,
     StartWorkRequest,
 )
 from ..security import AdminPrincipal, UserPrincipal, require_user
 from ..security.ratelimit import enforce
-from ..services import attachment_service, booking_service, presenters, audit_service, group_service, search_service
+from ..services import attachment_service, booking_service, document_type_service, presenters, audit_service, group_service, search_service
 from ..services.booking_service import Actor
 from ..services.settings_service import get_app_settings
 from ..services.comment_images import ImageReference, ReferencedImage, validated_images, resolve_image, is_image
@@ -45,7 +46,7 @@ def _assert_can_view(
 
     Tenants need to see the whole board's workload, so viewing, reading,
     cloning and commenting are open to every authenticated account. Changing a
-    record is not: that goes through ``_owner_actor``. Internal RM notes stay
+    record is not: that goes through ``booking_service.schedule_actor``. Internal RM notes stay
     hidden from tenants, but that is decided by role in the comment routes, not
     here.
     """
@@ -61,22 +62,6 @@ def _assert_not_management(
     principal = admin or user
     if principal is not None and group_service.is_management(db, principal.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Management access is read-only.")
-
-
-def _owner_actor(
-    db: Session,
-    booking: DeploymentBooking,
-    admin: AdminPrincipal | None,
-    user: UserPrincipal | None,
-) -> Actor:
-    _assert_not_management(db, admin, user)
-    if admin is not None:
-        return Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
-    if user is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
-    if booking.created_by_user_id != user.user_id and not booking_service.user_is_collaborator(db, booking, user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not authorized to modify this booking.")
-    return Actor(is_admin=False, requester_email=user.email, user_id=user.user_id)
 
 
 @router.post("", response_model=BookingCreated, status_code=status.HTTP_201_CREATED)
@@ -117,19 +102,34 @@ async def create_booking(
 
     form = await request.form()
     app_settings = get_app_settings(db)
-    uploads: dict[DocumentCategory, list[object]] = {}
+    doc_types = document_type_service.active_types(db)
+    uploads: list[tuple[object, list[object]]] = []
     missing: list[str] = []
 
-    for category in DocumentCategory:
+    # Required/Single/Multiple come from the active configured document types.
+    for doc_type in doc_types:
         files = [
             item
-            for item in form.getlist(f"document_{category.value}")
+            for item in form.getlist(f"document_{doc_type.key}")
             if getattr(item, "filename", "")
         ]
-        uploads[category] = files
-        if category.value in app_settings.mandatory_documents and not files:
-            from ..models import DOCUMENT_LABELS
-            missing.append(DOCUMENT_LABELS[category.value])
+        if doc_type.is_required and not files:
+            missing.append(doc_type.label)
+        if len(files) > 1 and not doc_type.allow_multiple:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"“{doc_type.label}” accepts a single file.",
+            )
+        if files:
+            uploads.append((doc_type, files))
+
+    # Files for a disabled or unknown type are refused rather than silently dropped.
+    active_keys = {t.key for t in doc_types}
+    for field in form.keys():
+        if not field.startswith("document_") or field[len("document_"):] in active_keys:
+            continue
+        if any(getattr(item, "filename", "") for item in form.getlist(field)):
+            document_type_service.uploadable(db, field[len("document_"):])
 
     if missing:
         raise HTTPException(
@@ -140,15 +140,12 @@ async def create_booking(
     booking: DeploymentBooking | None = None
     try:
         booking = booking_service.create_booking(db, booking_payload, actor, commit=False)
-        for category, files in uploads.items():
-            for upload in files:
-                attachment_service.save_upload(
-                    db, booking, category, upload, actor, commit=False  # type: ignore[arg-type]
-                )
+        for doc_type, files in uploads:
+            attachment_service.save_uploads(
+                db, booking, doc_type, files, actor, commit=False  # type: ignore[arg-type]
+            )
         if clone_source is not None:
-            audit_service.record(db, booking=booking, event_type="BOOKING_CLONED",
-                actor_type=actor.actor_type, requester_email=booking.requester_email,
-                admin_username=actor.admin_username,
+            booking_service.audit(db, actor, "BOOKING_CLONED", booking,
                 new_values={"source_id": clone_source.id, "source_reference": clone_source.booking_reference})
         db.commit()
         db.refresh(booking)
@@ -277,7 +274,7 @@ def update_booking(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    actor = _owner_actor(db, booking, admin, user)
+    actor = booking_service.schedule_actor(db, booking, admin=admin, user=user)
     updated = booking_service.update_booking(db, booking, payload, actor)
     return presenters.booking_detail(db, updated, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
@@ -291,7 +288,7 @@ def cancel_booking(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingSummary:
-    actor = _owner_actor(db, booking, admin, user)
+    actor = booking_service.schedule_actor(db, booking, admin=admin, user=user)
     cancelled = booking_service.cancel_booking(db, booking, actor, payload.override_reason)
     return presenters.booking_summary(db, cancelled, get_app_settings(db))
 
@@ -306,10 +303,10 @@ def reschedule_options(
 ) -> list[SlotOptionOut]:
     """Destinations this caller is allowed to move the booking to.
 
-    Only the owner or an administrator may reschedule, so the same check
-    guards the picker: nobody sees availability for a record they cannot move.
+    Only callers who may reschedule the record get options, so nobody sees
+    availability for a record they cannot move.
     """
-    actor = _owner_actor(db, booking, admin, user)
+    actor = booking_service.schedule_actor(db, booking, admin=admin, user=user)
     return [
         presenters.slot_option_out(option)
         for option in booking_service.next_available_slots(db, booking, actor, limit=limit)
@@ -324,7 +321,7 @@ def reschedule_booking(
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    actor = _owner_actor(db, booking, admin, user)
+    actor = booking_service.schedule_actor(db, booking, admin=admin, user=user)
     moved = booking_service.reschedule_booking(
         db,
         booking,
@@ -336,79 +333,107 @@ def reschedule_booking(
     return presenters.booking_detail(db, moved, get_app_settings(db), is_admin=actor.is_admin, user_id=actor.user_id)
 
 
+def _assert_may_manage_collaborators(
+    db: Session, booking: DeploymentBooking, admin: AdminPrincipal | None, user: UserPrincipal | None
+) -> int:
+    """The rule lives in ``booking_service.collaborator_change_restriction``."""
+    principal = admin or user
+    error = booking_service.collaborator_change_restriction(
+        db, booking, user_id=principal.user_id if principal else None, is_admin=admin is not None
+    )
+    if error is not None:
+        raise error
+    return principal.user_id  # type: ignore[union-attr]
+
+
+def _member_pool_users(db: Session):
+    return (
+        select(User)
+        .join(GroupMembership, GroupMembership.user_id == User.id)
+        .join(AccessGroup, AccessGroup.id == GroupMembership.group_id)
+        .where(
+            AccessGroup.group_type == GroupType.MEMBER_POOL.value,
+            AccessGroup.is_system.is_(True),
+            User.is_active.is_(True),
+            User.is_owner.is_(False),
+        )
+    )
+
+
 @router.get("/{booking_id}/collaborator-candidates", response_model=list[dict])
 def collaborator_candidates(
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=100),
     booking: DeploymentBooking = Depends(get_booking),
     db: Session = Depends(get_db),
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> list[dict]:
-    # Only the booking creator or an administrator manages delegation.
-    _assert_not_management(db, admin, user)
-    if admin is None and (user is None or booking.created_by_user_id != user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the booking owner can manage collaborators.")
-    allowed_ids = group_service.tenant_ids_for_user(db, user.user_id) if user is not None else {booking.tenant_id}
-    if admin is None and booking.tenant_id not in allowed_ids:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are no longer a member of this tenant group.")
-    stmt = (
-        select(User)
-        .join(group_service.GroupMembership, group_service.GroupMembership.user_id == User.id)
-        .join(group_service.AccessGroup, group_service.AccessGroup.id == group_service.GroupMembership.group_id)
-        .where(
-            group_service.AccessGroup.tenant_id == booking.tenant_id,
-            User.is_active.is_(True),
-            User.id != booking.created_by_user_id,
-        )
-        .distinct()
-        .order_by(User.full_name, User.username)
-    )
+    """Search the Member Pool for people to add as collaborators.
+
+    Members of the schedule's tenant group already share access, so they are
+    not offered; current collaborators are always listed so they can be removed.
+    """
+    _assert_may_manage_collaborators(db, booking, admin, user)
+    existing = set(db.scalars(select(BookingCollaborator.user_id).where(BookingCollaborator.booking_id == booking.id)).all())
+    stmt = _member_pool_users(db).where(User.id != booking.created_by_user_id)
     if q and q.strip():
         term = f"%{q.strip()}%"
         stmt = stmt.where((User.full_name.ilike(term)) | (User.username.ilike(term)) | (User.email.ilike(term)))
-    existing = set(db.scalars(select(BookingCollaborator.user_id).where(BookingCollaborator.booking_id == booking.id)).all())
+    candidates = {u.id: u for u in db.scalars(stmt.distinct().order_by(User.full_name, User.username).limit(50)).all()}
+    if existing:
+        for u in db.scalars(select(User).where(User.id.in_(existing))).all():
+            candidates.setdefault(u.id, u)
     return [
         {"id": u.id, "full_name": u.full_name, "username": u.username, "email": u.email, "selected": u.id in existing}
-        for u in db.scalars(stmt.limit(50)).all()
+        for u in sorted(candidates.values(), key=lambda u: (u.id not in existing, u.full_name.lower(), u.username))
     ]
 
 
 @router.put("/{booking_id}/collaborators", response_model=BookingDetail)
 def replace_collaborators(
-    payload: dict,
+    payload: CollaboratorsUpdate,
     booking: DeploymentBooking = Depends(get_booking),
     db: Session = Depends(get_db),
     admin: AdminPrincipal | None = Depends(current_admin),
     user: UserPrincipal | None = Depends(current_user),
 ) -> BookingDetail:
-    _assert_not_management(db, admin, user)
-    if admin is None and (user is None or booking.created_by_user_id != user.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the booking owner can manage collaborators.")
-    actor_id = admin.user_id if admin is not None else user.user_id  # type: ignore[union-attr]
-    raw = payload.get("user_ids", [])
-    if not isinstance(raw, list):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "user_ids must be a list.")
-    try:
-        user_ids = list(dict.fromkeys(int(v) for v in raw))
-    except (TypeError, ValueError):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid collaborator user id.") from None
-    valid = set(db.scalars(
-        select(User.id)
-        .join(group_service.GroupMembership, group_service.GroupMembership.user_id == User.id)
-        .join(group_service.AccessGroup, group_service.AccessGroup.id == group_service.GroupMembership.group_id)
-        .where(
-            User.id.in_(user_ids),
-            User.is_active.is_(True),
-            group_service.AccessGroup.tenant_id == booking.tenant_id,
-        )
-    ).all()) if user_ids else set()
-    if valid != set(user_ids):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Collaborators must be active members of this booking's tenant group.")
-    db.query(BookingCollaborator).filter(BookingCollaborator.booking_id == booking.id).delete(synchronize_session=False)
-    for uid in user_ids:
-        if uid == booking.created_by_user_id:
-            continue
+    """Set the schedule's collaborators; additions come from the Member Pool.
+
+    A collaborator gets the scheduler's schedule-level permissions (still
+    subject to lock, freeze, date and status rules) and never Admin/RM rights.
+    Removal takes effect on the collaborator's next request.
+    """
+    actor_id = _assert_may_manage_collaborators(db, booking, admin, user)
+    user_ids = [uid for uid in dict.fromkeys(payload.user_ids) if uid != booking.created_by_user_id]
+    existing = set(db.scalars(select(BookingCollaborator.user_id).where(BookingCollaborator.booking_id == booking.id)).all())
+    added = [uid for uid in user_ids if uid not in existing]
+    removed = [uid for uid in existing if uid not in set(user_ids)]
+    if added:
+        eligible = {u.id for u in db.scalars(_member_pool_users(db).where(User.id.in_(added))).all()}
+        if eligible != set(added):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Collaborators must be active Member Pool users.",
+            )
+    actor = (
+        Actor(is_admin=True, admin_username=admin.username, user_id=admin.user_id)
+        if admin is not None
+        else Actor(is_admin=False, requester_email=user.email, user_id=user.user_id,  # type: ignore[union-attr]
+                   access=booking_service.ACCESS_SCHEDULER)
+    )
+    names = {u.id: u.full_name for u in db.scalars(select(User).where(User.id.in_(added + removed))).all()} if (added or removed) else {}
+    if removed:
+        db.query(BookingCollaborator).filter(
+            BookingCollaborator.booking_id == booking.id, BookingCollaborator.user_id.in_(removed)
+        ).delete(synchronize_session=False)
+    for uid in added:
         db.add(BookingCollaborator(booking_id=booking.id, user_id=uid, added_by_user_id=actor_id))
+    for uid in added:
+        booking_service.audit(db, actor, "COLLABORATOR_ADDED", booking,
+                              new_values={"collaborator": names.get(uid), "collaborator_user_id": uid})
+    for uid in removed:
+        booking_service.audit(db, actor, "COLLABORATOR_REMOVED", booking,
+                              old_values={"collaborator": names.get(uid), "collaborator_user_id": uid})
     db.commit()
     db.refresh(booking)
     return presenters.booking_detail(db, booking, get_app_settings(db), is_admin=admin is not None, user_id=actor_id)
