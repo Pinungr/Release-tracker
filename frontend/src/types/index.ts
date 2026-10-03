@@ -292,7 +292,7 @@ export interface GroupMember {
 export interface AccessGroup {
   id: number
   name: string
-  group_type: 'MEMBER_POOL' | 'RELEASE_MANAGERS' | 'TENANTS' | 'TENANT_SUBGROUP' | 'MANAGEMENT' | 'CUSTOM'
+  group_type: 'MEMBER_POOL' | 'RELEASE_MANAGERS' | 'TENANTS' | 'TENANT_SUBGROUP' | 'MANAGEMENT' | 'AI_USERS' | 'CUSTOM'
   parent_group_id: number | null
   tenant_id: number | null
   description: string | null
@@ -345,6 +345,56 @@ export interface AuthUser {
   is_owner?: boolean
   must_change_password?: boolean
   groups?: Pick<AccessGroup, 'id' | 'name' | 'group_type' | 'tenant_id'>[]
+}
+
+
+export interface AITenantAccess {
+  tenant_id: number
+  tenant_name: string
+  tenant_code: string | null
+  is_active: boolean
+  ai_enabled: boolean
+}
+
+export interface AIAccessSettings {
+  ai_enabled: boolean
+  management_enabled: boolean
+  release_managers_enabled: boolean
+  mcp_enabled_by_environment: boolean
+  mcp_api_key_configured: boolean
+  ai_api_key_configured: boolean
+  ai_model: string
+  ai_users_group: {
+    id: number
+    name: string
+    member_count: number
+  }
+  tenants: AITenantAccess[]
+}
+
+
+export interface AIAssistantAccess {
+  master_enabled: boolean
+  allowed: boolean
+  reason: string
+  source: string | null
+  chat_configured: boolean
+  provider: string
+  provider_label: string
+  model: string
+  read_only: boolean
+}
+
+export interface AIChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface AIChatResponse {
+  answer: string
+  model: string
+  provider?: string
+  read_only: boolean
 }
 
 export interface AdminSettings {

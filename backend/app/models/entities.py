@@ -121,6 +121,7 @@ class GroupType(str, enum.Enum):
     TENANTS = "TENANTS"
     TENANT_SUBGROUP = "TENANT_SUBGROUP"
     MANAGEMENT = "MANAGEMENT"
+    AI_USERS = "AI_USERS"
     CUSTOM = "CUSTOM"
 
 

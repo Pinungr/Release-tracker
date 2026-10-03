@@ -6,6 +6,10 @@ import type {
   AuthUser,
   AccessGroup,
   GroupMember,
+  AIAccessSettings,
+  AIAssistantAccess,
+  AIChatMessage,
+  AIChatResponse,
   AdminSettings,
   AdminTenant,
   AuditEvent,
@@ -225,6 +229,23 @@ export const api = {
   updateSettings: (payload: Partial<AdminSettings>) =>
     request<AdminSettings>('/admin/settings', { method: 'PUT', body: json(payload) }),
 
+  getAIAccess: () => request<AIAccessSettings>('/admin/ai-access'),
+
+  updateAIAccess: (payload: {
+    ai_enabled?: boolean
+    management_enabled?: boolean
+    release_managers_enabled?: boolean
+    tenants?: { tenant_id: number; enabled: boolean }[]
+  }) => request<AIAccessSettings>('/admin/ai-access', { method: 'PUT', body: json(payload) }),
+
+  getAIAssistantAccess: () => request<AIAssistantAccess>('/assistant/access'),
+
+  chatPDSAI: (message: string, history: AIChatMessage[]) =>
+    request<AIChatResponse>('/assistant/chat', {
+      method: 'POST',
+      body: json({ message, history }),
+    }),
+
   getSlots: () => request<SlotConfig[]>('/admin/slots'),
 
   replaceSlots: (slots: SlotConfig[]) =>
@@ -385,6 +406,8 @@ export const api = {
     request<AccessGroup>('/admin/groups', { method: 'POST', body: json(payload) }),
   updateGroup: (id: number, payload: Record<string, unknown>) =>
     request<AccessGroup>(`/admin/groups/${id}`, { method: 'PUT', body: json(payload) }),
+  setGroupAIAccess: (id: number, enabled: boolean) =>
+    request<AccessGroup>(`/admin/groups/${id}/ai-access`, { method: 'PATCH', body: json({ enabled }) }),
   deleteGroup: (id: number) => request<void>(`/admin/groups/${id}`, { method: 'DELETE' }),
   addGroupMember: (groupId: number, userId: number) =>
     request<AccessGroup>(`/admin/groups/${groupId}/members/${userId}`, { method: 'POST' }),

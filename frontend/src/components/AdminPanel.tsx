@@ -10,7 +10,7 @@ import { AdminTenantManager } from './AdminTenantManager'
 import { AdminUserManager } from './AdminUserManager'
 import { Drawer } from './Drawer'
 import { DocumentSettings } from './DocumentSettings'
-import { Calendar, Document, ChevronRight, History, Plus, Settings, Shield, Spinner, Sun, Trash, User } from './Icons'
+import { Calendar, Document, ChevronRight, History, Plus, Settings, Shield, Sparkles, Spinner, Sun, Trash, User } from './Icons'
 import { CheckboxField, SelectField, TextField } from './FormControls'
 import { ConfirmationModal } from './Modal'
 import { useToast } from './ToastNotification'
@@ -42,7 +42,34 @@ interface AdminPanelProps {
 }
 
 export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, onChanged }: AdminPanelProps) {
+  const toast = useToast()
   const [tab, setTab] = useState<Tab>('users')
+  const [aiEnabled, setAiEnabled] = useState<boolean | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    api.getAIAccess()
+      .then((value) => { if (active) setAiEnabled(value.ai_enabled) })
+      .catch(() => { if (active) setAiEnabled(null) })
+    return () => { active = false }
+  }, [open])
+
+  async function toggleMasterAI() {
+    if (aiEnabled === null || aiBusy) return
+    setAiBusy(true)
+    try {
+      const updated = await api.updateAIAccess({ ai_enabled: !aiEnabled })
+      setAiEnabled(updated.ai_enabled)
+      window.dispatchEvent(new Event('pds-ai-access-changed'))
+      toast.success(updated.ai_enabled ? 'PDS AI enabled.' : 'PDS AI disabled.')
+    } catch (caught) {
+      toast.error('Could not update PDS AI', caught instanceof ApiError ? caught.message : '')
+    } finally {
+      setAiBusy(false)
+    }
+  }
 
   return (
     <Drawer
@@ -53,8 +80,21 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
       eyebrow={<span className="badge bg-brand-50 text-brand-700">{isOwner ? 'Owner' : 'Release Manager'}</span>}
       subtitle="Configuration applies immediately to the weekly board."
     >
-      <div className="mb-3 flex justify-end gap-1">
+      <div className="mb-3 flex flex-wrap justify-end gap-1">
         <a href="#/admin/groups" onClick={onClose} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-ink-muted hover:bg-brand-50 hover:text-brand-700"><Shield className="size-3.5" />Groups<ChevronRight className="size-3" /></a>
+        <button
+          type="button"
+          onClick={() => void toggleMasterAI()}
+          disabled={aiEnabled === null || aiBusy}
+          title={aiEnabled ? 'Disable PDS AI globally' : 'Enable PDS AI globally'}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${aiEnabled ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'text-ink-muted hover:bg-brand-50 hover:text-brand-700'} disabled:opacity-50`}
+        >
+          {aiBusy ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
+          AI Enable
+          <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${aiEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+            {aiEnabled === null ? '…' : aiEnabled ? 'Active' : 'Off'}
+          </span>
+        </button>
         <a href="#/audit" onClick={onClose} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-ink-muted hover:bg-brand-50 hover:text-brand-700"><History className="size-3.5" />Audit<ChevronRight className="size-3" /></a>
       </div>
       <nav className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-slate-100/80 p-1.5 sm:grid-cols-3" aria-label="Release control sections">

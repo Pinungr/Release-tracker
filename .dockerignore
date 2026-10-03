@@ -20,6 +20,15 @@ frontend/dist
 
 # Local/runtime files
 .env
+**/.env
+**/.env.*
+*runtime.env
+**/*runtime.env
+artifacts
+storage
+backend/storage
+backup
+backups
 *.log
 *.sqlite
 *.sqlite3

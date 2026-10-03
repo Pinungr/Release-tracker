@@ -3,7 +3,7 @@ import { DASHBOARD_HASH } from '../utils/routes'
 import { api, ApiError } from '../services/api'
 import type { AccessGroup, GroupMember, ManagedUser } from '../types'
 import { groupUrl, resolveGroupRoute } from '../utils/groupRoutes'
-import { Alert, ChevronLeft, ChevronRight, Plus, Search, Shield, Spinner, Trash, User } from './Icons'
+import { Alert, ChevronLeft, ChevronRight, Plus, Search, Shield, Sparkles, Spinner, Trash, User } from './Icons'
 import { ConfirmationModal, Modal } from './Modal'
 import { useToast } from './ToastNotification'
 
@@ -13,6 +13,7 @@ const LABELS: Record<AccessGroup['group_type'], string> = {
   TENANTS: 'Tenant directory',
   TENANT_SUBGROUP: 'Tenant group',
   MANAGEMENT: 'Management',
+  AI_USERS: 'AI users',
   CUSTOM: 'Custom group',
 }
 const DESCRIPTIONS: Record<AccessGroup['group_type'], string> = {
@@ -21,6 +22,7 @@ const DESCRIPTIONS: Record<AccessGroup['group_type'], string> = {
   TENANTS: 'Organize tenant access through dedicated tenant groups.',
   TENANT_SUBGROUP: 'Manage the people who belong to this tenant.',
   MANAGEMENT: 'Keep your management team organized in one place.',
+  AI_USERS: 'Explicit AI access override. Members can use AI when the global AI Enable switch is on even if their normal tenant or group AI access is disabled.',
   CUSTOM: 'Bring together the people who work on a shared responsibility.',
 }
 const TONES: Record<AccessGroup['group_type'], string> = {
@@ -29,9 +31,13 @@ const TONES: Record<AccessGroup['group_type'], string> = {
   TENANTS: 'bg-teal-50 text-teal-700',
   TENANT_SUBGROUP: 'bg-teal-50 text-teal-700',
   MANAGEMENT: 'bg-violet-50 text-violet-600',
+  AI_USERS: 'bg-sky-50 text-sky-700',
   CUSTOM: 'bg-amber-50 text-amber-700',
 }
-const ORDER = ['MEMBER_POOL', 'RELEASE_MANAGERS', 'TENANTS', 'MANAGEMENT', 'CUSTOM']
+const ORDER = ['MEMBER_POOL', 'RELEASE_MANAGERS', 'TENANTS', 'MANAGEMENT', 'AI_USERS', 'CUSTOM']
+const AI_TOGGLE_GROUP_TYPES = new Set<AccessGroup['group_type']>(['RELEASE_MANAGERS', 'MANAGEMENT', 'TENANT_SUBGROUP'])
+const canConfigureAI = (group: AccessGroup) => AI_TOGGLE_GROUP_TYPES.has(group.group_type)
+const hasAI = (group: AccessGroup) => Boolean(group.permissions?.ai_enabled)
 const errorMessage = (e: unknown) => (e instanceof ApiError ? e.message : 'Please try again.')
 const initials = (name: string) =>
   name
@@ -60,11 +66,18 @@ function GroupCard({ group, childCount }: { group: AccessGroup; childCount: numb
     >
       <div className="flex items-center justify-between gap-3">
         <GroupIcon group={group} />
-        <span
-          className={`rounded-full px-2.5 py-1 text-xs font-medium ${group.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
-        >
-          {group.is_active ? 'Active' : 'Inactive'}
-        </span>
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {(canConfigureAI(group) || group.group_type === 'AI_USERS') ? (
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${group.group_type === 'AI_USERS' || hasAI(group) ? 'bg-sky-50 text-sky-700' : 'bg-slate-100 text-slate-500'}`}>
+              {group.group_type === 'AI_USERS' ? 'AI override' : hasAI(group) ? 'AI enabled' : 'AI off'}
+            </span>
+          ) : null}
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-medium ${group.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}
+          >
+            {group.is_active ? 'Active' : 'Inactive'}
+          </span>
+        </div>
       </div>
       <p className="mt-5 text-xs font-semibold tracking-wide text-ink-muted uppercase">
         {LABELS[group.group_type]}
@@ -438,6 +451,7 @@ function GroupDetail({
   const [removeTarget, setRemoveTarget] = useState<GroupMember | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [aiBusy, setAiBusy] = useState(false)
   const [reload, setReload] = useState(0)
   useEffect(() => {
     let active = true
@@ -499,6 +513,30 @@ function GroupDetail({
     }
   }
 
+  async function toggleAI() {
+    const current = detail ?? group
+    if (!canConfigureAI(current) || aiBusy) return
+    setAiBusy(true)
+    try {
+      const updated = await api.setGroupAIAccess(current.id, !hasAI(current))
+      setDetail(updated)
+      window.dispatchEvent(new Event('pds-ai-access-changed'))
+      toast.success(
+        hasAI(updated) ? 'AI access enabled' : 'AI access disabled',
+        `${updated.name} ${hasAI(updated) ? 'can now use' : 'can no longer use'} PDS AI while the master switch is on.`,
+      )
+      await onChanged()
+    } catch (e) {
+      toast.error('Could not update AI access', errorMessage(e))
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
+  const aiSource = detail ?? group
+  const aiConfigurable = canConfigureAI(aiSource)
+  const aiEnabled = hasAI(aiSource)
+
   return (
     <>
       <section className="overflow-hidden rounded-2xl border border-line bg-white shadow-card">
@@ -516,7 +554,23 @@ function GroupDetail({
                 </h1>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {aiConfigurable && (
+                <button
+                  type="button"
+                  className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition ${aiEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-white text-ink-muted hover:border-brand-100 hover:bg-brand-50 hover:text-brand-700'} disabled:opacity-50`}
+                  disabled={!detail || aiBusy}
+                  onClick={() => void toggleAI()}
+                  title="Group AI access applies only while the global AI Enable switch is Active."
+                  aria-label={`AI Enable ${aiEnabled ? 'Active' : 'Off'}`}
+                >
+                  {aiBusy ? <Spinner className="size-4" /> : <Sparkles className="size-4" />}
+                  AI Enable
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${aiEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                    {aiEnabled ? 'Active' : 'Off'}
+                  </span>
+                </button>
+              )}
               {group.group_type === 'CUSTOM' && (
                 <button
                   className="btn-secondary text-rose-600"
@@ -544,6 +598,17 @@ function GroupDetail({
             >
               {group.is_active ? 'Active group' : 'Inactive group'}
             </span>
+            {aiConfigurable ? (
+              <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-medium ${aiEnabled ? 'bg-sky-50 text-sky-700' : 'bg-slate-100 text-slate-500'}`}>
+                <Sparkles className="size-3" />
+                {aiEnabled ? 'AI Enabled' : 'AI Disabled'}
+              </span>
+            ) : group.group_type === 'AI_USERS' ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2.5 py-1 font-medium text-sky-700">
+                <Sparkles className="size-3" />
+                AI Override Active
+              </span>
+            ) : null}
             <span className="text-ink-muted">
               {group.group_type === 'TENANTS'
                 ? `${childGroups.length} tenant groups`

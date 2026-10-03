@@ -13,6 +13,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from ..config import settings as runtime_settings
 from ..database import get_db
 from ..models import (
     ACTIVE_STATUSES,
@@ -31,6 +32,7 @@ from ..models import (
     User,
 )
 from ..schemas import (
+    AIAccessUpdate,
     AssignUsersRequest,
     AuditEventOut,
     BookingDetail,
@@ -59,7 +61,7 @@ from ..security import (
     require_admin,
     require_user,
 )
-from ..services import audit_service, booking_service, document_type_service, presenters, schedule_service, group_service, search_service
+from ..services import ai_access_service, audit_service, booking_service, document_type_service, presenters, schedule_service, group_service, search_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
 from ..services.bootstrap import ensure_regular_slot_count
@@ -549,6 +551,37 @@ def update_group(
     return _group_out(db, group)
 
 
+@router.patch("/groups/{group_id}/ai-access", response_model=dict)
+def set_group_ai_access(
+    group_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    group = db.get(AccessGroup, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found.")
+    if "enabled" not in payload or not isinstance(payload.get("enabled"), bool):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "enabled must be true or false.")
+    before = ai_access_service.group_ai_enabled(group)
+    try:
+        ai_access_service.set_group_ai_enabled(db, group, payload["enabled"])
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    after = ai_access_service.group_ai_enabled(group)
+    if before != after:
+        audit_service.record(
+            db,
+            event_type="AI_GROUP_ACCESS_UPDATED",
+            actor_type="ADMIN",
+            admin_username=admin.username,
+            old_values={"group_id": group.id, "group": group.name, "ai_enabled": before},
+            new_values={"group_id": group.id, "group": group.name, "ai_enabled": after},
+        )
+    db.commit()
+    return _group_out(db, group, include_members=True)
+
+
 @router.post("/groups/{group_id}/members/{user_id}", response_model=dict)
 def add_group_member(
     group_id: int,
@@ -564,7 +597,20 @@ def add_group_member(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This system group is managed automatically. Assign a working group or tenant subgroup instead.")
     if group.group_type == GroupType.RELEASE_MANAGERS.value and not _is_owner(db, admin):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Owner can grant Release Manager access.")
+    existed = db.scalars(select(GroupMembership).where(
+        GroupMembership.group_id == group.id,
+        GroupMembership.user_id == user.id,
+    )).first() is not None
     group_service.add_membership(db, group, user, actor_user_id=admin.user_id)
+    if group.group_type == GroupType.AI_USERS.value and not existed:
+        audit_service.record(
+            db,
+            event_type="AI_USER_ACCESS_GRANTED",
+            actor_type="ADMIN",
+            admin_username=admin.username,
+            requester_email=user.email,
+            new_values={"user_id": user.id, "group": group.name},
+        )
     db.commit()
     return _group_out(db, group, include_members=True)
 
@@ -586,7 +632,20 @@ def remove_group_member(
         if not _is_owner(db, admin):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Owner can remove Release Manager access.")
         _assert_not_last_active_admin(db, user, admin)
+    existed = db.scalars(select(GroupMembership).where(
+        GroupMembership.group_id == group.id,
+        GroupMembership.user_id == user.id,
+    )).first() is not None
     group_service.remove_membership(db, group, user, actor_user_id=admin.user_id)
+    if group.group_type == GroupType.AI_USERS.value and existed:
+        audit_service.record(
+            db,
+            event_type="AI_USER_ACCESS_REVOKED",
+            actor_type="ADMIN",
+            admin_username=admin.username,
+            requester_email=user.email,
+            old_values={"user_id": user.id, "group": group.name},
+        )
     db.commit()
     return _group_out(db, group, include_members=True)
 
@@ -608,6 +667,67 @@ def delete_custom_group(
     for uid in affected:
         group_service.reconcile_member_pool(db, uid, added_by_user_id=admin.user_id)
     db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# AI access control
+# --------------------------------------------------------------------------- #
+
+
+def _ai_access_out(db: Session) -> dict:
+    result = ai_access_service.access_snapshot(db)
+    # Never expose the MCP secret. These booleans only help the administrator
+    # understand whether the external connector is configured at process level.
+    result["mcp_enabled_by_environment"] = runtime_settings.mcp_enabled
+    result["mcp_api_key_configured"] = bool(runtime_settings.mcp_api_key.strip())
+    result["ai_api_key_configured"] = bool(runtime_settings.ai_api_key.strip())
+    result["ai_model"] = runtime_settings.ai_model
+    return result
+
+
+@router.get("/ai-access", response_model=dict)
+def read_ai_access(
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    return _ai_access_out(db)
+
+
+@router.put("/ai-access", response_model=dict)
+def write_ai_access(
+    payload: AIAccessUpdate,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> dict:
+    before = _ai_access_out(db)
+    tenant_updates = (
+        [(item.tenant_id, item.enabled) for item in payload.tenants]
+        if payload.tenants is not None
+        else None
+    )
+    try:
+        ai_access_service.update_access(
+            db,
+            ai_enabled=payload.ai_enabled,
+            management_enabled=payload.management_enabled,
+            release_managers_enabled=payload.release_managers_enabled,
+            tenant_updates=tenant_updates,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    after = _ai_access_out(db)
+    if before != after:
+        audit_service.record(
+            db,
+            event_type="AI_ACCESS_UPDATED",
+            actor_type="ADMIN",
+            admin_username=admin.username,
+            old_values={"ai_access": before},
+            new_values={"ai_access": after},
+        )
+    db.commit()
+    return after
 
 
 # --------------------------------------------------------------------------- #

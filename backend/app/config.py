@@ -46,6 +46,30 @@ class Settings(BaseSettings):
 
     timezone: str = "Asia/Kolkata"
 
+    # Read-only MCP integration for external AI assistants. MCP_ENABLED exposes
+    # the transport only; the administrator's database-backed master AI switch
+    # remains the authoritative runtime gate. Clients authenticate the connector
+    # with Authorization: Bearer <MCP_API_KEY>.
+    mcp_enabled: bool = False
+    mcp_api_key: str = ""
+
+    # In-app PDS Assistant. The default ``builtin`` mode uses deterministic
+    # read-only query rules and therefore needs no LLM, model download, API key
+    # or API credits. Later, switch AI_PROVIDER to an organisation-approved
+    # Responses-compatible gateway without changing the UI or PDS query layer.
+    ai_provider: str = "builtin"
+    ai_timeout_seconds: float = 120.0
+
+    # Future external Responses-compatible provider/gateway settings. The
+    # credential remains backend-only and may be supplied entirely by .env.
+    ai_api_key: str = ""
+    ai_model: str = ""
+    ai_base_url: str = ""
+    ai_api_path: str = ""
+    ai_auth_header: str = ""
+    ai_auth_scheme: str = ""
+    ai_anthropic_version: str = "2023-06-01"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -61,10 +85,14 @@ def get_settings() -> Settings:
             raise RuntimeError("JWT_SECRET must be a unique secret of at least 32 characters in production; default placeholders are forbidden.")
         if settings.bootstrap_admin_password == Settings.model_fields["bootstrap_admin_password"].default:
             raise RuntimeError("BOOTSTRAP_ADMIN_PASSWORD must be set to a unique value in production.")
+        if settings.mcp_enabled and len(settings.mcp_api_key.strip()) < 32:
+            raise RuntimeError("MCP_API_KEY must be at least 32 characters when MCP_ENABLED=true.")
     elif len(settings.jwt_secret) < 32:
         logging.getLogger("scheduler").warning(
             "JWT_SECRET is shorter than 32 characters; set a longer secret before deploying."
         )
+    if settings.mcp_enabled and len(settings.mcp_api_key.strip()) < 32:
+        raise RuntimeError("MCP_API_KEY must be at least 32 characters when MCP_ENABLED=true.")
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     if settings.database_url.startswith("sqlite"):
         (PROJECT_ROOT / "storage").mkdir(parents=True, exist_ok=True)

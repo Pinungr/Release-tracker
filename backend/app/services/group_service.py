@@ -18,6 +18,7 @@ SYSTEM_GROUPS = {
     GroupType.RELEASE_MANAGERS.value: "Release Managers",
     GroupType.TENANTS.value: "Tenants",
     GroupType.MANAGEMENT.value: "Management",
+    GroupType.AI_USERS.value: "AI Users",
 }
 
 
@@ -135,8 +136,21 @@ def is_member_pool(db: Session, user_id: int) -> bool:
 
 
 def _operational_membership_count(db: Session, user_id: int) -> int:
+    """Count memberships that move a user out of Member Pool.
+
+    AI Users is a capability/override group, not a working assignment. A user
+    may therefore remain in Member Pool while also being explicitly granted AI
+    access.
+    """
     pool = system_group(db, GroupType.MEMBER_POOL.value)
-    stmt = select(GroupMembership.id).where(GroupMembership.user_id == user_id)
+    stmt = (
+        select(GroupMembership.id)
+        .join(AccessGroup, AccessGroup.id == GroupMembership.group_id)
+        .where(
+            GroupMembership.user_id == user_id,
+            AccessGroup.group_type != GroupType.AI_USERS.value,
+        )
+    )
     if pool is not None:
         stmt = stmt.where(GroupMembership.group_id != pool.id)
     return len(db.scalars(stmt).all())

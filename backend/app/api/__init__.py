@@ -1,9 +1,10 @@
 from fastapi import APIRouter
 
-from . import admin, attachments, auth, bookings, schedule, tenants
+from . import admin, assistant, attachments, auth, bookings, schedule, tenants
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(schedule.router)
+api_router.include_router(assistant.router)
 api_router.include_router(auth.router)
 api_router.include_router(bookings.router)
 api_router.include_router(attachments.router)

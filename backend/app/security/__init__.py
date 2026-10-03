@@ -5,6 +5,7 @@ from .deps import (
     optional_user,
     require_admin,
     require_authenticated_user,
+    require_ai_user,
     require_user,
     revoke_token,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "optional_user",
     "require_admin",
     "require_authenticated_user",
+    "require_ai_user",
     "require_user",
     "revoke_token",
     "verify_secret",

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import User
-from ..services import group_service
+from ..services import ai_access_service, group_service
 from .tokens import decode_token
 
 #: Revoked token ids (logout). Process-local by design: the app is a single
@@ -120,6 +120,26 @@ def require_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Password change required before continuing.",
+        )
+    return user
+
+
+
+
+def require_ai_user(
+    user: UserPrincipal = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> UserPrincipal:
+    """Require both a valid PDS session and effective AI permission.
+
+    The master AI switch is evaluated first by ai_access_service, so no group
+    or explicit AI Users override can bypass a centrally disabled AI service.
+    """
+    decision = ai_access_service.evaluate_user(db, user.user_id)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=decision.reason,
         )
     return user
 

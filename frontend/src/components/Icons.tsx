@@ -210,3 +210,10 @@ export const Smile = (p: IconProps) => (
 export const ImageIcon = (p: IconProps) => (
   <Base {...p}><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8" cy="8" r="1" /><path d="m21 16-5-6-7 8-3-3-3 3" /></Base>
 )
+
+export const Sparkles = (p: IconProps) => (
+  <Base {...p}>
+    <path d="m12 3 1.1 3.2a4 4 0 0 0 2.6 2.6L19 10l-3.3 1.2a4 4 0 0 0-2.6 2.6L12 17l-1.1-3.2a4 4 0 0 0-2.6-2.6L5 10l3.3-1.2a4 4 0 0 0 2.6-2.6z" />
+    <path d="m18.5 3 .5 1.4a2 2 0 0 0 1.1 1.1l1.4.5-1.4.5A2 2 0 0 0 19 7.6L18.5 9 18 7.6a2 2 0 0 0-1.1-1.1L15.5 6l1.4-.5A2 2 0 0 0 18 4.4z" />
+  </Base>
+)

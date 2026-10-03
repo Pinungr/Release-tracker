@@ -11,7 +11,7 @@ from ..database import SessionLocal
 from ..models import ApplicationSetting, DeploymentSlotConfiguration, GroupType, User
 from ..security import hash_secret
 from .migrations import upgrade_database
-from . import group_service
+from . import ai_access_service, group_service
 
 #: Normal production deployment windows run overnight by default.
 DEFAULT_SLOT_START = time(21, 0)
@@ -157,3 +157,5 @@ def initialise() -> None:
         ensure_bootstrap_admin(db)
         ensure_single_owner(db)
         ensure_group_model(db)
+        ai_access_service.migrate_legacy_group_settings(db)
+        db.commit()

@@ -1,5 +1,9 @@
 # Production Deployment Scheduler
 
+To build a reusable application image without Docker Compose, run
+`./scripts/build-app-image.ps1`. Use `-ExportPath` to save an image archive for
+another server. See [image build and standalone run instructions](scripts/IMAGE_USAGE.md).
+
 A web replacement for the weekly production deployment scheduling spreadsheet.
 People sign in, pick a **tenant**, and reserve a production deployment slot for
 the week. Administrators manage users, tenants, holidays, slots and emergency
@@ -995,3 +999,11 @@ The booking creator can delegate a normal booking to colleagues who belong to th
 - Eight focused backend assignment tests passed using SQLite: single-RM replacement, self replacement, old-RM permission removal, audit preservation, rejection of multiple/empty selections, legacy multi-assignee replacement, protected dates/statuses, and Owner/non-RM restrictions.
 - Browser checks with mocked API responses passed for full-name display, automatic replacement, self-assignment, reload persistence and mobile layout.
 - A broader selection of older backend tests still fails during booking setup because test users are not added to tenant groups. A representative failure was reproduced against the original uploaded code. These legacy fixtures were not changed; PostgreSQL concurrency was not exercised in the SQLite checks.
+
+## Read-only PDS Assistant / future AI / MCP integration
+
+PDS includes a read-only in-app **PDS Assistant** plus MCP support for hosts such as Microsoft Copilot, Codex/ChatGPT, and Claude. It can answer common questions about schedule counts, tenant/date summaries, Change Nos., and assigned Release Managers without giving any assistant direct database credentials. The global service is toggled by the **AI Enable** button in Release controls, while normal access is granted from the relevant Group page.
+
+For the local POC, the assistant defaults to **`AI_PROVIDER=builtin`**. This mode uses deterministic PDS query rules, so it needs no Ollama container, no model download, no external API key and no API credits. When the organisation provides an approved AI gateway, switch `AI_PROVIDER` and populate the generic `AI_*` environment values; the chat UI, permissions and read-only PDS tool layer remain unchanged.
+
+See **[AI_INTEGRATION.md](AI_INTEGRATION.md)** for setup, security notes, available tools, and example questions. MCP is disabled by default.

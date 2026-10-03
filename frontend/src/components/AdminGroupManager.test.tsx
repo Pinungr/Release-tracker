@@ -14,6 +14,7 @@ vi.mock('../services/api', () => ({
     addGroupMember: vi.fn(),
     removeGroupMember: vi.fn(),
     deleteGroup: vi.fn(),
+    setGroupAIAccess: vi.fn(),
   },
   ApiError: class extends Error {},
 }))
@@ -92,6 +93,20 @@ it('opens a tenant directly from its URL and exposes distinct group links', asyn
       .getAttribute('href'),
   ).toBe('#/admin/groups/Release%20Managers')
   expect(within(nav).getByRole('link', { name: /Rada/ }).getAttribute('aria-current')).toBe('page')
+})
+
+it('enables AI from the tenant group page and shows the resulting status', async () => {
+  const rada = { ...groups[4], permissions: { ai_enabled: false } }
+  vi.mocked(api.listGroups).mockResolvedValue(groups.map((g) => (g.id === rada.id ? rada : g)))
+  vi.mocked(api.getGroup).mockResolvedValue(rada)
+  vi.mocked(api.setGroupAIAccess).mockResolvedValue({ ...rada, permissions: { ai_enabled: true } })
+
+  render(view('#/admin/groups/tenants/rada'))
+  const button = await screen.findByRole('button', { name: 'AI Enable Off' })
+  fireEvent.click(button)
+
+  await waitFor(() => expect(api.setGroupAIAccess).toHaveBeenCalledWith(5, true))
+  expect(await screen.findByText('AI Enabled')).toBeTruthy()
 })
 
 it('shows a recoverable not-found page for a deleted or invalid group', async () => {

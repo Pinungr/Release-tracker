@@ -7,6 +7,7 @@ and no service boundary to keep in sync.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
@@ -18,7 +19,7 @@ from sqlalchemy import text
 from .api import api_router
 from .config import settings
 from .database import SessionLocal
-from .services import bootstrap
+from .services import ai_access_service, bootstrap
 from .web import mount_spa
 
 logger = logging.getLogger("scheduler")
@@ -28,12 +29,20 @@ logger = logging.getLogger("scheduler")
 async def lifespan(_: FastAPI):
     bootstrap.initialise()
     logger.info(
-        "Scheduler ready — database=%s storage=%s frontend=%s",
+        "Scheduler ready — database=%s storage=%s frontend=%s mcp=%s ai_provider=%s",
         settings.database_url.split("://", 1)[0],
         settings.storage_dir,
         "built" if (settings.frontend_dist / "index.html").is_file() else "not built",
+        "enabled" if settings.mcp_enabled else "disabled",
+        settings.ai_provider,
     )
-    yield
+    if settings.mcp_enabled:
+        from .mcp_server import mcp
+
+        async with mcp.session_manager.run():
+            yield
+    else:
+        yield
 
 
 app = FastAPI(
@@ -54,6 +63,30 @@ if settings.cors_origin_list:
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+
+@app.middleware("http")
+async def mcp_bearer_auth(request: Request, call_next):
+    """Protect the external MCP endpoint with a dedicated read-only service key."""
+    if settings.mcp_enabled and (request.url.path == "/mcp" or request.url.path.startswith("/mcp/")):
+        header = request.headers.get("authorization") or ""
+        token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+        if not token or not hmac.compare_digest(token, settings.mcp_api_key):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Valid MCP bearer token required."},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        # Environment configuration only exposes the MCP transport. The
+        # administrator's master AI switch is the hard runtime gate: when OFF,
+        # no group, tenant or AI Users override may use MCP.
+        with SessionLocal() as db:
+            if not ai_access_service.master_ai_enabled(db):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "AI access is disabled centrally by the PDS administrator."},
+                )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -105,6 +138,13 @@ def ready() -> dict:
 
 
 app.include_router(api_router)
+
+if settings.mcp_enabled:
+    # Imported only when enabled so normal PDS operation has no runtime MCP
+    # dependency beyond the package listed in requirements.txt.
+    from .mcp_server import mcp_app
+
+    app.mount("/mcp", mcp_app)
 
 # Registered last so every real endpoint takes precedence over the SPA
 # catch-all.

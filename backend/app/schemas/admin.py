@@ -23,6 +23,18 @@ class SettingsUpdate(BaseModel):
     max_file_size_mb: int | None = Field(default=None, ge=1, le=200)
 
 
+class AITenantAccessUpdate(BaseModel):
+    tenant_id: int = Field(ge=1)
+    enabled: bool
+
+
+class AIAccessUpdate(BaseModel):
+    ai_enabled: bool | None = None
+    management_enabled: bool | None = None
+    release_managers_enabled: bool | None = None
+    tenants: list[AITenantAccessUpdate] | None = None
+
+
 class SlotConfigIn(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

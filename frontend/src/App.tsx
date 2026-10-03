@@ -11,6 +11,7 @@ import { Alert, Spinner } from './components/Icons'
 import { TenantUpcomingResults } from './components/TenantUpcomingResults'
 import { LandingBanner } from './components/LandingBanner'
 import { ProfileModal } from './components/ProfileModal'
+import { PDSAIChat } from './components/PDSAIChat'
 import { RequiredPasswordChangeScreen } from './components/RequiredPasswordChangeScreen'
 import { ScheduleSearch } from './components/ScheduleSearch'
 import { ScheduleFilters } from './components/ScheduleFilters'
@@ -507,6 +508,8 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onChanged={refreshAll}
         />
       ) : null}
+
+      <PDSAIChat />
     </div>
   )
 }

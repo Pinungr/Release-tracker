@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-scheduler}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
     ports:
-      - "127.0.0.1:15432:5432"  
+      - "127.0.0.1:15432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -36,11 +36,24 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin2024}
       TIMEZONE: ${TIMEZONE:-Asia/Kolkata}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      MCP_ENABLED: ${MCP_ENABLED:-false}
+      MCP_API_KEY: ${MCP_API_KEY:-}
+
+      # Default: fast, deterministic PDS query assistant. No LLM/API required.
+      # Future: set AI_PROVIDER=org_gateway (or another non-builtin value) and
+      # populate the generic AI_* settings supplied by your organisation.
+      AI_PROVIDER: ${AI_PROVIDER:-builtin}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-120}
+
+      # Future organisation/hosted Responses-compatible AI gateway.
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_PATH: ${AI_API_PATH:-}
+      AI_AUTH_HEADER: ${AI_AUTH_HEADER:-}
+      AI_AUTH_SCHEME: ${AI_AUTH_SCHEME:-}
+      AI_ANTHROPIC_VERSION: ${AI_ANTHROPIC_VERSION:-2023-06-01}
     ports:
-      # Host port only. The app always listens on 8000 inside the container.
-      # Windows reserves blocks of ports for Hyper-V/WinNAT (check with
-      # `netsh interface ipv4 show excludedportrange protocol=tcp`); if 8000
-      # falls inside one, set APP_PORT to a free port instead.
       - "${APP_PORT:-8000}:8000"
     volumes:
       - app-storage:/var/lib/pds/storage

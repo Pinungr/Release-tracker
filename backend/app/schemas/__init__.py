@@ -1,4 +1,6 @@
 from .admin import (
+    AIAccessUpdate,
+    AITenantAccessUpdate,
     AssignUsersRequest,
     DaySlotCapacityOut,
     DocumentTypeCreate,
@@ -44,6 +46,8 @@ from .booking import (
 )
 
 __all__ = [
+    "AIAccessUpdate",
+    "AITenantAccessUpdate",
     "AssignUsersRequest",
     "AssignedUserOut",
     "AttachmentBulkDelete",
