@@ -1,0 +1,10 @@
+# CPU-only, memory-conscious overrides for an approximately 8 GB Linux VM.
+# Use: docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+services:
+  app:
+    environment:
+      AI_CONTEXT_WINDOW: 4096
+  ollama:
+    environment:
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 1

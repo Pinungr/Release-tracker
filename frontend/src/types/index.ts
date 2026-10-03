@@ -386,11 +386,13 @@ export interface AIAssistantAccess {
 }
 
 export interface AIChatMessage {
+  query_scope?: Record<string, unknown>
   role: 'user' | 'assistant'
   content: string
 }
 
 export interface AIChatResponse {
+  query_scope?: Record<string, unknown>
   answer: string
   model: string
   provider?: string

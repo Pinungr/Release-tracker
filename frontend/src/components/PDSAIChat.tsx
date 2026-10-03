@@ -52,7 +52,7 @@ export function PDSAIChat() {
     setGuidanceOpen(false)
     try {
       const result = await api.chatPDSAI(question, history)
-      setMessages((current) => [...current, { role: 'assistant', content: result.answer }])
+      setMessages((current) => [...current, { role: 'assistant', content: result.answer, query_scope: result.query_scope }])
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'PDS AI could not answer this question.')
     } finally {

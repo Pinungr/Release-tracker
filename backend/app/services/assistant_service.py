@@ -14,7 +14,28 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..models import BookingAssignment, BookingStatus, DeploymentBooking, Tenant
+from ..models import AccessGroup, BookingAssignment, BookingStatus, DeploymentBooking, GroupMembership, Tenant, User
+
+
+def count_users(db: Session, *, group: str | None = None, active_only: bool = False) -> dict[str, Any]:
+    """Count accounts using real operational group memberships, without user details."""
+    stmt = select(User.id, User.is_active)
+    group_name = None
+    if group and group.strip():
+        term = group.strip()
+        normalized_type = "_".join(term.upper().split())
+        row = db.scalar(select(AccessGroup).where(
+            or_(func.lower(AccessGroup.name) == term.lower(), AccessGroup.group_type == normalized_type)
+        ).order_by(AccessGroup.is_system.desc(), AccessGroup.id))
+        if row is None:
+            raise HTTPException(404, f"User group '{term}' was not found.")
+        group_name = row.name
+        stmt = stmt.join(GroupMembership, GroupMembership.user_id == User.id).where(GroupMembership.group_id == row.id)
+    if active_only:
+        stmt = stmt.where(User.is_active.is_(True))
+    rows = db.execute(stmt.distinct()).all()
+    active = sum(bool(row.is_active) for row in rows)
+    return {"group": group_name, "total": len(rows), "active": active, "inactive": len(rows) - active, "active_only": active_only}
 
 MAX_ASSISTANT_RESULTS = 100
 
@@ -65,6 +86,7 @@ def _apply_filters(
     date_to: date | None,
     schedule_status: str | None,
     change_number: str | None = None,
+    is_emergency: bool | None = None,
 ):
     _validate_dates(date_from, date_to)
     if tenant is not None:
@@ -75,6 +97,8 @@ def _apply_filters(
         stmt = stmt.where(DeploymentBooking.deployment_date <= date_to)
     if schedule_status is not None:
         stmt = stmt.where(DeploymentBooking.status == schedule_status)
+    if is_emergency is not None:
+        stmt = stmt.where(DeploymentBooking.is_emergency.is_(is_emergency))
     if change_number is not None and change_number.strip():
         stmt = stmt.where(
             DeploymentBooking.change_number.icontains(change_number.strip(), autoescape=True)
@@ -112,6 +136,11 @@ def _schedule_payload(booking: DeploymentBooking) -> dict[str, Any]:
         "technology": booking.technology,
         "environment": booking.environment,
         "requester_name": booking.requester_name,
+        "implementation_summary": booking.implementation_summary,
+        "deployment_description": booking.deployment_description,
+        "justification": booking.justification,
+        "impacted_region": booking.impacted_region,
+        "emergency_reason": booking.emergency_reason,
         "release_managers": managers,
     }
 
@@ -140,6 +169,7 @@ def search_schedules(
     date_from: date | None = None,
     date_to: date | None = None,
     schedule_status: str | None = None,
+    is_emergency: bool | None = None,
     change_number: str | None = None,
     schedule_no: str | None = None,
     limit: int = 25,
@@ -156,6 +186,7 @@ def search_schedules(
         date_from=date_from,
         date_to=date_to,
         schedule_status=normalised_status,
+        is_emergency=is_emergency,
         change_number=change_number,
     )
     if schedule_no is not None and schedule_no.strip():
@@ -178,29 +209,34 @@ def count_schedules(
     date_from: date | None = None,
     date_to: date | None = None,
     schedule_status: str | None = None,
+    is_emergency: bool | None = None,
 ) -> dict[str, Any]:
     """Count schedules and return a small status/emergency breakdown."""
     resolved_tenant = _resolve_tenant(db, tenant)
     normalised_status = _normalise_status(schedule_status)
 
-    stmt = select(DeploymentBooking.status, DeploymentBooking.is_emergency)
+    stmt = select(DeploymentBooking.status, DeploymentBooking.is_emergency, func.count().label("quantity")).group_by(DeploymentBooking.status, DeploymentBooking.is_emergency)
     stmt = _apply_filters(
         stmt,
         tenant=resolved_tenant,
         date_from=date_from,
         date_to=date_to,
         schedule_status=normalised_status,
+        is_emergency=is_emergency,
     )
     rows = db.execute(stmt).all()
-    status_counts = Counter(row.status for row in rows)
-    emergency_count = sum(1 for row in rows if row.is_emergency)
+    status_counts = Counter()
+    for row in rows:
+        status_counts[row.status] += row.quantity
+    total = sum(row.quantity for row in rows)
+    emergency_count = sum(row.quantity for row in rows if row.is_emergency)
     return {
         "tenant": resolved_tenant.name if resolved_tenant else None,
         "date_from": date_from.isoformat() if date_from else None,
         "date_to": date_to.isoformat() if date_to else None,
         "status_filter": normalised_status,
-        "total": len(rows),
-        "normal": len(rows) - emergency_count,
+        "total": total,
+        "normal": total - emergency_count,
         "emergency": emergency_count,
         "by_status": dict(sorted(status_counts.items())),
     }
@@ -212,6 +248,8 @@ def deployment_summary(
     date_from: date | None = None,
     date_to: date | None = None,
     tenant: str | None = None,
+    schedule_status: str | None = None,
+    is_emergency: bool | None = None,
 ) -> dict[str, Any]:
     """Summarise deployments by status and tenant for a date range."""
     resolved_tenant = _resolve_tenant(db, tenant)
@@ -219,24 +257,29 @@ def deployment_summary(
         DeploymentBooking.tenant_name,
         DeploymentBooking.status,
         DeploymentBooking.is_emergency,
-    )
+        func.count().label("quantity"),
+    ).group_by(DeploymentBooking.tenant_name, DeploymentBooking.status, DeploymentBooking.is_emergency)
     stmt = _apply_filters(
         stmt,
         tenant=resolved_tenant,
         date_from=date_from,
         date_to=date_to,
-        schedule_status=None,
+        schedule_status=_normalise_status(schedule_status),
+        is_emergency=is_emergency,
     )
     rows = db.execute(stmt).all()
-    by_status = Counter(row.status for row in rows)
-    by_tenant = Counter(row.tenant_name for row in rows)
-    emergency_count = sum(1 for row in rows if row.is_emergency)
+    by_status, by_tenant = Counter(), Counter()
+    for row in rows:
+        by_status[row.status] += row.quantity
+        by_tenant[row.tenant_name] += row.quantity
+    total = sum(row.quantity for row in rows)
+    emergency_count = sum(row.quantity for row in rows if row.is_emergency)
     return {
         "tenant": resolved_tenant.name if resolved_tenant else None,
         "date_from": date_from.isoformat() if date_from else None,
         "date_to": date_to.isoformat() if date_to else None,
-        "total": len(rows),
-        "normal": len(rows) - emergency_count,
+        "total": total,
+        "normal": total - emergency_count,
         "emergency": emergency_count,
         "by_status": dict(sorted(by_status.items())),
         "by_tenant": dict(sorted(by_tenant.items())),
@@ -249,6 +292,8 @@ def tenant_summary(
     tenant: str,
     date_from: date | None = None,
     date_to: date | None = None,
+    schedule_status: str | None = None,
+    is_emergency: bool | None = None,
 ) -> dict[str, Any]:
     """Return an operational summary for one tenant."""
     resolved_tenant = _resolve_tenant(db, tenant)
@@ -258,6 +303,8 @@ def tenant_summary(
         date_from=date_from,
         date_to=date_to,
         tenant=resolved_tenant.name,
+        schedule_status=schedule_status,
+        is_emergency=is_emergency,
     )
 
     rm_stmt = (
@@ -271,6 +318,10 @@ def tenant_summary(
         rm_stmt = rm_stmt.where(DeploymentBooking.deployment_date >= date_from)
     if date_to is not None:
         rm_stmt = rm_stmt.where(DeploymentBooking.deployment_date <= date_to)
+    if schedule_status is not None:
+        rm_stmt = rm_stmt.where(DeploymentBooking.status == _normalise_status(schedule_status))
+    if is_emergency is not None:
+        rm_stmt = rm_stmt.where(DeploymentBooking.is_emergency.is_(is_emergency))
     rm_rows = db.scalars(rm_stmt).all()
     rm_counts = Counter(assignment.user.full_name for assignment in rm_rows)
 
@@ -284,14 +335,19 @@ def tenant_summary(
     return base
 
 
-def list_tenants(db: Session, *, active_only: bool = True) -> dict[str, Any]:
+def list_tenants(db: Session, *, active_only: bool = True, inactive_only: bool = False) -> dict[str, Any]:
     """Return configured tenants without exposing administrative secrets."""
+    if active_only and inactive_only:
+        raise HTTPException(422, "Choose active or inactive tenants, not both.")
     stmt = select(Tenant)
+    if inactive_only:
+        stmt = stmt.where(Tenant.is_active.is_(False))
     if active_only:
         stmt = stmt.where(Tenant.is_active.is_(True))
     rows = db.scalars(stmt.order_by(Tenant.name.asc())).all()
     return {
         "active_only": active_only,
+        "inactive_only": inactive_only,
         "total": len(rows),
         "tenants": [
             {

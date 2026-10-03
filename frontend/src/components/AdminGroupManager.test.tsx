@@ -103,6 +103,7 @@ it('enables AI from the tenant group page and shows the resulting status', async
 
   render(view('#/admin/groups/tenants/rada'))
   const button = await screen.findByRole('button', { name: 'AI Enable Off' })
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false))
   fireEvent.click(button)
 
   await waitFor(() => expect(api.setGroupAIAccess).toHaveBeenCalledWith(5, true))

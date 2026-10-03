@@ -53,18 +53,26 @@ class Settings(BaseSettings):
     mcp_enabled: bool = False
     mcp_api_key: str = ""
 
-    # In-app PDS Assistant. The default ``builtin`` mode uses deterministic
-    # read-only query rules and therefore needs no LLM, model download, API key
-    # or API credits. Later, switch AI_PROVIDER to an organisation-approved
-    # Responses-compatible gateway without changing the UI or PDS query layer.
-    ai_provider: str = "builtin"
+    # In-app PDS Assistant. The default uses local Ollama/Qwen with in-memory
+    # FAISS retrieval. ``builtin`` and hosted Responses-compatible providers
+    # remain available as explicit alternatives.
+    ai_provider: str = "ollama_rag"
     ai_timeout_seconds: float = 120.0
+    ai_max_output_tokens: int = Field(default=512, ge=128, le=4096)
+    ai_plan_cache_seconds: int = Field(default=300, ge=0, le=3600)
+    ai_num_threads: int = Field(default=0, ge=0, le=256)
+    ai_keep_alive: str = "30m"
+    ai_context_window: int = Field(default=8192, ge=4096, le=32768)
 
-    # Future external Responses-compatible provider/gateway settings. The
+    # Ollama serves both local chat and the embedding model. In containers,
+    # point the base URL at http://ollama:11434 on the Compose network.
+    ai_model: str = "qwen3:8b"
+    ai_embedding_model: str = "nomic-embed-text"
+    ai_base_url: str = "http://localhost:11434"
+
+    # Optional external Responses-compatible provider/gateway settings. The
     # credential remains backend-only and may be supplied entirely by .env.
     ai_api_key: str = ""
-    ai_model: str = ""
-    ai_base_url: str = ""
     ai_api_path: str = ""
     ai_auth_header: str = ""
     ai_auth_scheme: str = ""
