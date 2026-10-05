@@ -7,7 +7,7 @@ PDS remains the authority for data access and business semantics.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -15,6 +15,15 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..models import AccessGroup, BookingAssignment, BookingStatus, DeploymentBooking, GroupMembership, Tenant, User
+from ..utils.dates import today_local
+
+
+DEPLOYMENT_OUTCOME_STATUSES = (
+    BookingStatus.COMPLETED.value,
+    BookingStatus.SUCCESSFUL.value,
+    BookingStatus.FAILED.value,
+    BookingStatus.ROLLED_BACK.value,
+)
 
 
 def count_users(db: Session, *, group: str | None = None, active_only: bool = False) -> dict[str, Any]:
@@ -239,6 +248,68 @@ def count_schedules(
         "normal": total - emergency_count,
         "emergency": emergency_count,
         "by_status": dict(sorted(status_counts.items())),
+    }
+
+
+def deployment_frequency(
+    db: Session,
+    *,
+    tenant: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    is_emergency: bool | None = None,
+) -> dict[str, Any]:
+    """Return deterministic deployment cadence metrics for completed outcomes.
+
+    A deployment is counted only after it reaches an execution outcome: COMPLETED,
+    SUCCESSFUL, FAILED, or ROLLED_BACK. Cancelled and still-open bookings are not
+    treated as deployments that happened. When the caller does not provide a
+    period, the most recent 90-day window is used.
+    """
+    resolved_tenant = _resolve_tenant(db, tenant)
+    end = date_to or today_local()
+    start = date_from or (end - timedelta(days=90))
+    _validate_dates(start, end)
+
+    stmt = select(DeploymentBooking.deployment_date, DeploymentBooking.status)
+    stmt = _apply_filters(
+        stmt,
+        tenant=resolved_tenant,
+        date_from=start,
+        date_to=end,
+        schedule_status=None,
+        is_emergency=is_emergency,
+    ).where(DeploymentBooking.status.in_(DEPLOYMENT_OUTCOME_STATUSES))
+    rows = db.execute(stmt.order_by(DeploymentBooking.deployment_date.asc(), DeploymentBooking.id.asc())).all()
+
+    deployment_dates = [row.deployment_date for row in rows]
+    total = len(deployment_dates)
+    span_days = max((end - start).days, 1)
+    average_per_week = round(total / (span_days / 7), 2)
+    average_per_month = round(total / (span_days / 30.4375), 2)
+
+    average_gap_days = None
+    if total >= 2:
+        gaps = [
+            (deployment_dates[index] - deployment_dates[index - 1]).days
+            for index in range(1, total)
+        ]
+        average_gap_days = round(sum(gaps) / len(gaps), 2)
+
+    by_status = Counter(row.status for row in rows)
+    return {
+        "tenant": resolved_tenant.name if resolved_tenant else None,
+        "date_from": start.isoformat(),
+        "date_to": end.isoformat(),
+        "period_days": span_days,
+        "total": total,
+        "average_per_week": average_per_week,
+        "average_per_month": average_per_month,
+        "average_gap_days": average_gap_days,
+        "first_deployment": deployment_dates[0].isoformat() if deployment_dates else None,
+        "last_deployment": deployment_dates[-1].isoformat() if deployment_dates else None,
+        "by_status": dict(sorted(by_status.items())),
+        "included_statuses": list(DEPLOYMENT_OUTCOME_STATUSES),
     }
 
 

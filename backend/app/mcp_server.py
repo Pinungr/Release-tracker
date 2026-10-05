@@ -111,6 +111,25 @@ def count_schedules(
 
 
 @mcp.tool()
+def get_deployment_frequency(
+    requester: str,
+    tenant: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict:
+    """Calculate read-only deployment frequency/cadence from PDS execution outcomes."""
+    with SessionLocal() as db:
+        _require_requester(db, requester)
+        return _call(
+            assistant_service.deployment_frequency,
+            db,
+            tenant=tenant,
+            date_from=_date(date_from, "date_from"),
+            date_to=_date(date_to, "date_to"),
+        )
+
+
+@mcp.tool()
 def get_deployment_summary(
     requester: str,
     date_from: str | None = None,

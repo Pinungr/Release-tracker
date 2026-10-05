@@ -737,3 +737,115 @@ def test_direct_schedule_formatter_handles_unassigned_release_manager():
         "get_schedule", output, "Who is the RM for PDS-001?"
     )
     assert answer == "No Release Manager is currently assigned to PDS-001."
+
+
+def test_builtin_chat_supports_last_n_days_for_happened_deployments(user, admin, db, tenant, monkeypatch):
+    from datetime import timedelta
+
+    from app.services import pds_chat_service
+    from app.utils.dates import today_local
+
+    _enable_ai_override(admin, user)
+    monkeypatch.setattr(pds_chat_service.settings, "ai_provider", "builtin")
+    tenant_row = db.get(Tenant, tenant)
+    assert tenant_row is not None
+    today = today_local()
+    db.add_all(
+        [
+            _booking(
+                tenant=tenant_row,
+                reference="pds-971",
+                day=today - timedelta(days=80),
+                slot=1,
+                status=BookingStatus.COMPLETED.value,
+                change="CHG00971",
+            ),
+            _booking(
+                tenant=tenant_row,
+                reference="pds-972",
+                day=today - timedelta(days=30),
+                slot=2,
+                status=BookingStatus.FAILED.value,
+                change="CHG00972",
+            ),
+            _booking(
+                tenant=tenant_row,
+                reference="pds-973",
+                day=today - timedelta(days=10),
+                slot=3,
+                status=BookingStatus.BOOKED.value,
+                change="CHG00973",
+            ),
+            _booking(
+                tenant=tenant_row,
+                reference="pds-974",
+                day=today - timedelta(days=5),
+                slot=4,
+                status=BookingStatus.CANCELLED.value,
+                change="CHG00974",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = user.post(
+        "/api/assistant/chat",
+        json={"message": f"How many {tenant_row.name} deployments happened in the last 90 days?", "history": []},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["provider"] == "builtin"
+    assert response.json()["answer"].startswith(f"2 {tenant_row.name} deployments occurred")
+
+
+def test_builtin_chat_reports_deployment_frequency(user, admin, db, tenant, monkeypatch):
+    from datetime import timedelta
+
+    from app.services import pds_chat_service
+    from app.utils.dates import today_local
+
+    _enable_ai_override(admin, user)
+    monkeypatch.setattr(pds_chat_service.settings, "ai_provider", "builtin")
+    tenant_row = db.get(Tenant, tenant)
+    assert tenant_row is not None
+    today = today_local()
+    db.add_all(
+        [
+            _booking(
+                tenant=tenant_row,
+                reference="pds-981",
+                day=today - timedelta(days=70),
+                slot=1,
+                status=BookingStatus.COMPLETED.value,
+                change="CHG00981",
+            ),
+            _booking(
+                tenant=tenant_row,
+                reference="pds-982",
+                day=today - timedelta(days=35),
+                slot=2,
+                status=BookingStatus.SUCCESSFUL.value,
+                change="CHG00982",
+            ),
+            _booking(
+                tenant=tenant_row,
+                reference="pds-983",
+                day=today - timedelta(days=5),
+                slot=3,
+                status=BookingStatus.ROLLED_BACK.value,
+                change="CHG00983",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = user.post(
+        "/api/assistant/chat",
+        json={"message": f"What is the frequency of {tenant_row.name} deployments?", "history": []},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "builtin"
+    assert f"{tenant_row.name} deployment frequency" in body["answer"]
+    assert "3 deployments" in body["answer"]
+    assert "per week" in body["answer"]
+    assert "average gap" in body["answer"]

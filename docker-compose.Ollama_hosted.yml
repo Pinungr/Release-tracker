@@ -82,7 +82,7 @@ services:
       AI_KEEP_ALIVE: ${AI_KEEP_ALIVE:-30m}
       AI_MODEL: ${AI_MODEL:-qwen3:8b}
       AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-nomic-embed-text}
-      AI_BASE_URL: ${AI_BASE_URL:-http://ollama:11434}
+      AI_BASE_URL: http://ollama:11434
 
       # Future organisation/hosted Responses-compatible AI gateway.
       AI_API_KEY: ${AI_API_KEY:-}

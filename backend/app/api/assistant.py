@@ -143,6 +143,24 @@ def list_tenants(
     return assistant_service.list_tenants(db, active_only=active_only, inactive_only=inactive_only)
 
 
+@router.get("/deployment-frequency")
+def deployment_frequency(
+    tenant: str | None = Query(default=None, max_length=120),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    is_emergency: bool | None = None,
+    db: Session = Depends(get_db),
+    _: UserPrincipal = Depends(require_ai_user),
+):
+    return assistant_service.deployment_frequency(
+        db,
+        tenant=tenant,
+        date_from=date_from,
+        date_to=date_to,
+        is_emergency=is_emergency,
+    )
+
+
 @router.get("/deployment-summary")
 def deployment_summary(
     date_from: date | None = None,

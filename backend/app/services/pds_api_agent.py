@@ -17,6 +17,7 @@ API_OPERATIONS = frozenset(
         "search_schedules",
         "count_schedules",
         "deployment_summary",
+        "deployment_frequency",
         "tenant_summary",
         "list_tenants",
         "next_available_slot",
@@ -77,6 +78,14 @@ def execute(db: Session, operation: str, arguments: dict[str, Any]) -> Any:
             date_from=_date_or_none(arguments.get("date_from")),
             date_to=_date_or_none(arguments.get("date_to")),
             schedule_status=arguments.get("status"),
+            **extra_filters,
+        )
+    if operation == "deployment_frequency":
+        return assistant_service.deployment_frequency(
+            db,
+            tenant=arguments.get("tenant"),
+            date_from=_date_or_none(arguments.get("date_from")),
+            date_to=_date_or_none(arguments.get("date_to")),
             **extra_filters,
         )
     if operation == "tenant_summary":

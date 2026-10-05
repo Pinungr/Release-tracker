@@ -112,6 +112,22 @@ def _tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "type": "function",
+            "name": "deployment_frequency",
+            "description": "Calculate deterministic deployment cadence for a tenant/date range using only deployments that reached an execution outcome. Returns deployment count, average per week/month, and average gap. Use this for frequency/cadence/how-often questions.",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tenant": nullable_string,
+                    "date_from": nullable_string,
+                    "date_to": nullable_string,
+                },
+                "required": ["tenant", "date_from", "date_to"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "type": "function",
             "name": "tenant_summary",
             "description": "Use the read-only PDS backend API agent to return a current operational summary for one tenant, including Release Manager assignment counts.",
             "strict": True,
@@ -165,11 +181,11 @@ def _tool_definitions() -> list[dict[str, Any]]:
     ]
 
     for tool in definitions:
-        if tool["name"] in {"search_schedules", "count_schedules", "deployment_summary", "tenant_summary"}:
+        if tool["name"] in {"search_schedules", "count_schedules", "deployment_summary", "deployment_frequency", "tenant_summary"}:
             parameters = tool["parameters"]
             parameters["properties"]["is_emergency"] = {"type": ["boolean", "null"]}
             parameters["required"].append("is_emergency")
-            if "status" not in parameters["properties"]:
+            if tool["name"] != "deployment_frequency" and "status" not in parameters["properties"]:
                 parameters["properties"]["status"] = nullable_string
                 parameters["required"].append("status")
         if tool["name"] == "list_tenants":
@@ -188,6 +204,7 @@ Rules:
 - For every factual PDS question, use the PDS backend API agent's read-only tools as the source of truth. FAISS retrieval is supporting context only. Never invent values.
 - For user or group-member counts, use count_users. Previous deployment filters do not apply to a new user-count question.
 - For a question about the next or earliest available slot, call next_available_slot. An empty schedule search does not establish that no bookable slots exist.
+- For deployment frequency/cadence/how-often questions, use deployment_frequency. For "deployments happened/occurred" counts, prefer execution outcomes rather than open or cancelled bookings.
 - Never write data or claim to cancel/reschedule/assign/update anything.
 - Do not generate SQL and do not ask for database credentials.
 - Never reveal hidden reasoning or scratch work; provide only the concise user-facing answer.
@@ -355,7 +372,7 @@ def _run_question_tool(db: Session, name: str, arguments: Any, question: str) ->
         parsed = json.loads(arguments) if isinstance(arguments, str) else dict(arguments or {})
         if not isinstance(parsed, dict):
             return {"ok": False, "error": "Tool arguments must be a JSON object."}
-        if not _requires_intelligence(question) and name in {"count_schedules", "search_schedules", "deployment_summary", "tenant_summary"}:
+        if not _requires_intelligence(question) and name in {"count_schedules", "search_schedules", "deployment_summary", "deployment_frequency", "tenant_summary"}:
             tenant = _extract_tenant(db, question)
             expected_status = _extract_status(question)
             if tenant and str(parsed.get("tenant") or "").lower() != tenant.lower():
@@ -503,7 +520,7 @@ def _requires_intelligence(
     if re.search(r"\b(by|assigned|technology|region|requester)\b", lower):
         if not _extract_schedule_no(message):
             return True
-    if re.search(r"\b(tomorrow|ago|past|previous week|last week|before|after|since|until)\b", lower):
+    if re.search(r"\b(tomorrow|ago|previous week|last week|before|after|since|until)\b", lower):
         return True
     month_names = "|".join(re.escape(name) for name in _MONTHS)
     if len(re.findall(rf"\b(?:{month_names})\b", lower)) > 1:
@@ -877,6 +894,35 @@ def _format_direct_tool_answer(name: str, output: dict[str, Any], question: str)
         suffix = f"\nShowing 10 of {len(result)} returned matches." if len(result) > 10 else ""
         return f"Returned {len(result)} matching schedules (limited result set):\n" + "\n".join(lines) + suffix
 
+    if name == "deployment_frequency" and isinstance(result, dict):
+        total = int(result.get("total") or 0)
+        tenant = str(result.get("tenant") or "").strip()
+        period = _human_period(result)
+        subject = f"{tenant} " if tenant else ""
+        lower = question.lower()
+        asks_frequency = bool(re.search(r"\b(frequency|friquency|frequently|cadence|how often)\b", lower))
+
+        if not asks_frequency:
+            noun = "deployment" if total == 1 else "deployments"
+            suffix = f" in {period}" if period else ""
+            return f"{total} {subject}{noun} occurred{suffix}.".replace("  ", " ").strip()
+
+        if total == 0:
+            suffix = f" in {period}" if period else " in the selected period"
+            return f"No {subject}deployments reached a completed execution outcome{suffix}, so a deployment frequency cannot be calculated.".replace("  ", " ").strip()
+
+        weekly = float(result.get("average_per_week") or 0)
+        monthly = float(result.get("average_per_month") or 0)
+        gap = result.get("average_gap_days")
+        parts = [
+            f"{subject}deployment frequency{f' for {period}' if period else ''}: {total} deployment{'s' if total != 1 else ''}, averaging {weekly:.2f} per week and {monthly:.2f} per month."
+        ]
+        if gap is None:
+            parts.append("Only one deployment occurred, so an average gap cannot be calculated.")
+        else:
+            parts.append(f"The average gap between deployments was {float(gap):.2f} days.")
+        return " ".join(parts)
+
     if name in {"deployment_summary", "tenant_summary"} and isinstance(result, dict):
         total = int(result.get("total") or 0)
         period = _human_period(result)
@@ -944,6 +990,12 @@ def _extract_period(question: str) -> tuple[date | None, date | None]:
     next_days = re.search(r"\bnext\s+(\d{1,3})\s+days?\b", lower)
     if next_days:
         return today, today + timedelta(days=int(next_days.group(1)))
+    previous_days = re.search(r"\b(?:last|past|previous)\s+(\d{1,4})\s+days?\b", lower)
+    if previous_days:
+        days = int(previous_days.group(1))
+        if days < 1:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "The number of days must be at least 1.")
+        return today - timedelta(days=days), today
     if "this year" in lower:
         return date(today.year, 1, 1), date(today.year, 12, 31)
     if "last year" in lower or "previous year" in lower:
@@ -1039,7 +1091,7 @@ def _extract_tenant(db: Session, question: str) -> str | None:
 def _builtin_help() -> str:
     return (
         "I can answer read-only PDS questions without an external AI service. Try: "
-        "'How many NCAP releases happened in September?', "
+        "'How many RADA deployments happened in the last 90 days?', 'What is the frequency of NCAP deployments?', "
         "'Show failed RADA deployments last month', "
         "'Who is the RM for PDS-001?', "
         "'What is the Change No. for PDS-001?', or "
@@ -1091,6 +1143,7 @@ def _builtin_tool_response(
         "list_tenants": {"total", "tenants"},
         "tenant_summary": {"total", "by_status"},
         "deployment_summary": {"total", "by_status"},
+        "deployment_frequency": {"total", "average_per_week", "average_per_month"},
     }
     if allow_ai_fallback:
         if isinstance(result, dict) and result.get("error"):
@@ -1149,6 +1202,19 @@ def _ask_via_builtin(
     list_intent = bool(re.search(r"\b(show|list|find|which|display|give me)\b", lower)) or "what are" in lower
     summary_intent = bool(re.search(r"\b(summary|summarize|summarise|breakdown|overview)\b", lower))
     pds_noun = bool(re.search(r"\b(schedule|schedules|release|releases|deployment|deployments|deployed|crq|changes?)\b", lower))
+    frequency_intent = bool(re.search(r"\b(frequency|friquency|frequently|cadence|how often)\b", lower))
+    deployment_happened_intent = bool(re.search(r"\b(deployments?|deployed)\b", lower) and re.search(r"\b(happened|occurred|deployed)\b", lower))
+
+    if (frequency_intent or (count_intent and deployment_happened_intent)) and pds_noun:
+        if date_from is None and date_to is None:
+            date_to = today_local()
+            date_from = date_to - timedelta(days=90)
+        output = _run_tool(
+            db,
+            "deployment_frequency",
+            {"tenant": tenant, "date_from": date_from, "date_to": date_to, "is_emergency": emergency_filter},
+        )
+        return _builtin_tool_response("deployment_frequency", output, clean_message, allow_ai_fallback)
 
     if count_intent and pds_noun:
         output = _run_tool(
