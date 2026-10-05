@@ -18,6 +18,9 @@ vi.mock('./services/api', () => {
 
 const DATE = '2026-10-06'
 
+// jsdom has no scrolling; the board scrolls the linked slot into view.
+Element.prototype.scrollIntoView = vi.fn()
+
 const tenantUser: AuthUser = {
   id: 5, full_name: 'Tenant User', username: 'tenant', email: 'tenant@example.com', role: 'TENANT_USER',
   groups: [{ id: 3, name: 'EPCAT', group_type: 'TENANT_SUBGROUP', tenant_id: 1 }],

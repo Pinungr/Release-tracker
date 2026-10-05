@@ -53,6 +53,8 @@ from ..schemas import (
     SlotFreezeOut,
     SlotFreezeRequest,
     StatusUpdateRequest,
+    TeamsNotificationSettingsOut,
+    TeamsNotificationSettingsUpdate,
 )
 from ..security import (
     AdminPrincipal,
@@ -64,6 +66,7 @@ from ..security import (
 from ..services import ai_access_service, audit_service, booking_service, document_type_service, presenters, schedule_service, group_service, search_service
 from ..services.booking_service import Actor, BusinessRuleError
 from ..services.settings_service import get_app_settings, update_settings
+from ..services import teams_notification_service
 from ..services.bootstrap import ensure_regular_slot_count
 from ..utils.dates import now_utc, today_local
 from .deps import get_booking
@@ -728,6 +731,64 @@ def write_ai_access(
         )
     db.commit()
     return after
+
+
+# --------------------------------------------------------------------------- #
+# Microsoft Teams notifications
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/notifications/teams", response_model=TeamsNotificationSettingsOut)
+def read_teams_notifications(
+    db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)
+) -> TeamsNotificationSettingsOut:
+    return TeamsNotificationSettingsOut(**teams_notification_service.settings_out(db))
+
+
+@router.put("/notifications/teams", response_model=TeamsNotificationSettingsOut)
+def write_teams_notifications(
+    payload: TeamsNotificationSettingsUpdate,
+    db: Session = Depends(get_db),
+    admin: AdminPrincipal = Depends(require_admin),
+) -> TeamsNotificationSettingsOut:
+    if not _is_owner(db, admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Owner can configure Microsoft Teams notifications.")
+    before = teams_notification_service.settings_out(db)
+    had_webhook = bool(before["webhook_configured"])
+    replacing = bool(payload.webhook_url and payload.webhook_url.strip() and had_webhook)
+    adding = bool(payload.webhook_url and payload.webhook_url.strip() and not had_webhook)
+    try:
+        after = teams_notification_service.update_settings(
+            db,
+            notifications_enabled=payload.enabled,
+            webhook=payload.webhook_url,
+            clear_webhook=payload.clear_webhook,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if before != after or adding or replacing or payload.clear_webhook:
+        old_audit = {**before, "webhook_replaced": False}
+        new_audit = {**after, "webhook_added": adding, "webhook_replaced": replacing, "webhook_removed": bool(payload.clear_webhook and had_webhook)}
+        audit_service.record(
+            db, event_type="TEAMS_NOTIFICATION_SETTINGS_UPDATED", actor_type="ADMIN",
+            admin_username=admin.username, old_values=old_audit, new_values=new_audit,
+        )
+    db.commit()
+    return TeamsNotificationSettingsOut(**after)
+
+
+@router.post("/notifications/teams/test", status_code=status.HTTP_204_NO_CONTENT)
+def test_teams_notification(
+    db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)
+) -> None:
+    if not _is_owner(db, admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Owner can test Microsoft Teams notifications.")
+    try:
+        teams_notification_service.send_test(db)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Teams did not accept the test notification. Check the webhook and try again.") from exc
 
 
 # --------------------------------------------------------------------------- #

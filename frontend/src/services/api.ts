@@ -11,6 +11,7 @@ import type {
   AIChatMessage,
   AIChatResponse,
   AdminSettings,
+  TeamsNotificationSettings,
   AdminTenant,
   AuditEvent,
   BookingComment,
@@ -228,6 +229,13 @@ export const api = {
 
   updateSettings: (payload: Partial<AdminSettings>) =>
     request<AdminSettings>('/admin/settings', { method: 'PUT', body: json(payload) }),
+
+  getTeamsNotifications: () => request<TeamsNotificationSettings>('/admin/notifications/teams'),
+
+  updateTeamsNotifications: (payload: { enabled?: boolean; webhook_url?: string; clear_webhook?: boolean }) =>
+    request<TeamsNotificationSettings>('/admin/notifications/teams', { method: 'PUT', body: json(payload) }),
+
+  testTeamsNotification: () => request<void>('/admin/notifications/teams/test', { method: 'POST' }),
 
   getAIAccess: () => request<AIAccessSettings>('/admin/ai-access'),
 

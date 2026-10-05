@@ -413,6 +413,13 @@ export interface AdminSettings {
   max_file_size_mb: number
 }
 
+export interface TeamsNotificationSettings {
+  enabled: boolean
+  webhook_configured: boolean
+  /** False when the saved webhook is no longer an accepted Teams Workflows URL; it is never called. */
+  webhook_valid?: boolean
+}
+
 export interface SlotConfig {
   id?: number
   slot_number: number

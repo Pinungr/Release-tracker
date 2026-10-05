@@ -23,6 +23,19 @@ class SettingsUpdate(BaseModel):
     max_file_size_mb: int | None = Field(default=None, ge=1, le=200)
 
 
+class TeamsNotificationSettingsOut(BaseModel):
+    enabled: bool
+    webhook_configured: bool
+    #: False when the saved webhook is not an accepted Teams Workflows URL (it is never called).
+    webhook_valid: bool = False
+
+
+class TeamsNotificationSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    webhook_url: Annotated[str | None, Field(default=None, max_length=4000)] = None
+    clear_webhook: bool = False
+
+
 class AITenantAccessUpdate(BaseModel):
     tenant_id: int = Field(ge=1)
     enabled: bool

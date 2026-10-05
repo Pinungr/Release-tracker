@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from pydantic import BaseModel, Field, field_validator
 from ..schemas.booking import AuditEventOut, ScheduleListItem, TenantUpcoming
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 from pydantic import ValidationError as PydanticValidationError
 from fastapi.exceptions import RequestValidationError
@@ -28,7 +28,7 @@ from ..schemas import (
 )
 from ..security import AdminPrincipal, UserPrincipal, require_user
 from ..security.ratelimit import enforce
-from ..services import attachment_service, booking_service, document_type_service, presenters, audit_service, group_service, search_service
+from ..services import attachment_service, booking_service, document_type_service, presenters, audit_service, group_service, search_service, teams_notification_service
 from ..services.booking_service import Actor
 from ..services.settings_service import get_app_settings
 from ..services.comment_images import ImageReference, ReferencedImage, validated_images, resolve_image, is_image
@@ -67,6 +67,7 @@ def _assert_not_management(
 @router.post("", response_model=BookingCreated, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     request: Request,
+    background_tasks: BackgroundTasks,
     payload: str = Form(...),
     db: Session = Depends(get_db),
     admin: AdminPrincipal | None = Depends(current_admin),
@@ -155,6 +156,9 @@ async def create_booking(
             attachment_service.remove_booking_directory(booking.id)
         raise
 
+    # Delivery runs only after this response is sent. The worker opens its own DB
+    # session, so a slow/unavailable Teams endpoint never stalls the single Uvicorn worker.
+    background_tasks.add_task(teams_notification_service.notify_booking_created_background, booking.id)
     detail = presenters.booking_detail(db, booking, app_settings, is_admin=actor.is_admin, user_id=actor.user_id)
     return BookingCreated(booking=detail, message=booking_service.success_message(db, booking))
 

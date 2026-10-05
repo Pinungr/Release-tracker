@@ -22,6 +22,7 @@ type Tab =
   | 'slots'
   | 'holidays'
   | 'documents'
+  | 'notifications'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'users', label: 'Accounts', icon: <User className="size-4" /> },
@@ -30,6 +31,7 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'slots', label: 'Slots', icon: <Calendar className="size-4" /> },
   { key: 'holidays', label: 'Holidays', icon: <Sun className="size-4" /> },
   { key: 'documents', label: 'Document uploads', icon: <Document className="size-4" /> },
+  { key: 'notifications', label: 'Notifications', icon: <Settings className="size-4" /> },
 ]
 
 interface AdminPanelProps {
@@ -124,6 +126,7 @@ export function AdminPanel({ open, onClose, timezone, currentUserId, isOwner, on
       {tab === 'slots' ? <SlotConfiguration onChanged={onChanged} /> : null}
       {tab === 'holidays' ? <HolidayManager onChanged={onChanged} /> : null}
       {tab === 'documents' ? <DocumentSettings onChanged={onChanged} /> : null}
+      {tab === 'notifications' ? <TeamsNotifications isOwner={isOwner} /> : null}
     </Drawer>
   )
 }
@@ -274,6 +277,116 @@ function GeneralSettings({ onChanged }: { onChanged: () => void }) {
             </button>
           </div>
         </form>
+      ) : null}
+    </SectionShell>
+  )
+}
+
+/* --------------------------- Notifications ------------------------------ */
+
+function TeamsNotifications({ isOwner }: { isOwner: boolean }) {
+  const toast = useToast()
+  const { data, setData, error, reload } = useAsyncSection(() => api.getTeamsNotifications())
+  const [webhook, setWebhook] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+
+  async function save() {
+    if (!data) return
+    setSaving(true)
+    try {
+      const updated = await api.updateTeamsNotifications({
+        enabled: data.enabled,
+        ...(webhook.trim() ? { webhook_url: webhook.trim() } : {}),
+      })
+      setData(updated)
+      setWebhook('')
+      toast.success('Teams notification settings saved.')
+    } catch (caught) {
+      toast.error('Could not save Teams settings', caught instanceof ApiError ? caught.message : '')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function clearWebhook() {
+    setSaving(true)
+    try {
+      const updated = await api.updateTeamsNotifications({ clear_webhook: true })
+      setData(updated)
+      setWebhook('')
+      toast.success('Teams webhook removed. Notifications are off.')
+    } catch (caught) {
+      toast.error('Could not remove Teams webhook', caught instanceof ApiError ? caught.message : '')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function test() {
+    setTesting(true)
+    try {
+      await api.testTeamsNotification()
+      toast.success('Test notification sent to Microsoft Teams.')
+    } catch (caught) {
+      toast.error('Teams test failed', caught instanceof ApiError ? caught.message : '')
+      reload()
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <SectionShell
+      title="Microsoft Teams notifications"
+      description={isOwner ? "Send a Teams message when a PDS deployment is successfully scheduled. Configuration is stored by PDS; no Teams environment variables are required." : "Teams booking notifications are managed by the Owner. Release Managers can view the current status but cannot change the webhook or send tests."}
+      error={error}
+      loading={!data}
+    >
+      {data ? (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-line p-4">
+            <CheckboxField
+              label="Enable booking notifications"
+              name="teams-notifications-enabled"
+              checked={data.enabled}
+              disabled={!isOwner}
+              onChange={(enabled) => setData({ ...data, enabled })}
+              hint="A Teams outage never blocks or rolls back a successful PDS booking."
+            />
+          </div>
+          {isOwner ? <TextField
+            label={data.webhook_configured ? 'Replace Teams webhook URL' : 'Teams webhook URL'}
+            name="teams-webhook-url"
+            type="password"
+            value={webhook}
+            onChange={setWebhook}
+            placeholder={data.webhook_configured ? 'Webhook already configured — enter a new URL only to replace it' : 'https://...'}
+            hint={data.webhook_configured ? 'Configured. For security, PDS never sends the saved webhook URL back to the browser.' : 'Paste the Microsoft Teams Workflows webhook URL. Only Microsoft Power Platform webhook hosts are accepted.'}
+          /> : null}
+          {isOwner ? <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-primary" disabled={saving} onClick={() => void save()}>
+              {saving ? <Spinner className="size-4" /> : null} Save Teams settings
+            </button>
+            <button type="button" className="btn-secondary" disabled={testing || !data.webhook_configured} onClick={() => void test()}>
+              {testing ? <Spinner className="size-4" /> : null} Send test notification
+            </button>
+            {data.webhook_configured ? (
+              <button type="button" className="btn-secondary" disabled={saving} onClick={() => void clearWebhook()}>
+                Remove webhook
+              </button>
+            ) : null}
+          </div> : null}
+          {data.webhook_configured && data.webhook_valid === false ? (
+            <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              The saved webhook is not a Teams Workflows URL (for example an old Office 365 connector), so no
+              notifications are being sent. {isOwner ? 'Paste the Workflows webhook URL above to replace it.' : 'Ask the Owner to replace it.'}
+            </p>
+          ) : null}
+          <p className="text-xs text-ink-muted">
+            Status: {!data.webhook_configured ? 'Webhook not configured' : data.webhook_valid === false ? 'Webhook needs replacing' : 'Webhook configured'} · {data.enabled ? 'Notifications enabled' : 'Notifications disabled'}
+          </p>
+        </div>
       ) : null}
     </SectionShell>
   )

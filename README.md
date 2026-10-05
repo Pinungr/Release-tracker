@@ -1109,3 +1109,34 @@ can still select built-in, Ollama, or an approved hosted gateway through the
 existing `AI_*` settings.
 
 See **[AI_INTEGRATION.md](AI_INTEGRATION.md)** for setup, security notes, available tools, and example questions. MCP is disabled by default.
+
+## Microsoft Teams booking notifications
+
+PDS can notify a Microsoft Teams channel after a new deployment booking is committed successfully. The integration is configured in **Release Controls → Notifications** and does not use `TEAMS_WEBHOOK_URL` or `TEAMS_NOTIFICATIONS_ENABLED` environment variables.
+
+### Setup
+
+1. In the target Teams channel, open **Workflows** and create **Send webhook alerts to a channel**.
+2. Copy the generated Workflows webhook link.
+3. Sign in to PDS as the **Owner** and open **Release Controls → Notifications**.
+4. Paste the webhook link, save it, use **Send test notification**, and then enable booking notifications.
+
+Only the Owner can add, replace, remove, enable/disable, or test the webhook. Release Managers can see whether Teams notifications are configured/enabled but cannot modify them. PDS never returns the stored webhook URL to the browser or writes it into audit events.
+
+For SSRF protection, PDS accepts only HTTPS Microsoft Power Platform Workflows hosts (`*.api.powerplatform.com`, including `*.environment.api.powerplatform.com`) on port 443. Redirect following is disabled. If Microsoft changes the official Teams Workflows callback host family in the future, update the allowlist in `backend/app/services/teams_notification_service.py` after validating the new Microsoft documentation.
+
+### Delivery behavior and data sent
+
+Booking notification delivery is queued with FastAPI `BackgroundTasks` **after the booking database transaction commits**. The background worker opens its own SQLAlchemy session. A slow, unreachable, or failing Teams endpoint therefore does not roll back a booking and does not block the single Uvicorn request worker while waiting for Teams.
+
+PDS sends an **Adaptive Card** containing only operational scheduling data: schedule number, tenant, deployment date, slot/emergency queue, technology, and status. Requester name/email, implementation summary, documents, Jira/Git URLs, comments, and other free-form booking details are not sent to the Teams channel. Card values are escaped before rendering.
+
+Notification delivery is currently **booking-created only**. Reschedule and cancellation notifications are intentionally out of scope for this version.
+
+### Troubleshooting
+
+- Use **Send test notification** from Release Controls first. This is an explicit Owner action and reports a Teams rejection to the UI.
+- Confirm the copied link is the current Teams **Workflows** webhook URL, not an old Office 365 Connector URL. A connector (`*.webhook.office.com`) or older `*.logic.azure.com` URL saved earlier is never called; the Notifications tab shows **Webhook needs replacing** until the Owner pastes the Workflows URL.
+- The PDS server/pod needs outbound HTTPS access to the Microsoft Power Platform endpoint.
+- Booking delivery failures are best-effort and are written to the application log; they do not change booking status.
+- Webhook add/replace/remove and enable/disable changes are recorded in the PDS audit trail without recording the secret URL. Replacements include a `webhook_replaced` audit flag.

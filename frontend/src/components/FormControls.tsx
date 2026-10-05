@@ -163,12 +163,14 @@ export function CheckboxField({
   checked,
   onChange,
   hint,
+  disabled = false,
 }: {
   label: string
   name: string
   checked: boolean
   onChange: (checked: boolean) => void
   hint?: string
+  disabled?: boolean
 }) {
   return (
     <label htmlFor={name} className="flex cursor-pointer items-start gap-2.5">
@@ -177,8 +179,9 @@ export function CheckboxField({
         name={name}
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
-        className="mt-0.5 size-4 rounded border-line text-brand-600 focus:ring-brand-500/30"
+        className="mt-0.5 size-4 rounded border-line text-brand-600 focus:ring-brand-500/30 disabled:cursor-not-allowed disabled:opacity-50"
       />
       <span className="min-w-0">
         <span className="block text-sm font-medium text-ink">{label}</span>

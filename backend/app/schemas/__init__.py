@@ -19,6 +19,8 @@ from .admin import (
     SlotFreezeOut,
     SlotFreezeRequest,
     StatusUpdateRequest,
+    TeamsNotificationSettingsOut,
+    TeamsNotificationSettingsUpdate,
 )
 from .booking import (
     AssignedUserOut,
@@ -88,4 +90,6 @@ __all__ = [
     "SlotView",
     "StartWorkRequest",
     "StatusUpdateRequest",
+    "TeamsNotificationSettingsOut",
+    "TeamsNotificationSettingsUpdate",
 ]
