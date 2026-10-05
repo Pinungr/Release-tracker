@@ -2,7 +2,7 @@
 
 To build a reusable application image without Docker Compose, run
 `./scripts/build-app-image.ps1`. Use `-ExportPath` to save an image archive for
-another server. See [image build and standalone run instructions](scripts/IMAGE_USAGE.md).
+another server. See [image build and standalone run instructions](#build-and-run-without-docker-compose).
 
 A web replacement for the weekly production deployment scheduling spreadsheet.
 People sign in, pick a **tenant**, and reserve a production deployment slot for
@@ -367,6 +367,42 @@ blocked until the user sets a new password.
 
 ## 6. Running with Docker
 
+The standard Compose deployment starts only PDS and PostgreSQL. It explicitly
+sets `AI_PROVIDER=builtin`, even when the shared `.env` or shell selects Ollama
+or a corporate gateway. Supported assistant questions use the existing read-only
+services without a model, embeddings, or an Ollama connection. The existing
+assistant UI, App Agent, DB Agent, permission checks, and optional MCP remain.
+
+### Optional Ollama deployment
+
+Use the same `.env` with the standalone full-stack Compose file:
+
+```bash
+docker compose -f docker-compose.Ollama_hosted.yml up -d --build
+```
+
+This file explicitly selects `AI_PROVIDER=ollama_rag`. It starts PDS, PostgreSQL,
+Ollama, and the existing model-pull service for `qwen3:8b` and `nomic-embed-text`.
+Model files persist in `ollama-data`; the app waits for successful model pulls.
+For CPU-specific overrides:
+
+```bash
+docker compose -f docker-compose.Ollama_hosted.yml -f docker-compose.cpu.yml up -d --build
+```
+
+These are alternative deployments of the same app and database, not two stacks
+to run simultaneously. When switching from the full stack to the lightweight
+stack, stop the old inference containers without deleting data:
+
+```bash
+docker compose -f docker-compose.Ollama_hosted.yml stop ollama ollama-pull
+docker compose up -d --build
+```
+
+Compose does not automatically stop services omitted from a different Compose
+file. Keep using the selected file with `logs`, `ps`, `exec`, and `down` commands.
+See [AI_INTEGRATION.md](AI_INTEGRATION.md) for provider and separate-pod settings.
+
 ### Windows (Docker Desktop)
 
 Start Docker Desktop, then from the project folder in PowerShell:
@@ -451,6 +487,66 @@ Production startup rejects both known JWT placeholders
 (`change-me-in-production`, `replace-with-a-long-random-string`) and secrets
 shorter than 32 characters. Generate a unique random secret before deploying.
 Development supports the sample placeholders for local startup.
+
+### Build and run without Docker Compose
+
+Run from the repository root in PowerShell with Docker's Linux container engine running:
+
+```powershell
+.\scripts\build-app-image.ps1 -Image pds-scheduler:2026.10
+```
+
+To also save a portable image archive:
+
+```powershell
+.\scripts\build-app-image.ps1 -Image pds-scheduler:2026.10 -ExportPath .\artifacts\pds-scheduler-2026.10.tar
+```
+
+The script works from any directory; relative export paths refer to your current directory. Add `-NoCache` for a clean rebuild. Existing archives are never overwritten. Building requires access to the base-image registries and dependency repositories. Image archives contain the application and its dependencies, not database records or uploaded documents. Use a target server with the same CPU architecture as the build engine.
+
+#### Import on another server
+
+Copy the archive to the server, then run:
+
+```powershell
+docker image load --input .\artifacts\pds-scheduler-2026.10.tar
+```
+
+#### Run against an existing PostgreSQL database
+
+Create a private `pds-runtime.env` file outside the repository with actual values:
+
+```dotenv
+ENVIRONMENT=production
+DATABASE_URL=postgresql+psycopg://scheduler:URL_ENCODED_PASSWORD@DATABASE_HOST:5432/scheduler
+JWT_SECRET=REPLACE_WITH_A_UNIQUE_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
+BOOTSTRAP_ADMIN_USERNAME=admin
+BOOTSTRAP_ADMIN_PASSWORD=REPLACE_WITH_A_UNIQUE_PASSWORD
+TIMEZONE=Asia/Kolkata
+AI_PROVIDER=builtin
+STORAGE_DIR=/var/lib/pds/storage
+FRONTEND_DIST=/app/frontend/dist
+```
+
+`DATABASE_HOST` must be reachable from inside the container. On Docker Desktop, `host.docker.internal` addresses the host; `localhost` addresses the application container itself. The Compose hostname `postgres` works only when a database container shares a Docker network with that name or alias. URL-encode special characters in the database password.
+
+```powershell
+docker volume create pds-app-storage
+docker run --detach --name pds-app-standalone --restart unless-stopped --env-file C:\private\pds-runtime.env --publish 8000:8000 --mount type=volume,source=pds-app-storage,target=/var/lib/pds/storage pds-scheduler:2026.10
+```
+
+Open `http://localhost:8000`. Verify startup with:
+
+```powershell
+docker logs pds-app-standalone
+docker exec pds-app-standalone curl --fail http://localhost:8000/health/ready
+```
+
+For Linux, use the server's environment-file path instead of the Windows example. The published port must be free; use `--publish 9000:8000` if needed. The database must already be running. Application startup runs migrations; back up an existing database before upgrading the application.
+
+The named volume persists uploaded files when the container is removed. When moving an existing Compose installation, use its actual application-storage volume name from `docker volume ls` instead of creating an empty volume, and point to the existing database. Copy or back up both PostgreSQL data and document storage separately when moving servers. Secrets belong in the runtime environment file and are not included in the image.
+
+---
 
 ## 7. Local development without Docker
 
@@ -1004,6 +1100,12 @@ The booking creator can delegate a normal booking to colleagues who belong to th
 
 PDS includes a read-only in-app **PDS Assistant** plus MCP support for hosts such as Microsoft Copilot, Codex/ChatGPT, and Claude. It can answer common questions about schedule counts, tenant/date summaries, Change Nos., and assigned Release Managers without giving any assistant direct database credentials. The global service is toggled by the **AI Enable** button in Release controls, while normal access is granted from the relevant Group page.
 
-The assistant defaults to **`AI_PROVIDER=ollama_rag`**: direct questions use read-only backend answers without a model; explanations and comparisons use local AI with FAISS context and verified PostgreSQL tools. Run `docker compose up -d --build` to start Ollama and automatically download `qwen3:8b` plus `nomic-embed-text`. Models persist in the `ollama-data` volume, and the app waits until both downloads finish. For a deterministic no-model fallback, set `AI_PROVIDER=builtin`; approved hosted Responses-compatible gateways remain available as an alternative.
+The standard `docker compose up -d --build` deployment forces
+**`AI_PROVIDER=builtin`** and needs no Ollama or model downloads. The optional
+`docker-compose.Ollama_hosted.yml` deployment forces **`AI_PROVIDER=ollama_rag`**
+and retains FAISS retrieval, model interpretation, and verified database tools.
+Both use the same `.env` and existing assistant UI. Standalone/pod deployments
+can still select built-in, Ollama, or an approved hosted gateway through the
+existing `AI_*` settings.
 
 See **[AI_INTEGRATION.md](AI_INTEGRATION.md)** for setup, security notes, available tools, and example questions. MCP is disabled by default.

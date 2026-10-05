@@ -6,6 +6,9 @@
 .claude
 
 # Python test/development artifacts
+.venv
+**/.venv
+**/*.tsbuildinfo
 backend/tests
 backend/pytest.ini
 **/__pycache__

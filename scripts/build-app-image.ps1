@@ -44,4 +44,4 @@ if ($archivePath) {
     Write-Host "Saved image archive: $archivePath"
     Write-Host 'Import on the target server with: docker image load --input <archive-path>'
 }
-Write-Host 'See scripts/IMAGE_USAGE.md for running the image without Compose.'
+Write-Host 'See README.md for running the image without Compose.'

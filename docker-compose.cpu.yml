@@ -1,5 +1,5 @@
 # CPU-only, memory-conscious overrides for an approximately 8 GB Linux VM.
-# Use: docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+# Use: docker compose -f docker-compose.Ollama_hosted.yml -f docker-compose.cpu.yml up -d --build
 services:
   app:
     environment:

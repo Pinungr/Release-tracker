@@ -5,6 +5,7 @@
 .env.local
 
 # Python
+.venv/
 backend/.venv/
 __pycache__/
 *.py[cod]
@@ -27,4 +28,10 @@ htmlcov/
 Thumbs.db
 
 # Runtime data: database and uploaded deployment documents
+artifacts/
+backup/
+backups/
+*runtime.env
+*.sqlite
+*.sqlite3
 storage/
