@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest'
-import { DASHBOARD_HASH, isDashboardHash, replaceWithDashboard } from './routes'
+import { bookSlotHash, DASHBOARD_HASH, isDashboardHash, parseBookSlotHash, replaceWithDashboard } from './routes'
 
 afterEach(() => window.history.replaceState(null, '', '/'))
 
@@ -23,4 +23,13 @@ it('keeps the path and query string', () => {
   window.history.replaceState(null, '', '/app?x=1#/audit')
   replaceWithDashboard()
   expect(window.location.pathname + window.location.search + window.location.hash).toBe('/app?x=1#/dashboard')
+})
+
+it('preserves a valid slot booking link to the dashboard', () => {
+  const hash = bookSlotHash('2026-10-06', 2)
+  expect(hash).toBe('#/dashboard?date=2026-10-06&slot=2')
+  expect(isDashboardHash(hash)).toBe(true)
+  expect(parseBookSlotHash(hash)).toEqual({ date: '2026-10-06', slotNumber: 2 })
+  expect(parseBookSlotHash('#/dashboard?date=2026-02-30&slot=2')).toBeNull()
+  expect(parseBookSlotHash('#/dashboard?date=2026-10-06&slot=0')).toBeNull()
 })

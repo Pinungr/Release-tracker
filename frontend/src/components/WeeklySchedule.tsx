@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { DayView, FilterKey, Schedule, SlotView } from '../types'
 import { DaySchedule } from './DaySchedule'
 import { Spinner } from './Icons'
+import type { BookSlotTarget } from '../utils/routes'
 
 interface WeeklyScheduleProps {
   schedule: Schedule | null
@@ -18,6 +19,7 @@ interface WeeklyScheduleProps {
   /** Admin/RM Unlock / Restore Lock of the automatic lock; a null slot means the whole date. */
   onToggleLock?: (day: DayView, slot: SlotView | null) => void
   onAdjustCapacity: (day: DayView, delta: 1 | -1) => void
+  highlightedSlot?: BookSlotTarget | null
 }
 
 /**
@@ -79,6 +81,7 @@ export function WeeklySchedule({
   onToggleFreeze,
   onToggleLock,
   onAdjustCapacity,
+  highlightedSlot,
 }: WeeklyScheduleProps) {
   const visibleByDay = useMemo(() => {
     if (!schedule) return new Map<string, SlotView[]>()
@@ -128,6 +131,7 @@ export function WeeklySchedule({
           onToggleFreeze={onToggleFreeze}
           onToggleLock={onToggleLock}
           onAdjustCapacity={onAdjustCapacity}
+          highlightedSlotNumber={highlightedSlot?.date === day.day ? highlightedSlot.slotNumber : undefined}
         />
       ))}
     </div>

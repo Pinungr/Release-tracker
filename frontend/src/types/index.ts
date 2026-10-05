@@ -387,12 +387,18 @@ export interface AIAssistantAccess {
 
 export interface AIChatMessage {
   query_scope?: Record<string, unknown>
+  navigation?: ChatNavigation[]
   role: 'user' | 'assistant'
   content: string
 }
 
+export type ChatNavigation =
+  | { kind: 'book_slot'; date: string; slot_number: number }
+  | { kind: 'schedule'; reference: string }
+
 export interface AIChatResponse {
   query_scope?: Record<string, unknown>
+  navigation?: ChatNavigation[]
   answer: string
   model: string
   provider?: string

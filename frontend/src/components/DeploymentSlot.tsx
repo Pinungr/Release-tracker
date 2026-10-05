@@ -25,6 +25,7 @@ interface DeploymentSlotProps {
   onOpenBooking: (bookingId: number, bookingReference?: string) => void
   onToggleFreeze: (day: DayView, slot: SlotView) => void
   onToggleLock?: (day: DayView, slot: SlotView | null) => void
+  highlighted?: boolean
 }
 
 export function edgeFor(slot: SlotView, holiday: boolean, isHistorical: boolean): string {
@@ -65,6 +66,7 @@ export function DeploymentSlot({
   onOpenBooking,
   onToggleFreeze,
   onToggleLock,
+  highlighted = false,
 }: DeploymentSlotProps) {
   const booking = slot.booking
   // Normal board availability comes from the backend and is the same for Admin and users.
@@ -85,7 +87,8 @@ export function DeploymentSlot({
 
   return (
     <div
-      className={`rounded-lg border px-3 py-3 transition-colors ${SLOT_GRID} ${edgeFor(slot, day.holiday?.is_full_day === true, isHistorical)}`}
+      id={`deployment-slot-${day.day}-${slot.slot_number}`}
+      className={`rounded-lg border px-3 py-3 transition-colors ${SLOT_GRID} ${edgeFor(slot, day.holiday?.is_full_day === true, isHistorical)} ${highlighted ? 'ring-2 ring-brand-500' : ''}`}
     >
       {/* Slot number */}
       <div className="flex items-center justify-between gap-2 lg:block">

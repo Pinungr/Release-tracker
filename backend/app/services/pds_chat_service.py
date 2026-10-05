@@ -591,6 +591,12 @@ def _answer_next_slot(db: Session) -> dict[str, Any] | None:
         "provider": "pds_backend_api",
         "read_only": True,
     }
+    if result["available"]:
+        response["navigation"] = [{
+            "kind": "book_slot",
+            "date": result["deployment_date"],
+            "slot_number": result["slot_number"],
+        }]
     return response
 
 
@@ -1289,7 +1295,7 @@ def _unsupported_scope(question: str) -> str | None:
     return None
 
 
-def ask_pds_ai(
+def _answer_pds_ai(
     db: Session,
     *,
     message: str,
@@ -1338,3 +1344,29 @@ def ask_pds_ai(
             return pds_query_plan.answer(db, clean_message, history)
         return _ask_via_ollama_rag(db, clean_message, history)
     return _ask_via_responses(db, clean_message, history)
+
+
+def ask_pds_ai(
+    db: Session,
+    *,
+    message: str,
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Attach navigation only for schedule numbers verified in PDS."""
+    response = _answer_pds_ai(db, message=message, history=history)
+    references = _requested_references(message)
+    if not references:
+        return response
+
+    navigation = list(response.get("navigation") or [])
+    for reference in sorted(references):
+        try:
+            schedule = assistant_service.get_schedule(db, reference)
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
+                continue
+            raise
+        navigation.append({"kind": "schedule", "reference": schedule["schedule_no"]})
+    if navigation:
+        response["navigation"] = navigation
+    return response

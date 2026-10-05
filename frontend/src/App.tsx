@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AdminGroupManager } from './components/AdminGroupManager'
 import { AuditPage } from './components/AuditPage'
 import { AdminPanel } from './components/AdminPanel'
@@ -26,7 +26,7 @@ import { useSchedule } from './hooks/useSchedule'
 import { api, ApiError } from './services/api'
 import type { BookingDetail, DayView, FilterKey, PublicSettings, SlotView, TenantOption, TenantUpcoming } from './types'
 import { addDays, toIsoDate, weekStart } from './utils/dates'
-import { DASHBOARD_HASH, isDashboardHash, replaceWithDashboard } from './utils/routes'
+import { bookSlotHash, DASHBOARD_HASH, isDashboardHash, parseBookSlotHash, replaceWithDashboard, type BookSlotTarget } from './utils/routes'
 
 /** Used only until the first schedule response arrives. */
 const FALLBACK_SETTINGS: PublicSettings = {
@@ -91,7 +91,10 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const isMemberPool = user.groups?.some((group) => group.group_type === 'MEMBER_POOL') ?? false
   const isManagement = auth.isManagement
 
-  const [anchor, setAnchor] = useState(() => auth.isAdmin ? weekStart(toIsoDate(new Date())) : '')
+  const [anchor, setAnchor] = useState(() => {
+    const target = parseBookSlotHash(window.location.hash)
+    return target ? weekStart(target.date) : auth.isAdmin ? weekStart(toIsoDate(new Date())) : ''
+  })
   const { schedule, loading, error, refresh } = useSchedule(anchor)
   const settings = schedule?.settings ?? FALLBACK_SETTINGS
   const timezone = schedule?.timezone ?? 'Asia/Kolkata'
@@ -111,6 +114,9 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const { cloneSource, startClone, endClone } = useCloneMode({ filter, query }, setBoardView)
   const [editBooking, setEditBooking] = useState<BookingDetail | null>(null)
   const [bookingDrawerOpen, setBookingDrawerOpen] = useState(false)
+  const [pendingChatSlot, setPendingChatSlot] = useState<BookSlotTarget | null>(null)
+  const handledChatSlot = useRef<BookSlotTarget | null>(null)
+  const chatSlotRequest = useRef(0)
 
   const [detailBooking, setDetailBooking] = useState<BookingDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -137,6 +143,9 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   }, [schedule, user.id])
 
   const [route, setRoute] = useState(() => window.location.hash)
+  // Held in state, not read from the address: a slot link is consumed as soon
+  // as it is handled, but the board keeps marking that slot while its week shows.
+  const [highlightedSlot, setHighlightedSlot] = useState<BookSlotTarget | null>(null)
   const groupsOpen = /^#\/admin\/groups(?:\/|$)/.test(route)
   const globalAuditOpen = /^#\/audit\/?$/.test(route)
   const auditScheduleRoute = /^#\/audit\/([^/]+)\/?$/.exec(route)
@@ -156,16 +165,73 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const openBooking = useCallback((id: number, reference?: string) => {
     window.location.hash = reference ? `/schedules/${encodeURIComponent(reference)}` : `change/${id}`
   }, [])
+  const openChatSlot = useCallback((date: string, slotNumber: number) => {
+    // The link is consumed when handled, so the address is never already this
+    // link and setting it always triggers a hashchange.
+    window.location.hash = bookSlotHash(date, slotNumber)
+  }, [])
   useEffect(() => {
     const onHash = () => {
       // Give the dashboard its proper address however it was reached.
-      if (isDashboardHash(window.location.hash)) replaceWithDashboard()
+      if (isDashboardHash(window.location.hash) && !parseBookSlotHash(window.location.hash)) replaceWithDashboard()
       setRoute(window.location.hash)
     }
     onHash()
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+  useEffect(() => {
+    const target = parseBookSlotHash(route)
+    // Leaving the board, or following another slot link, cancels a slot that
+    // is still being opened. Returning to the plain board (below) does not.
+    if (target || !isDashboardHash(route)) chatSlotRequest.current += 1
+    if (!target) return
+    endClone()
+    setTenantFocus(null)
+    setQuery('')
+    setFilter('ALL')
+    setAnchor(weekStart(target.date))
+    setHighlightedSlot(target)
+    setPendingChatSlot(target)
+    // Consume the link: swap the address back to plain #/dashboard in place
+    // (no new history entry), so reloading, Back or a bookmark can never
+    // reopen the booking form or report the slot as "no longer available".
+    replaceWithDashboard()
+    setRoute(window.location.hash)
+  }, [route, endClone])
+  useEffect(() => {
+    // The marker belongs to one week; moving to another week drops it.
+    if (highlightedSlot && anchor && anchor !== weekStart(highlightedSlot.date)) setHighlightedSlot(null)
+  }, [anchor, highlightedSlot])
+  useEffect(() => {
+    if (!pendingChatSlot) return
+    if (handledChatSlot.current === pendingChatSlot) return
+    handledChatSlot.current = pendingChatSlot
+    setPendingChatSlot(null)
+    const request = chatSlotRequest.current
+    void api.getSchedule(pendingChatSlot.date).then((latest) => {
+      if (chatSlotRequest.current !== request) return
+      const day = latest.days.find((item) => item.day === pendingChatSlot.date)
+      const slot = day?.slots.find((item) => item.slot_number === pendingChatSlot.slotNumber)
+      window.requestAnimationFrame(() => {
+        document.getElementById(`deployment-slot-${pendingChatSlot.date}-${pendingChatSlot.slotNumber}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+      if (!day || !slot || slot.booking || !slot.bookable || day.is_past || day.day <= latest.today) {
+        toast.locked('Slot no longer available', 'This slot changed since the assistant checked it. Choose another available slot on the board.')
+        refresh()
+        return
+      }
+      if (isManagement) return
+      setEditBooking(null)
+      setCreateTarget({ day, slot, isEmergency: false })
+      setBookingDrawerOpen(true)
+    }).catch((caught) => {
+      if (chatSlotRequest.current === request) {
+        toast.error('Could not open the slot', caught instanceof ApiError ? caught.message : 'Please try again.')
+      }
+    })
+  }, [pendingChatSlot, isManagement, toast])
   useEffect(() => {
     if (!legacyScheduleAuditRoute) return
     // Keep old bookmarks working, but make /audit/{schedule-no} the only
@@ -457,6 +523,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
           onToggleFreeze={(day, slot) => void toggleSlotFreeze(day, slot)}
           onToggleLock={(day, slot) => void toggleAutomaticLock(day, slot)}
           onAdjustCapacity={(day, delta) => void adjustDayCapacity(day, delta)}
+          highlightedSlot={highlightedSlot}
         />}
 
       </main>}
@@ -509,7 +576,7 @@ function Scheduler({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
         />
       ) : null}
 
-      <PDSAIChat />
+      <PDSAIChat onBookSlot={openChatSlot} canBookSlots={!isManagement} />
     </div>
   )
 }

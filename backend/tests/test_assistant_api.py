@@ -300,6 +300,9 @@ def test_next_slot_question_uses_authoritative_api_without_qwen(user, admin, mon
     )
     assert response.json()["provider"] == "pds_backend_api"
     assert response.json()["model"] == "PDS scheduling API"
+    assert response.json()["navigation"] == [
+        {"kind": "book_slot", "date": "2026-10-05", "slot_number": 2}
+    ]
 
 
 def test_next_slot_unavailable_answer_is_limited_to_search_horizon():
@@ -620,6 +623,9 @@ def test_schedule_lookup_uses_authoritative_backend_without_qwen(user, admin, db
     assert response.json()["provider"] == "pds_backend_api"
     assert response.json()["model"] == "PDS backend API"
     assert response.json()["read_only"] is True
+    assert response.json()["navigation"] == [
+        {"kind": "schedule", "reference": "pds-001"}
+    ]
 
 
 def test_model_internal_reasoning_is_rejected():
@@ -635,6 +641,21 @@ def test_model_internal_reasoning_is_rejected():
 
     assert error.value.status_code == 502
     assert "concise user-facing answer" in error.value.detail
+
+
+def test_chat_does_not_link_an_unknown_schedule(user, admin, monkeypatch):
+    from app.services import pds_chat_service
+
+    _enable_ai_override(admin, user)
+    monkeypatch.setattr(pds_chat_service.settings, "ai_provider", "builtin")
+    response = user.post(
+        "/api/assistant/chat",
+        json={"message": "Show PDS-999", "history": []},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "not found" in response.json()["answer"].lower()
+    assert "navigation" not in response.json()
 
 
 def test_builtin_chat_handles_tenant_month_count(user, admin, db, tenant, monkeypatch):

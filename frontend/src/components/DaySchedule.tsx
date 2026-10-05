@@ -16,6 +16,7 @@ interface DayScheduleProps {
   onToggleFreeze: (day: DayView, slot: SlotView) => void
   onToggleLock?: (day: DayView, slot: SlotView | null) => void
   onAdjustCapacity: (day: DayView, delta: 1 | -1) => void
+  highlightedSlotNumber?: number
 }
 
 const COLUMNS = ['Slot', 'Time', 'Tenant', 'Change No. | Jira No.', 'Verifier', 'Status', 'Docs', '']
@@ -34,6 +35,7 @@ export function DaySchedule({
   onToggleFreeze,
   onToggleLock,
   onAdjustCapacity,
+  highlightedSlotNumber,
 }: DayScheduleProps) {
   // Treat the API's authoritative `today` value as a second guard. This keeps
   // historical scheduling actions hidden even if an older response has a stale
@@ -192,6 +194,7 @@ export function DaySchedule({
               readOnly={readOnly}
               onBook={onBook}
               onOpenBooking={onOpenBooking}
+              highlighted={slot.slot_number === highlightedSlotNumber}
               onToggleFreeze={onToggleFreeze}
               onToggleLock={onToggleLock}
             />

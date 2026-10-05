@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../services/api'
 import type { AIAssistantAccess, AIChatMessage } from '../types'
 import { Cross, Send, Sparkles, Spinner } from './Icons'
+import { bookSlotHash } from '../utils/routes'
 
 const EXAMPLES = [
+  'When is the next available slot?',
   'How many releases happened this month?',
   'Show failed deployments last month.',
   'Who is the Release Manager for PDS-001?',
@@ -11,7 +13,10 @@ const EXAMPLES = [
   'How many tenants are configured?',
 ]
 
-export function PDSAIChat() {
+export function PDSAIChat({ onBookSlot, canBookSlots = true }: {
+  onBookSlot: (date: string, slotNumber: number) => void
+  canBookSlots?: boolean
+}) {
   const [access, setAccess] = useState<AIAssistantAccess | null>(null)
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<AIChatMessage[]>([])
@@ -52,7 +57,7 @@ export function PDSAIChat() {
     setGuidanceOpen(false)
     try {
       const result = await api.chatPDSAI(question, history)
-      setMessages((current) => [...current, { role: 'assistant', content: result.answer, query_scope: result.query_scope }])
+      setMessages((current) => [...current, { role: 'assistant', content: result.answer, query_scope: result.query_scope, navigation: result.navigation }])
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'PDS AI could not answer this question.')
     } finally {
@@ -167,7 +172,34 @@ export function PDSAIChat() {
                           : 'rounded-bl-md bg-slate-100 text-ink'
                       }`}
                     >
-                      {message.content}
+                      <span>{message.content}</span>
+                      {message.role === 'assistant' && message.navigation?.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {message.navigation.map((item) => item.kind === 'book_slot' ? (
+                            <a
+                              key={`${item.kind}-${item.date}-${item.slot_number}`}
+                              href={bookSlotHash(item.date, item.slot_number)}
+                              className="btn-primary btn-sm"
+                              onClick={(event) => {
+                                event.preventDefault()
+                                setOpen(false)
+                                onBookSlot(item.date, item.slot_number)
+                              }}
+                            >
+                              {canBookSlots ? 'Book this slot' : 'View this slot'}
+                            </a>
+                          ) : (
+                            <a
+                              key={`${item.kind}-${item.reference}`}
+                              href={`#/schedules/${encodeURIComponent(item.reference)}`}
+                              className="btn-secondary btn-sm"
+                              onClick={() => setOpen(false)}
+                            >
+                              Open {item.reference.toUpperCase()}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ))}
